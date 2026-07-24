@@ -275,15 +275,7 @@ void Process(const double &O[], const double &H[],
          if(haveSWH && H[k] > swhPrice)
            {
             if(regime == 0)      regime = 1;
-            else if(regime == 2)
-              {
-               regime = 1; AddMss(k, swhIdx, swhPrice, true);
-               // AOB -> IFOB: bearish AOBs from the ending downtrend now match
-               // the new bullish trend's requirement (Green -> Blue).
-               for(int z2 = 0; z2 < g_obCount; z2++)
-                  if(g_ob[z2].state == 1 && !g_ob[z2].bullish)
-                    { g_ob[z2].state = 0; g_ob[z2].bullish = true; }
-              }
+            else if(regime == 2) { regime = 1; AddMss(k, swhIdx, swhPrice, true); }
             // IFOB: bullish OB — scan from lastSWLidx through swhIdx to k
             if(lastSWLidx >= 0)
               {
@@ -325,15 +317,7 @@ void Process(const double &O[], const double &H[],
          if(haveSWL && L[k] < swlPrice)
            {
             if(regime == 0)      regime = 2;
-            else if(regime == 1)
-              {
-               regime = 2; AddMss(k, swlIdx, swlPrice, false);
-               // AOB -> IFOB: bullish AOBs from the ending uptrend now match
-               // the new bearish trend's requirement (Green -> Black).
-               for(int z2 = 0; z2 < g_obCount; z2++)
-                  if(g_ob[z2].state == 1 && g_ob[z2].bullish)
-                    { g_ob[z2].state = 0; g_ob[z2].bullish = false; }
-              }
+            else if(regime == 1) { regime = 2; AddMss(k, swlIdx, swlPrice, false); }
             // IFOB: bearish OB — scan from lastSWHidx through swlIdx to k
             if(lastSWHidx >= 0)
               {
@@ -354,15 +338,7 @@ void Process(const double &O[], const double &H[],
          if(haveSWL && L[k] < swlPrice)
            {
             if(regime == 0)      regime = 2;
-            else if(regime == 1)
-              {
-               regime = 2; AddMss(k, swlIdx, swlPrice, false);
-               // AOB -> IFOB: bullish AOBs from the ending uptrend now match
-               // the new bearish trend's requirement (Green -> Black).
-               for(int z2 = 0; z2 < g_obCount; z2++)
-                  if(g_ob[z2].state == 1 && g_ob[z2].bullish)
-                    { g_ob[z2].state = 0; g_ob[z2].bullish = false; }
-              }
+            else if(regime == 1) { regime = 2; AddMss(k, swlIdx, swlPrice, false); }
             if(lastSWHidx >= 0)
               {
                int lo = MathMin(MathMin(lastSWHidx, k), swlIdx);
@@ -403,15 +379,7 @@ void Process(const double &O[], const double &H[],
          if(haveSWH && H[k] > swhPrice)
            {
             if(regime == 0)      regime = 1;
-            else if(regime == 2)
-              {
-               regime = 1; AddMss(k, swhIdx, swhPrice, true);
-               // AOB -> IFOB: bearish AOBs from the ending downtrend now match
-               // the new bullish trend's requirement (Green -> Blue).
-               for(int z2 = 0; z2 < g_obCount; z2++)
-                  if(g_ob[z2].state == 1 && !g_ob[z2].bullish)
-                    { g_ob[z2].state = 0; g_ob[z2].bullish = true; }
-              }
+            else if(regime == 2) { regime = 1; AddMss(k, swhIdx, swhPrice, true); }
             if(lastSWLidx >= 0)
               {
                int lo = MathMin(MathMin(lastSWLidx, k), swhIdx);
@@ -469,10 +437,8 @@ void Process(const double &O[], const double &H[],
               { g_ob[z].state = 3; g_ob[z].stopK = k; continue; }
            }
 
-         // STRANDING → OLD: only IFOB can strand directly. AOB must first
-         // convert to IFOB on a Market Structure Shift (handled in STEP 1)
-         // before it becomes eligible for stranding.
-         if(g_ob[z].state == 0 && g_ob[z].eligibleK != -1)
+         // STRANDING → OLD: IFOB or AOB can become OLD
+         if((g_ob[z].state == 0 || g_ob[z].state == 1) && g_ob[z].eligibleK != -1)
            {
             for(int e2 = 0; e2 < g_evCount; e2++)
               {
@@ -621,9 +587,12 @@ int OnCalculate(const int rates_total, const int prev_calculated,
 
       // DIAG: identify each drawn OB by its position counted from the end
       // (#1 = most recent) so specific OBs can be cross-checked by date.
-      PrintFormat("OB#%d (from end)  date=%s  bullish=%d  state=%s  origState=%s",
+      PrintFormat("OB#%d (from end)  date=%s  bull=%d  state=%s  orig=%s  zb=%.5f zt=%.5f  eligibleK=%d(%s)  stopK=%d",
                   g_obCount - z, TimeToString(time[idx], TIME_DATE),
-                  g_ob[z].bullish, stateName[g_ob[z].state], stateName[g_ob[z].origState]);
+                  g_ob[z].bullish, stateName[g_ob[z].state], stateName[g_ob[z].origState],
+                  g_ob[z].zb, g_ob[z].zt,
+                  g_ob[z].eligibleK, (g_ob[z].eligibleK >= 0 && g_ob[z].eligibleK < n) ? TimeToString(time[g_ob[z].eligibleK], TIME_DATE) : "-",
+                  g_ob[z].stopK);
 
       string rn = PFX + "ob_" + IntegerToString(z);
       if(ObjectCreate(0, rn, OBJ_RECTANGLE, 0, time[idx], g_ob[z].zb, rightT, g_ob[z].zt))
