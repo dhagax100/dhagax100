@@ -645,8 +645,9 @@ int OnCalculate(const int rates_total, const int prev_calculated,
    static string stateName[4] = {"IFOB","AOB","OOB","SPENT"};
    for(int z = 0; z < g_obCount; z++)
      {
-      // only draw the last 5 OBs
-      if(z < g_obCount - 9) continue;
+      // draw + diagnose the last 12 OBs (both share this same filter, so
+      // widening it here extends diagnostics too -- no separate cutoff)
+      if(z < g_obCount - 12) continue;
       int idx = g_ob[z].candle;
       if(idx < 0 || idx >= n) continue;
 
