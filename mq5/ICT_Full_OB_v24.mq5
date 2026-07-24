@@ -513,16 +513,36 @@ void Process(const double &O[], const double &H[],
               { g_ob[z].state = 3; g_ob[z].stopK = k; continue; }
            }
 
-         // STRANDING → OLD: IFOB or AOB can become OLD
+         // STRANDING → OLD: IFOB or AOB can become OLD, but which swing
+         // proves it depends on which leg the zone was built from.
+         // IFOB sits inside the breakout leg -- after breakout, price moves
+         // away from the zone, so Impact means a pullback coming BACK to it;
+         // staleness is proven by a swing point on the FAR side (a pullback
+         // that stays away). AOB sits inside the retracement leg itself --
+         // price keeps moving in the retracement's own direction right after
+         // creation, so Impact means the ORIGINAL trend resuming and
+         // reaching back to it; staleness is proven by a swing point on the
+         // NEAR side (a recovery attempt that fails to reach back).
          if((g_ob[z].state == 0 || g_ob[z].state == 1) && g_ob[z].eligibleK != -1)
            {
+            bool isIFOB = (g_ob[z].origState == 0);
             for(int e2 = 0; e2 < g_evCount; e2++)
               {
                if(g_ev[e2].confirmIdx != k) continue;
-               if(bull && g_ev[e2].kind == 1 && g_ev[e2].price > zt)
-                 { g_ob[z].state = 2; break; }
-               if(!bull && g_ev[e2].kind == 0 && g_ev[e2].price < zb)
-                 { g_ob[z].state = 2; break; }
+               if(isIFOB)
+                 {
+                  if(bull && g_ev[e2].kind == 1 && g_ev[e2].price > zt)
+                    { g_ob[z].state = 2; break; }
+                  if(!bull && g_ev[e2].kind == 0 && g_ev[e2].price < zb)
+                    { g_ob[z].state = 2; break; }
+                 }
+               else
+                 {
+                  if(bull && g_ev[e2].kind == 0 && g_ev[e2].price < zb)
+                    { g_ob[z].state = 2; break; }
+                  if(!bull && g_ev[e2].kind == 1 && g_ev[e2].price > zt)
+                    { g_ob[z].state = 2; break; }
+                 }
               }
            }
         }
@@ -677,15 +697,26 @@ int OnCalculate(const int rates_total, const int prev_calculated,
       if(g_ob[z].eligibleK != -1)
         {
          int auditImpactK = -1, auditStrandK = -1;
+         bool auditIsIFOB = (g_ob[z].origState == 0);
          for(int kk = g_ob[z].eligibleK; kk < n && auditImpactK == -1; kk++)
             if(high[kk] >= g_ob[z].zb && low[kk] <= g_ob[z].zt) auditImpactK = kk;
          for(int e2 = 0; e2 < g_evCount; e2++)
            {
             if(g_ev[e2].confirmIdx < g_ob[z].eligibleK) continue;
-            if(g_ob[z].bullish && g_ev[e2].kind == 1 && g_ev[e2].price > g_ob[z].zt)
-              { auditStrandK = g_ev[e2].confirmIdx; break; }
-            if(!g_ob[z].bullish && g_ev[e2].kind == 0 && g_ev[e2].price < g_ob[z].zb)
-              { auditStrandK = g_ev[e2].confirmIdx; break; }
+            if(auditIsIFOB)
+              {
+               if(g_ob[z].bullish && g_ev[e2].kind == 1 && g_ev[e2].price > g_ob[z].zt)
+                 { auditStrandK = g_ev[e2].confirmIdx; break; }
+               if(!g_ob[z].bullish && g_ev[e2].kind == 0 && g_ev[e2].price < g_ob[z].zb)
+                 { auditStrandK = g_ev[e2].confirmIdx; break; }
+              }
+            else
+              {
+               if(g_ob[z].bullish && g_ev[e2].kind == 0 && g_ev[e2].price < g_ob[z].zb)
+                 { auditStrandK = g_ev[e2].confirmIdx; break; }
+               if(!g_ob[z].bullish && g_ev[e2].kind == 1 && g_ev[e2].price > g_ob[z].zt)
+                 { auditStrandK = g_ev[e2].confirmIdx; break; }
+              }
            }
          PrintFormat("OB#%d AUDIT: firstImpact=%s  firstStrand=%s  (engine state=%s stopK=%d)",
                      g_obCount - z,
