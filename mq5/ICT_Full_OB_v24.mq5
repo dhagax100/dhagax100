@@ -101,6 +101,72 @@ void AddSL(int idx)
   }
 
 //+------------------------------------------------------------------+
+//| AOB hunts — must run regardless of the confirming candle's own   |
+//| body direction, so both are called from all four MID-ARM sites.  |
+//+------------------------------------------------------------------+
+void TryBullishAOB(int prevRegime, int aobSWHidx, int newSwlIdx, double newSwlPrice,
+                    const double &O[], const double &H[], const double &L[], const double &C[],
+                    const datetime &Time[], int k, int n)
+  {
+   bool diagOB = (k >= n - 40);
+   if(prevRegime != 1 || aobSWHidx < 0)
+     {
+      if(diagOB)
+         PrintFormat("AOB-HUNT(bull) swl=%s SKIPPED prevRegime=%d aobSWHidx=%s",
+                     TimeToString(Time[k], TIME_DATE), prevRegime,
+                     (aobSWHidx>=0?TimeToString(Time[aobSWHidx], TIME_DATE):"-1"));
+      return;
+     }
+   int lo2 = MathMin(aobSWHidx, newSwlIdx);
+   int hi2 = MathMax(aobSWHidx, newSwlIdx);
+   int best2 = -1;
+   for(int x = lo2; x <= hi2; x++)
+      if(C[x] > O[x] && (best2 == -1 || H[x] > H[best2])) best2 = x;
+   // if the picked candle's low reaches the swing low that triggered this
+   // hunt, it IS (or straddles) the pivot itself, not a candle inside the
+   // completed retracement.
+   bool passGuard = (best2 != -1 && L[best2] > newSwlPrice);
+   if(diagOB)
+      PrintFormat("AOB-HUNT(bull) swl=%s prevRegime=%d range=[%s..%s] best2=%s passGuard=%d",
+                  TimeToString(Time[k], TIME_DATE), prevRegime,
+                  TimeToString(Time[lo2], TIME_DATE), TimeToString(Time[hi2], TIME_DATE),
+                  (best2!=-1?TimeToString(Time[best2], TIME_DATE):"-"), passGuard);
+   if(passGuard)
+      AddOB(best2, MathMin(O[best2],C[best2]), MathMax(O[best2],C[best2]), true, k, 1);
+  }
+
+void TryBearishAOB(int prevRegime, int aobSWLidx, int newSwhIdx, double newSwhPrice,
+                    const double &O[], const double &H[], const double &L[], const double &C[],
+                    const datetime &Time[], int k, int n)
+  {
+   bool diagOB2 = (k >= n - 40);
+   if(prevRegime != 2 || aobSWLidx < 0)
+     {
+      if(diagOB2)
+         PrintFormat("AOB-HUNT(bear) swh=%s SKIPPED prevRegime=%d aobSWLidx=%s",
+                     TimeToString(Time[k], TIME_DATE), prevRegime,
+                     (aobSWLidx>=0?TimeToString(Time[aobSWLidx], TIME_DATE):"-1"));
+      return;
+     }
+   int lo2 = MathMin(aobSWLidx, newSwhIdx);
+   int hi2 = MathMax(aobSWLidx, newSwhIdx);
+   int best2 = -1;
+   for(int x = lo2; x <= hi2; x++)
+      if(C[x] < O[x] && (best2 == -1 || L[x] < L[best2])) best2 = x;
+   // mirror guard: if the picked candle's high reaches the swing high that
+   // triggered this hunt, it IS (or straddles) the pivot itself, not a
+   // retracement candle.
+   bool passGuard2 = (best2 != -1 && H[best2] < newSwhPrice);
+   if(diagOB2)
+      PrintFormat("AOB-HUNT(bear) swh=%s prevRegime=%d range=[%s..%s] best2=%s passGuard=%d",
+                  TimeToString(Time[k], TIME_DATE), prevRegime,
+                  TimeToString(Time[lo2], TIME_DATE), TimeToString(Time[hi2], TIME_DATE),
+                  (best2!=-1?TimeToString(Time[best2], TIME_DATE):"-"), passGuard2);
+   if(passGuard2)
+      AddOB(best2, MathMin(O[best2],C[best2]), MathMax(O[best2],C[best2]), false, k, 1);
+  }
+
+//+------------------------------------------------------------------+
 //| CORE ENGINE — v2: handles same-candle dual swings correctly.     |
 //+------------------------------------------------------------------+
 void Process(const double &O[], const double &H[],
@@ -295,35 +361,20 @@ void Process(const double &O[], const double &H[],
             while(peek2 < g_evCount && g_ev[peek2].confirmIdx == k)
               {
                if(g_ev[peek2].kind == 0)
-                 { haveSWH = true; swhPrice = g_ev[peek2].price; swhIdx = g_ev[peek2].swingIdx; }
+                 {
+                  haveSWH = true; swhPrice = g_ev[peek2].price; swhIdx = g_ev[peek2].swingIdx;
+                  // Bearish AOB: SWH just confirmed while a downtrend was in
+                  // effect -- runs regardless of this candle's own body
+                  // direction, so it isn't missed like OB near 2026.06.24.
+                  TryBearishAOB(prevRegime, aobSWLidx, g_ev[peek2].swingIdx, g_ev[peek2].price,
+                                O, H, L, C, Time, k, n);
+                 }
                else
                  {
                   haveSWL = true; swlPrice = g_ev[peek2].price; swlIdx = g_ev[peek2].swingIdx;
-                  // Bullish AOB: SWL in uptrend (before this candle)
-                  bool diagOB = (k >= n - 40);
-                  if(prevRegime == 1 && aobSWHidx >= 0)
-                    {
-                     int lo2 = MathMin(aobSWHidx, g_ev[peek2].swingIdx);
-                     int hi2 = MathMax(aobSWHidx, g_ev[peek2].swingIdx);
-                     int best2 = -1;
-                     for(int x = lo2; x <= hi2; x++)
-                        if(C[x] > O[x] && (best2 == -1 || H[x] > H[best2])) best2 = x;
-                     // if the picked candle's low reaches the swing low that
-                     // triggered this hunt, it IS (or straddles) the pivot
-                     // itself, not a candle inside the completed retracement.
-                     bool passGuard = (best2 != -1 && L[best2] > g_ev[peek2].price);
-                     if(diagOB)
-                        PrintFormat("AOB-HUNT(bull) swl=%s prevRegime=%d range=[%s..%s] best2=%s passGuard=%d",
-                                    TimeToString(Time[k], TIME_DATE), prevRegime,
-                                    TimeToString(Time[lo2], TIME_DATE), TimeToString(Time[hi2], TIME_DATE),
-                                    (best2!=-1?TimeToString(Time[best2], TIME_DATE):"-"), passGuard);
-                     if(passGuard)
-                        AddOB(best2, MathMin(O[best2],C[best2]), MathMax(O[best2],C[best2]), true, k, 1);
-                    }
-                  else if(diagOB)
-                     PrintFormat("AOB-HUNT(bull) swl=%s SKIPPED prevRegime=%d aobSWHidx=%s",
-                                 TimeToString(Time[k], TIME_DATE), prevRegime,
-                                 (aobSWHidx>=0?TimeToString(Time[aobSWHidx], TIME_DATE):"-1"));
+                  // Bullish AOB: SWL just confirmed while an uptrend was in effect.
+                  TryBullishAOB(prevRegime, aobSWHidx, g_ev[peek2].swingIdx, g_ev[peek2].price,
+                                O, H, L, C, Time, k, n);
                  }
                peek2++;
               }
@@ -373,34 +424,19 @@ void Process(const double &O[], const double &H[],
                if(g_ev[peek2].kind == 0)
                  {
                   haveSWH = true; swhPrice = g_ev[peek2].price; swhIdx = g_ev[peek2].swingIdx;
-                  // Bearish AOB: SWH in downtrend (before this candle)
-                  bool diagOB2 = (k >= n - 40);
-                  if(prevRegime == 2 && aobSWLidx >= 0)
-                    {
-                     int lo2 = MathMin(aobSWLidx, g_ev[peek2].swingIdx);
-                     int hi2 = MathMax(aobSWLidx, g_ev[peek2].swingIdx);
-                     int best2 = -1;
-                     for(int x = lo2; x <= hi2; x++)
-                        if(C[x] < O[x] && (best2 == -1 || L[x] < L[best2])) best2 = x;
-                     // mirror guard: if the picked candle's high reaches the
-                     // swing high that triggered this hunt, it IS (or
-                     // straddles) the pivot itself, not a retracement candle.
-                     bool passGuard2 = (best2 != -1 && H[best2] < g_ev[peek2].price);
-                     if(diagOB2)
-                        PrintFormat("AOB-HUNT(bear) swh=%s prevRegime=%d range=[%s..%s] best2=%s passGuard=%d",
-                                    TimeToString(Time[k], TIME_DATE), prevRegime,
-                                    TimeToString(Time[lo2], TIME_DATE), TimeToString(Time[hi2], TIME_DATE),
-                                    (best2!=-1?TimeToString(Time[best2], TIME_DATE):"-"), passGuard2);
-                     if(passGuard2)
-                        AddOB(best2, MathMin(O[best2],C[best2]), MathMax(O[best2],C[best2]), false, k, 1);
-                    }
-                  else if(diagOB2)
-                     PrintFormat("AOB-HUNT(bear) swh=%s SKIPPED prevRegime=%d aobSWLidx=%s",
-                                 TimeToString(Time[k], TIME_DATE), prevRegime,
-                                 (aobSWLidx>=0?TimeToString(Time[aobSWLidx], TIME_DATE):"-1"));
+                  // Bearish AOB: SWH just confirmed while a downtrend was in effect.
+                  TryBearishAOB(prevRegime, aobSWLidx, g_ev[peek2].swingIdx, g_ev[peek2].price,
+                                O, H, L, C, Time, k, n);
                  }
                else
-                 { haveSWL = true; swlPrice = g_ev[peek2].price; swlIdx = g_ev[peek2].swingIdx; }
+                 {
+                  haveSWL = true; swlPrice = g_ev[peek2].price; swlIdx = g_ev[peek2].swingIdx;
+                  // Bullish AOB: SWL just confirmed while an uptrend was in
+                  // effect -- runs regardless of this candle's own body
+                  // direction, so it isn't missed like OB near 2026.06.24.
+                  TryBullishAOB(prevRegime, aobSWHidx, g_ev[peek2].swingIdx, g_ev[peek2].price,
+                                O, H, L, C, Time, k, n);
+                 }
                peek2++;
               }
          }
