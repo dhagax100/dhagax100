@@ -120,8 +120,10 @@ void TryBullishAOB(int prevRegime, int aobSWHidx, int newSwlIdx, double newSwlPr
    int lo2 = MathMin(aobSWHidx, newSwlIdx);
    int hi2 = MathMax(aobSWHidx, newSwlIdx);
    int best2 = -1;
+   // rank by body extremity (close), not wick -- the zone itself is drawn
+   // open-to-close, so selection should match.
    for(int x = lo2; x <= hi2; x++)
-      if(C[x] > O[x] && (best2 == -1 || H[x] > H[best2])) best2 = x;
+      if(C[x] > O[x] && (best2 == -1 || C[x] > C[best2])) best2 = x;
    // if the picked candle's low reaches the swing low that triggered this
    // hunt, it IS (or straddles) the pivot itself, not a candle inside the
    // completed retracement.
@@ -151,8 +153,10 @@ void TryBearishAOB(int prevRegime, int aobSWLidx, int newSwhIdx, double newSwhPr
    int lo2 = MathMin(aobSWLidx, newSwhIdx);
    int hi2 = MathMax(aobSWLidx, newSwhIdx);
    int best2 = -1;
+   // rank by body extremity (close), not wick -- the zone itself is drawn
+   // open-to-close, so selection should match.
    for(int x = lo2; x <= hi2; x++)
-      if(C[x] < O[x] && (best2 == -1 || L[x] < L[best2])) best2 = x;
+      if(C[x] < O[x] && (best2 == -1 || C[x] < C[best2])) best2 = x;
    // mirror guard: if the picked candle's high reaches the swing high that
    // triggered this hunt, it IS (or straddles) the pivot itself, not a
    // retracement candle.
@@ -349,7 +353,9 @@ void Process(const double &O[], const double &H[],
                int hi = MathMax(MathMax(lastSWLidx, k), swhIdx);
                int best = -1;
                for(int x = lo; x <= hi; x++)
-                  if(C[x] < O[x] && (best == -1 || L[x] < L[best])) best = x;
+                  // rank by body extremity (close), not wick -- the zone
+                  // itself is drawn open-to-close, so selection should match.
+                  if(C[x] < O[x] && (best == -1 || C[x] < C[best])) best = x;
                if(best != -1)
                   AddOB(best, MathMin(O[best],C[best]), MathMax(O[best],C[best]), true, k, 0);
               }
@@ -390,7 +396,9 @@ void Process(const double &O[], const double &H[],
                int hi = MathMax(MathMax(lastSWHidx, k), swlIdx);
                int best = -1;
                for(int x = lo; x <= hi; x++)
-                  if(C[x] > O[x] && (best == -1 || H[x] > H[best])) best = x;
+                  // rank by body extremity (close), not wick -- the zone
+                  // itself is drawn open-to-close, so selection should match.
+                  if(C[x] > O[x] && (best == -1 || C[x] > C[best])) best = x;
                if(best != -1)
                   AddOB(best, MathMin(O[best],C[best]), MathMax(O[best],C[best]), false, k, 0);
               }
@@ -410,7 +418,9 @@ void Process(const double &O[], const double &H[],
                int hi = MathMax(MathMax(lastSWHidx, k), swlIdx);
                int best = -1;
                for(int x = lo; x <= hi; x++)
-                  if(C[x] > O[x] && (best == -1 || H[x] > H[best])) best = x;
+                  // rank by body extremity (close), not wick -- the zone
+                  // itself is drawn open-to-close, so selection should match.
+                  if(C[x] > O[x] && (best == -1 || C[x] > C[best])) best = x;
                if(best != -1)
                   AddOB(best, MathMin(O[best],C[best]), MathMax(O[best],C[best]), false, k, 0);
               }
@@ -450,7 +460,9 @@ void Process(const double &O[], const double &H[],
                int hi = MathMax(MathMax(lastSWLidx, k), swhIdx);
                int best = -1;
                for(int x = lo; x <= hi; x++)
-                  if(C[x] < O[x] && (best == -1 || L[x] < L[best])) best = x;
+                  // rank by body extremity (close), not wick -- the zone
+                  // itself is drawn open-to-close, so selection should match.
+                  if(C[x] < O[x] && (best == -1 || C[x] < C[best])) best = x;
                if(best != -1)
                   AddOB(best, MathMin(O[best],C[best]), MathMax(O[best],C[best]), true, k, 0);
               }
