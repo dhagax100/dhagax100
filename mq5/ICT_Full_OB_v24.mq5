@@ -307,7 +307,10 @@ void Process(const double &O[], const double &H[],
                      int best2 = -1;
                      for(int x = lo2; x <= hi2; x++)
                         if(C[x] > O[x] && (best2 == -1 || H[x] > H[best2])) best2 = x;
-                     if(best2 != -1)
+                     // if the picked candle's low reaches the swing low that
+                     // triggered this hunt, it IS (or straddles) the pivot
+                     // itself, not a candle inside the completed retracement.
+                     if(best2 != -1 && L[best2] > g_ev[peek2].price)
                         AddOB(best2, MathMin(O[best2],C[best2]), MathMax(O[best2],C[best2]), true, k, 1);
                     }
                  }
@@ -367,7 +370,10 @@ void Process(const double &O[], const double &H[],
                      int best2 = -1;
                      for(int x = lo2; x <= hi2; x++)
                         if(C[x] < O[x] && (best2 == -1 || L[x] < L[best2])) best2 = x;
-                     if(best2 != -1)
+                     // mirror guard: if the picked candle's high reaches the
+                     // swing high that triggered this hunt, it IS (or
+                     // straddles) the pivot itself, not a retracement candle.
+                     if(best2 != -1 && H[best2] < g_ev[peek2].price)
                         AddOB(best2, MathMin(O[best2],C[best2]), MathMax(O[best2],C[best2]), false, k, 1);
                     }
                  }
