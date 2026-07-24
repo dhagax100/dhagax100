@@ -671,6 +671,29 @@ int OnCalculate(const int rates_total, const int prev_calculated,
                   g_ob[z].eligibleK, (g_ob[z].eligibleK >= 0 && g_ob[z].eligibleK < n) ? TimeToString(time[g_ob[z].eligibleK], TIME_DATE) : "-",
                   g_ob[z].stopK);
 
+      // AUDIT: independently re-scan raw price/swing data for this OB,
+      // regardless of what state the engine currently holds, so a
+      // discrepancy against the engine's own state is visible directly.
+      if(g_ob[z].eligibleK != -1)
+        {
+         int auditImpactK = -1, auditStrandK = -1;
+         for(int kk = g_ob[z].eligibleK; kk < n && auditImpactK == -1; kk++)
+            if(high[kk] >= g_ob[z].zb && low[kk] <= g_ob[z].zt) auditImpactK = kk;
+         for(int e2 = 0; e2 < g_evCount; e2++)
+           {
+            if(g_ev[e2].confirmIdx < g_ob[z].eligibleK) continue;
+            if(g_ob[z].bullish && g_ev[e2].kind == 1 && g_ev[e2].price > g_ob[z].zt)
+              { auditStrandK = g_ev[e2].confirmIdx; break; }
+            if(!g_ob[z].bullish && g_ev[e2].kind == 0 && g_ev[e2].price < g_ob[z].zb)
+              { auditStrandK = g_ev[e2].confirmIdx; break; }
+           }
+         PrintFormat("OB#%d AUDIT: firstImpact=%s  firstStrand=%s  (engine state=%s stopK=%d)",
+                     g_obCount - z,
+                     (auditImpactK!=-1?TimeToString(time[auditImpactK], TIME_DATE):"-"),
+                     (auditStrandK!=-1?TimeToString(time[auditStrandK], TIME_DATE):"-"),
+                     stateName[g_ob[z].state], g_ob[z].stopK);
+        }
+
       string rn = PFX + "ob_" + IntegerToString(z);
       if(ObjectCreate(0, rn, OBJ_RECTANGLE, 0, time[idx], g_ob[z].zb, rightT, g_ob[z].zt))
         {
