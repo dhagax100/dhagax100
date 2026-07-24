@@ -104,7 +104,7 @@ void AddSL(int idx)
 //| CORE ENGINE — v2: handles same-candle dual swings correctly.     |
 //+------------------------------------------------------------------+
 void Process(const double &O[], const double &H[],
-             const double &L[], const double &C[], int n)
+             const double &L[], const double &C[], const datetime &Time[], int n)
   {
    g_shCount  = 0; ArrayResize(g_shIdx, 0);
    g_slCount  = 0; ArrayResize(g_slIdx, 0);
@@ -300,6 +300,7 @@ void Process(const double &O[], const double &H[],
                  {
                   haveSWL = true; swlPrice = g_ev[peek2].price; swlIdx = g_ev[peek2].swingIdx;
                   // Bullish AOB: SWL in uptrend (before this candle)
+                  bool diagOB = (k >= n - 40);
                   if(prevRegime == 1 && aobSWHidx >= 0)
                     {
                      int lo2 = MathMin(aobSWHidx, g_ev[peek2].swingIdx);
@@ -310,9 +311,19 @@ void Process(const double &O[], const double &H[],
                      // if the picked candle's low reaches the swing low that
                      // triggered this hunt, it IS (or straddles) the pivot
                      // itself, not a candle inside the completed retracement.
-                     if(best2 != -1 && L[best2] > g_ev[peek2].price)
+                     bool passGuard = (best2 != -1 && L[best2] > g_ev[peek2].price);
+                     if(diagOB)
+                        PrintFormat("AOB-HUNT(bull) swl=%s prevRegime=%d range=[%s..%s] best2=%s passGuard=%d",
+                                    TimeToString(Time[k], TIME_DATE), prevRegime,
+                                    TimeToString(Time[lo2], TIME_DATE), TimeToString(Time[hi2], TIME_DATE),
+                                    (best2!=-1?TimeToString(Time[best2], TIME_DATE):"-"), passGuard);
+                     if(passGuard)
                         AddOB(best2, MathMin(O[best2],C[best2]), MathMax(O[best2],C[best2]), true, k, 1);
                     }
+                  else if(diagOB)
+                     PrintFormat("AOB-HUNT(bull) swl=%s SKIPPED prevRegime=%d aobSWHidx=%s",
+                                 TimeToString(Time[k], TIME_DATE), prevRegime,
+                                 (aobSWHidx>=0?TimeToString(Time[aobSWHidx], TIME_DATE):"-1"));
                  }
                peek2++;
               }
@@ -363,6 +374,7 @@ void Process(const double &O[], const double &H[],
                  {
                   haveSWH = true; swhPrice = g_ev[peek2].price; swhIdx = g_ev[peek2].swingIdx;
                   // Bearish AOB: SWH in downtrend (before this candle)
+                  bool diagOB2 = (k >= n - 40);
                   if(prevRegime == 2 && aobSWLidx >= 0)
                     {
                      int lo2 = MathMin(aobSWLidx, g_ev[peek2].swingIdx);
@@ -373,9 +385,19 @@ void Process(const double &O[], const double &H[],
                      // mirror guard: if the picked candle's high reaches the
                      // swing high that triggered this hunt, it IS (or
                      // straddles) the pivot itself, not a retracement candle.
-                     if(best2 != -1 && H[best2] < g_ev[peek2].price)
+                     bool passGuard2 = (best2 != -1 && H[best2] < g_ev[peek2].price);
+                     if(diagOB2)
+                        PrintFormat("AOB-HUNT(bear) swh=%s prevRegime=%d range=[%s..%s] best2=%s passGuard=%d",
+                                    TimeToString(Time[k], TIME_DATE), prevRegime,
+                                    TimeToString(Time[lo2], TIME_DATE), TimeToString(Time[hi2], TIME_DATE),
+                                    (best2!=-1?TimeToString(Time[best2], TIME_DATE):"-"), passGuard2);
+                     if(passGuard2)
                         AddOB(best2, MathMin(O[best2],C[best2]), MathMax(O[best2],C[best2]), false, k, 1);
                     }
+                  else if(diagOB2)
+                     PrintFormat("AOB-HUNT(bear) swh=%s SKIPPED prevRegime=%d aobSWLidx=%s",
+                                 TimeToString(Time[k], TIME_DATE), prevRegime,
+                                 (aobSWLidx>=0?TimeToString(Time[aobSWLidx], TIME_DATE):"-1"));
                  }
                else
                  { haveSWL = true; swlPrice = g_ev[peek2].price; swlIdx = g_ev[peek2].swingIdx; }
@@ -506,7 +528,7 @@ int OnCalculate(const int rates_total, const int prev_calculated,
    if(prev_calculated > 0 && n == lastN) return rates_total;
    lastN = n;
 
-   Process(open, high, low, close, n);
+   Process(open, high, low, close, time, n);
 
    int lastClosed = n - 2;
    g_displayFrom  = time[lastClosed]
