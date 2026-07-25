@@ -539,8 +539,8 @@ namespace cAlgo.Robots
             // up far past what the account can actually margin. Cap it to what free
             // margin can actually support instead of sending an order that just gets
             // rejected outright ("not enough money").
-            // NOTE: verify GetEstimatedMargin's exact name/signature against your API version.
-            double margin = Symbol.GetEstimatedMargin(volume);
+            TradeType tt = isBuy ? TradeType.Buy : TradeType.Sell;
+            double margin = Symbol.GetEstimatedMargin(tt, volume);
             if (margin > 0)
             {
                 double freeMargin = Account.FreeMargin;
