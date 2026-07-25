@@ -60,6 +60,7 @@ public:
    string          m_sym;
    ENUM_TIMEFRAMES m_tf;
    int             m_bars;
+   datetime        m_anchorTime; // fixed start of the processed window -- see Refresh()
 
    SwEv   ev[];
    int    evCount;
@@ -80,6 +81,7 @@ public:
      {
       m_sym = sym; m_tf = tf; m_bars = bars;
       evCount = 0; obCount = 0; n = 0;
+      m_anchorTime = 0; // set lazily on first successful Refresh() -- see below
      }
 
    void AddEv(int confirmIdx, int kind, int swingIdx, double price)
@@ -167,16 +169,35 @@ public:
 
    bool Refresh()
      {
+      // The processed window MUST start at a fixed point in time and only ever
+      // grow forward, never slide. Every EA-level global stores plain integer
+      // indices into ev[]/ob[] across calls (g_activeDailyIdx, g_1hOBIdx,
+      // g_active4hIdx, ...). If Refresh() re-fetched "the last m_bars ending
+      // now" (a sliding window), the earliest bar would drop off every call,
+      // and since swing detection is a sequential, state-dependent scan, that
+      // single dropped bar can reshuffle the entire ev[]/ob[] count and
+      // ordering on the very next call -- silently invalidating every index
+      // held elsewhere, up to and including reading past the end of the
+      // (now shorter) array. Anchoring the start once and only appending
+      // forward guarantees an OB assigned index Q now keeps index Q forever.
+      if(m_anchorTime == 0)
+        {
+         datetime a = iTime(m_sym, m_tf, m_bars - 1);
+         if(a <= 0) return false; // history not ready yet -- retry on a later call
+         m_anchorTime = a;
+        }
+
       ArraySetAsSeries(O, false); ArraySetAsSeries(H, false);
       ArraySetAsSeries(L, false); ArraySetAsSeries(C, false);
       ArraySetAsSeries(Time, false);
 
-      int got = CopyOpen(m_sym, m_tf, 0, m_bars, O);
+      datetime stop = TimeCurrent() + PeriodSeconds(m_tf); // include the still-forming bar
+      int got = CopyOpen(m_sym, m_tf, m_anchorTime, stop, O);
       if(got <= 1) return false;
-      CopyHigh(m_sym, m_tf, 0, m_bars, H);
-      CopyLow(m_sym, m_tf, 0, m_bars, L);
-      CopyClose(m_sym, m_tf, 0, m_bars, C);
-      CopyTime(m_sym, m_tf, 0, m_bars, Time);
+      CopyHigh(m_sym, m_tf, m_anchorTime, stop, H);
+      CopyLow(m_sym, m_tf, m_anchorTime, stop, L);
+      CopyClose(m_sym, m_tf, m_anchorTime, stop, C);
+      CopyTime(m_sym, m_tf, m_anchorTime, stop, Time);
       n = ArraySize(O);
       if(n < 2) return false;
 
@@ -498,7 +519,7 @@ bool InSessionWindow(datetime t)
 //+------------------------------------------------------------------+
 //| Risk-based position sizing from SL distance (in price).           |
 //+------------------------------------------------------------------+
-double CalcLotSize(double riskDistPrice)
+double CalcLotSize(double riskDistPrice, bool isBuy, double entryPrice)
   {
    double equity   = AccountInfoDouble(ACCOUNT_EQUITY);
    double riskMoney = equity * (InpRiskPercent / 100.0);
@@ -513,6 +534,24 @@ double CalcLotSize(double riskDistPrice)
    lots = MathFloor(lots / lotStep) * lotStep;
    if(lots < lotMin) lots = lotMin;
    if(lots > lotMax) lots = lotMax;
+
+   // A tight SL relative to normal volatility can blow the risk-based size up
+   // far past what the account can actually margin (e.g. a 1-2 pip H1 stop on
+   // a $100k account demanding 70+ lots). Sending that straight to the broker
+   // just gets rejected outright ("not enough money") instead of skipping or
+   // right-sizing the trade. Cap it to what free margin can actually support.
+   double margin = 0;
+   ENUM_ORDER_TYPE ot = isBuy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+   if(OrderCalcMargin(ot, _Symbol, lots, entryPrice, margin) && margin > 0)
+     {
+      double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+      if(margin > freeMargin)
+        {
+         double scaled = lots * (freeMargin / margin) * 0.95; // safety buffer
+         scaled = MathFloor(scaled / lotStep) * lotStep;
+         lots = (scaled < lotMin) ? 0 : scaled; // doesn't even fit at minimum -- skip the trade
+        }
+     }
    return lots;
   }
 
@@ -651,7 +690,7 @@ void Advance1H()
       if(riskDist <= 0) { g_1hStage = 1; g_1hOBIdx = -1; g_1hStageStart = TimeCurrent(); return; }
 
       double tpPrice = g_1hBuy ? entryPrice + riskDist * InpRR_Target : entryPrice - riskDist * InpRR_Target;
-      double lots = CalcLotSize(riskDist);
+      double lots = CalcLotSize(riskDist, g_1hBuy, entryPrice);
       PrintFormat("[1H] %s ENTRY %s @ %f SL=%f TP=%f lots=%f", TimeToString(entryTime), g_1hBuy?"BUY":"SELL", entryPrice, slPrice, tpPrice, lots);
       if(lots > 0)
         {
