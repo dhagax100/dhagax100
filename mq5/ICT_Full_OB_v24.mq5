@@ -59,7 +59,11 @@ struct ObZone {
    int    eligibleK;    // impact eligible from this candle (-1=not yet)
    int    stopK;        // box stops here (-1=extending)
    int    state;        // 0=IFOB, 1=AOB, 2=OOB, 3=SPENT
-   int    origState;    // original state at creation (for drawing color)
+   int    origState;    // original state at creation (used for IFOB/AOB
+                         // classification, e.g. which stranding direction applies)
+   int    preSpentState; // state held right before Impact set state=3 (for
+                          // drawing color once SPENT -- may differ from
+                          // origState if it passed through OOB first)
 };
 ObZone g_ob[];
 int    g_obCount = 0;
@@ -74,8 +78,9 @@ void AddOB(int candle, double zb, double zt, bool bull, int triggerK, int state)
    g_ob[g_obCount].triggerK  = triggerK;
    g_ob[g_obCount].eligibleK = (state == 1) ? triggerK : -1;
    g_ob[g_obCount].stopK     = -1;
-   g_ob[g_obCount].state     = state;
-   g_ob[g_obCount].origState = state;
+   g_ob[g_obCount].state         = state;
+   g_ob[g_obCount].origState     = state;
+   g_ob[g_obCount].preSpentState = state;
    g_obCount++;
   }
 int g_shIdx[];
@@ -511,7 +516,10 @@ void Process(const double &O[], const double &H[],
          if(g_ob[z].eligibleK != -1 && k >= g_ob[z].eligibleK)
            {
             if(H[k] >= zb && L[k] <= zt)
-              { g_ob[z].state = 3; g_ob[z].stopK = k; continue; }
+              {
+               g_ob[z].preSpentState = g_ob[z].state; // capture state right before SPENT
+               g_ob[z].state = 3; g_ob[z].stopK = k; continue;
+              }
            }
 
          // STRANDING → OLD: IFOB or AOB can become OLD, but which swing
@@ -676,7 +684,7 @@ int OnCalculate(const int rates_total, const int prev_calculated,
 
       datetime rightT = (g_ob[z].stopK != -1 && g_ob[z].stopK < n) ? time[g_ob[z].stopK] : extT;
       color col;
-      int drawState = (g_ob[z].state == 3) ? g_ob[z].origState : g_ob[z].state;
+      int drawState = (g_ob[z].state == 3) ? g_ob[z].preSpentState : g_ob[z].state;
       switch(drawState)
         {
          case 0: col = g_ob[z].bullish ? clrBlue : clrBlack; break;  // IFOB
@@ -687,9 +695,9 @@ int OnCalculate(const int rates_total, const int prev_calculated,
 
       // DIAG: identify each drawn OB by its position counted from the end
       // (#1 = most recent) so specific OBs can be cross-checked by date.
-      PrintFormat("OB#%d (from end)  date=%s  bull=%d  state=%s  orig=%s  zb=%.5f zt=%.5f  eligibleK=%d(%s)  stopK=%d",
+      PrintFormat("OB#%d (from end)  date=%s  bull=%d  state=%s  orig=%s  preSpent=%s  zb=%.5f zt=%.5f  eligibleK=%d(%s)  stopK=%d",
                   g_obCount - z, TimeToString(time[idx], TIME_DATE),
-                  g_ob[z].bullish, stateName[g_ob[z].state], stateName[g_ob[z].origState],
+                  g_ob[z].bullish, stateName[g_ob[z].state], stateName[g_ob[z].origState], stateName[g_ob[z].preSpentState],
                   g_ob[z].zb, g_ob[z].zt,
                   g_ob[z].eligibleK, (g_ob[z].eligibleK >= 0 && g_ob[z].eligibleK < n) ? TimeToString(time[g_ob[z].eligibleK], TIME_DATE) : "-",
                   g_ob[z].stopK);
