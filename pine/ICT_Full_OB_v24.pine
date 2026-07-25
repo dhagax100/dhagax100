@@ -93,21 +93,23 @@ f_addEv(confirmIdx, kind, swingIdx, price) =>
 f_pickLowestBearish(lo, hi) =>
     int best = -1
     float bestClose = na
-    for x = lo to hi
-        offs = bar_index - x
-        if close[offs] < open[offs] and (best == -1 or close[offs] < bestClose)
-            best := x
-            bestClose := close[offs]
+    if hi >= lo
+        for x = lo to hi
+            offs = bar_index - x
+            if close[offs] < open[offs] and (best == -1 or close[offs] < bestClose)
+                best := x
+                bestClose := close[offs]
     best
 
 f_pickHighestBullish(lo, hi) =>
     int best = -1
     float bestClose = na
-    for x = lo to hi
-        offs = bar_index - x
-        if close[offs] > open[offs] and (best == -1 or close[offs] > bestClose)
-            best := x
-            bestClose := close[offs]
+    if hi >= lo
+        for x = lo to hi
+            offs = bar_index - x
+            if close[offs] > open[offs] and (best == -1 or close[offs] > bestClose)
+                best := x
+                bestClose := close[offs]
     best
 
 f_addOB(candleIdx, zb, zt, bullish, triggerK, st) =>
@@ -236,24 +238,26 @@ else
 evCountAfter = array.size(evKind)
 
 // draw newly confirmed swing points
-for idx = evCountBefore to evCountAfter - 1
-    kind  = array.get(evKind, idx)
-    sIdx  = array.get(evSwingIdx, idx)
-    pr    = array.get(evPrice, idx)
-    if barTimeAt(sIdx) >= displayFromInput
-        if kind == 0
-            label.new(x = sIdx, y = pr, style = label.style_arrowup, color = colHighSwing, size = size.tiny)
-        else
-            label.new(x = sIdx, y = pr, style = label.style_arrowdown, color = colLowSwing, size = size.tiny)
+if evCountAfter > evCountBefore
+    for idx = evCountBefore to evCountAfter - 1
+        kind  = array.get(evKind, idx)
+        sIdx  = array.get(evSwingIdx, idx)
+        pr    = array.get(evPrice, idx)
+        if barTimeAt(sIdx) >= displayFromInput
+            if kind == 0
+                label.new(x = sIdx, y = pr, style = label.style_arrowup, color = colHighSwing, size = size.tiny)
+            else
+                label.new(x = sIdx, y = pr, style = label.style_arrowdown, color = colLowSwing, size = size.tiny)
 
 // ============================== REGIME / OB ENGINE (this bar) ==============================
 // STEP 0: peek-ahead -- update lastSWHidx/lastSWLidx from events confirmed
 // THIS bar, before break checks run.
-for idx = evCountBefore to evCountAfter - 1
-    if array.get(evKind, idx) == 0
-        lastSWHidx := array.get(evSwingIdx, idx)
-    else
-        lastSWLidx := array.get(evSwingIdx, idx)
+if evCountAfter > evCountBefore
+    for idx = evCountBefore to evCountAfter - 1
+        if array.get(evKind, idx) == 0
+            lastSWHidx := array.get(evSwingIdx, idx)
+        else
+            lastSWLidx := array.get(evSwingIdx, idx)
 
 prevRegime = regime
 bool swhConsumed = false
@@ -288,30 +292,31 @@ if not kBullish
         swhConsumed := true
 
     // MID-ARM: process this bar's new events, create AOBs/AIFOBs
-    for idx = evCountBefore to evCountAfter - 1
-        kind = array.get(evKind, idx)
-        sIdx = array.get(evSwingIdx, idx)
-        pr   = array.get(evPrice, idx)
-        if kind == 0
-            haveSWH := true
-            swhPrice := pr
-            swhIdx := sIdx
-            pendingBullAifobIdx := -1
-            f_tryBearishAOB(prevRegime, aobSWLidx, sIdx, pr)
-            if pendingBearAifobIdx == -1
-                idx2 = f_tryBearishAIFOB(prevRegime, haveSWL, aobSWLidx, lastSWHidx, sIdx)
-                if idx2 != -1
-                    pendingBearAifobIdx := idx2
-        else
-            haveSWL := true
-            swlPrice := pr
-            swlIdx := sIdx
-            pendingBearAifobIdx := -1
-            f_tryBullishAOB(prevRegime, aobSWHidx, sIdx, pr)
-            if pendingBullAifobIdx == -1
-                idx2 = f_tryBullishAIFOB(prevRegime, haveSWH, aobSWHidx, lastSWLidx, sIdx)
-                if idx2 != -1
-                    pendingBullAifobIdx := idx2
+    if evCountAfter > evCountBefore
+        for idx = evCountBefore to evCountAfter - 1
+            kind = array.get(evKind, idx)
+            sIdx = array.get(evSwingIdx, idx)
+            pr   = array.get(evPrice, idx)
+            if kind == 0
+                haveSWH := true
+                swhPrice := pr
+                swhIdx := sIdx
+                pendingBullAifobIdx := -1
+                f_tryBearishAOB(prevRegime, aobSWLidx, sIdx, pr)
+                if pendingBearAifobIdx == -1
+                    idx2 = f_tryBearishAIFOB(prevRegime, haveSWL, aobSWLidx, lastSWHidx, sIdx)
+                    if idx2 != -1
+                        pendingBearAifobIdx := idx2
+            else
+                haveSWL := true
+                swlPrice := pr
+                swlIdx := sIdx
+                pendingBearAifobIdx := -1
+                f_tryBullishAOB(prevRegime, aobSWHidx, sIdx, pr)
+                if pendingBullAifobIdx == -1
+                    idx2 = f_tryBullishAIFOB(prevRegime, haveSWH, aobSWHidx, lastSWLidx, sIdx)
+                    if idx2 != -1
+                        pendingBullAifobIdx := idx2
 
     if haveSWL and low < swlPrice
         if regime == 0
@@ -359,30 +364,31 @@ else
         swlConsumed := true
 
     // MID-ARM: process this bar's new events, create AOBs/AIFOBs
-    for idx = evCountBefore to evCountAfter - 1
-        kind = array.get(evKind, idx)
-        sIdx = array.get(evSwingIdx, idx)
-        pr   = array.get(evPrice, idx)
-        if kind == 0
-            haveSWH := true
-            swhPrice := pr
-            swhIdx := sIdx
-            pendingBullAifobIdx := -1
-            f_tryBearishAOB(prevRegime, aobSWLidx, sIdx, pr)
-            if pendingBearAifobIdx == -1
-                idx2 = f_tryBearishAIFOB(prevRegime, haveSWL, aobSWLidx, lastSWHidx, sIdx)
-                if idx2 != -1
-                    pendingBearAifobIdx := idx2
-        else
-            haveSWL := true
-            swlPrice := pr
-            swlIdx := sIdx
-            pendingBearAifobIdx := -1
-            f_tryBullishAOB(prevRegime, aobSWHidx, sIdx, pr)
-            if pendingBullAifobIdx == -1
-                idx2 = f_tryBullishAIFOB(prevRegime, haveSWH, aobSWHidx, lastSWLidx, sIdx)
-                if idx2 != -1
-                    pendingBullAifobIdx := idx2
+    if evCountAfter > evCountBefore
+        for idx = evCountBefore to evCountAfter - 1
+            kind = array.get(evKind, idx)
+            sIdx = array.get(evSwingIdx, idx)
+            pr   = array.get(evPrice, idx)
+            if kind == 0
+                haveSWH := true
+                swhPrice := pr
+                swhIdx := sIdx
+                pendingBullAifobIdx := -1
+                f_tryBearishAOB(prevRegime, aobSWLidx, sIdx, pr)
+                if pendingBearAifobIdx == -1
+                    idx2 = f_tryBearishAIFOB(prevRegime, haveSWL, aobSWLidx, lastSWHidx, sIdx)
+                    if idx2 != -1
+                        pendingBearAifobIdx := idx2
+            else
+                haveSWL := true
+                swlPrice := pr
+                swlIdx := sIdx
+                pendingBearAifobIdx := -1
+                f_tryBullishAOB(prevRegime, aobSWHidx, sIdx, pr)
+                if pendingBullAifobIdx == -1
+                    idx2 = f_tryBullishAIFOB(prevRegime, haveSWH, aobSWHidx, lastSWLidx, sIdx)
+                    if idx2 != -1
+                        pendingBullAifobIdx := idx2
 
     if haveSWH and high > swhPrice
         if regime == 0
@@ -408,86 +414,92 @@ else
 
 // STEP 2: arm swings (redundant with MID-ARM except for the *Consumed guard
 // and eligibility-granting) + IFOB eligibility
-for idx = evCountBefore to evCountAfter - 1
-    kind = array.get(evKind, idx)
-    sIdx = array.get(evSwingIdx, idx)
-    pr   = array.get(evPrice, idx)
-    if kind == 0
-        if not swhConsumed
-            haveSWH := true
-            swhPrice := pr
-            swhIdx := sIdx
-        lastSWHidx := sIdx
-        for z = 0 to array.size(obList) - 1
-            zone = array.get(obList, z)
-            if zone.bullish and zone.state == 0 and zone.eligibleK == -1 and bar_index > zone.triggerK
-                zone.eligibleK := bar_index
-    else
-        if not swlConsumed
-            haveSWL := true
-            swlPrice := pr
-            swlIdx := sIdx
-        lastSWLidx := sIdx
-        for z = 0 to array.size(obList) - 1
-            zone = array.get(obList, z)
-            if (not zone.bullish) and zone.state == 0 and zone.eligibleK == -1 and bar_index > zone.triggerK
-                zone.eligibleK := bar_index
+if evCountAfter > evCountBefore
+    for idx = evCountBefore to evCountAfter - 1
+        kind = array.get(evKind, idx)
+        sIdx = array.get(evSwingIdx, idx)
+        pr   = array.get(evPrice, idx)
+        if kind == 0
+            if not swhConsumed
+                haveSWH := true
+                swhPrice := pr
+                swhIdx := sIdx
+            lastSWHidx := sIdx
+            if array.size(obList) > 0
+                for z = 0 to array.size(obList) - 1
+                    zone = array.get(obList, z)
+                    if zone.bullish and zone.state == 0 and zone.eligibleK == -1 and bar_index > zone.triggerK
+                        zone.eligibleK := bar_index
+        else
+            if not swlConsumed
+                haveSWL := true
+                swlPrice := pr
+                swlIdx := sIdx
+            lastSWLidx := sIdx
+            if array.size(obList) > 0
+                for z = 0 to array.size(obList) - 1
+                    zone = array.get(obList, z)
+                    if (not zone.bullish) and zone.state == 0 and zone.eligibleK == -1 and bar_index > zone.triggerK
+                        zone.eligibleK := bar_index
 
 // STEP 3: OB lifecycle at this bar
-for z = 0 to array.size(obList) - 1
-    zone = array.get(obList, z)
-    if zone.state != 3
-        zb = zone.zb
-        zt = zone.zt
-        bull = zone.bullish
-        bool impacted = false
+if array.size(obList) > 0
+    for z = 0 to array.size(obList) - 1
+        zone = array.get(obList, z)
+        if zone.state != 3
+            zb = zone.zb
+            zt = zone.zt
+            bull = zone.bullish
+            bool impacted = false
 
-        // IMPACT: first touch after eligible -> SPENT
-        if zone.eligibleK != -1 and bar_index >= zone.eligibleK
-            if high >= zb and low <= zt
-                zone.preSpentState := zone.state
-                zone.state := 3
-                zone.stopK := bar_index
-                impacted := true
+            // IMPACT: first touch after eligible -> SPENT
+            if zone.eligibleK != -1 and bar_index >= zone.eligibleK
+                if high >= zb and low <= zt
+                    zone.preSpentState := zone.state
+                    zone.state := 3
+                    zone.stopK := bar_index
+                    impacted := true
 
-        // STRANDING -> OLD: which swing proves it depends on which leg the
-        // zone was built from (IFOB = breakout leg, mirrored direction;
-        // AOB = retracement leg, opposite mirrored direction). AIFOB
-        // (origState==4) counts as IFOB-style; only AOB (origState==1)
-        // gets the opposite one.
-        if (not impacted) and (zone.state == 0 or zone.state == 1 or zone.state == 4) and zone.eligibleK != -1
-            bool isIFOB = zone.origState != 1
-            for idx = evCountBefore to evCountAfter - 1
-                kind = array.get(evKind, idx)
-                pr   = array.get(evPrice, idx)
-                if isIFOB
-                    if bull and kind == 1 and pr > zt
-                        zone.state := 2
-                    if (not bull) and kind == 0 and pr < zb
-                        zone.state := 2
-                else
-                    if bull and kind == 0 and pr < zb
-                        zone.state := 2
-                    if (not bull) and kind == 1 and pr > zt
-                        zone.state := 2
+            // STRANDING -> OLD: which swing proves it depends on which leg the
+            // zone was built from (IFOB = breakout leg, mirrored direction;
+            // AOB = retracement leg, opposite mirrored direction). AIFOB
+            // (origState==4) counts as IFOB-style; only AOB (origState==1)
+            // gets the opposite one.
+            if (not impacted) and (zone.state == 0 or zone.state == 1 or zone.state == 4) and zone.eligibleK != -1
+                bool isIFOB = zone.origState != 1
+                if evCountAfter > evCountBefore
+                    for idx = evCountBefore to evCountAfter - 1
+                        kind = array.get(evKind, idx)
+                        pr   = array.get(evPrice, idx)
+                        if isIFOB
+                            if bull and kind == 1 and pr > zt
+                                zone.state := 2
+                            if (not bull) and kind == 0 and pr < zb
+                                zone.state := 2
+                        else
+                            if bull and kind == 0 and pr < zb
+                                zone.state := 2
+                            if (not bull) and kind == 1 and pr > zt
+                                zone.state := 2
 
 // ============================== DRAW / UPDATE OB BOXES ==============================
-for z = 0 to array.size(obList) - 1
-    zone = array.get(obList, z)
-    if barTimeAt(zone.candleIdx) >= displayFromInput
-        int drawState = zone.state == 3 ? zone.preSpentState : zone.state
-        color col = zone.bullish ? colIFOBBull : colIFOBBear
-        if drawState == 1
-            col := colAOB
-        else if drawState == 2
-            col := colOOB
-        else if drawState == 4
-            col := colAIFOB
-        int rightEdge = zone.stopK != -1 ? zone.stopK : bar_index
-        if na(zone.zoneBox)
-            zone.zoneBox := box.new(left = zone.candleIdx, top = zone.zt, bottom = zone.zb, right = rightEdge,
-                                     border_color = col, bgcolor = color.new(col, 92), border_width = 1)
-        else
-            box.set_right(zone.zoneBox, rightEdge)
-            box.set_border_color(zone.zoneBox, col)
-            box.set_bgcolor(zone.zoneBox, color.new(col, 92))
+if array.size(obList) > 0
+    for z = 0 to array.size(obList) - 1
+        zone = array.get(obList, z)
+        if barTimeAt(zone.candleIdx) >= displayFromInput
+            int drawState = zone.state == 3 ? zone.preSpentState : zone.state
+            color col = zone.bullish ? colIFOBBull : colIFOBBear
+            if drawState == 1
+                col := colAOB
+            else if drawState == 2
+                col := colOOB
+            else if drawState == 4
+                col := colAIFOB
+            int rightEdge = zone.stopK != -1 ? zone.stopK : bar_index
+            if na(zone.zoneBox)
+                zone.zoneBox := box.new(left = zone.candleIdx, top = zone.zt, bottom = zone.zb, right = rightEdge,
+                                         border_color = col, bgcolor = color.new(col, 92), border_width = 1)
+            else
+                box.set_right(zone.zoneBox, rightEdge)
+                box.set_border_color(zone.zoneBox, col)
+                box.set_bgcolor(zone.zoneBox, color.new(col, 92))
