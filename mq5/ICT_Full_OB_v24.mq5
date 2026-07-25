@@ -16,7 +16,7 @@ input datetime InpReplayUpTo = 0;            // replay up to this date (0 = show
 input color InpColorHigh   = clrCrimson;    // swing high color
 input color InpColorLow    = clrRoyalBlue;  // swing low color
 input color InpColorMSS    = clrMagenta;    // MSS flip color
-input int   InpFocusOB     = 0;             // 0 = show last 18 OBs; else show ONLY this OB (counted from end, #1=most recent)
+input int   InpFocusOB     = 0;             // 0 = show last 23 OBs; else show ONLY this OB (counted from end, #1=most recent)
 
 const string PFX = "SWMSS_";
 
@@ -670,7 +670,7 @@ int OnCalculate(const int rates_total, const int prev_calculated,
       // (InpFocusOB, counted from end) -- both drawing and diagnostics
       // share this one filter, so it stays consistent either way.
       if(InpFocusOB > 0) { if(g_obCount - z != InpFocusOB) continue; }
-      else               { if(z < g_obCount - 18) continue; }
+      else               { if(z < g_obCount - 23) continue; }
       int idx = g_ob[z].candle;
       if(idx < 0 || idx >= n) continue;
 
