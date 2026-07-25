@@ -46,15 +46,6 @@ namespace cAlgo.Robots
         [Parameter("Trading window length from each session start (hrs)", DefaultValue = 2, Group = "Session")]
         public int InpSessionWindowHrs { get; set; }
 
-        [Parameter("Daily bars to keep loaded", DefaultValue = 800, Group = "Engine")]
-        public int InpDailyBars { get; set; }
-
-        [Parameter("H4 bars to keep loaded", DefaultValue = 2000, Group = "Engine")]
-        public int InpH4Bars { get; set; }
-
-        [Parameter("H1 bars to keep loaded", DefaultValue = 4000, Group = "Engine")]
-        public int InpH1Bars { get; set; }
-
         [Parameter("Give up a stalled 1H watch/setup after this many hours", DefaultValue = 120, Group = "Engine")]
         public int InpMaxWaitH1Bars { get; set; }
 
@@ -861,29 +852,29 @@ namespace cAlgo.Robots
         }
 
         //+------------------------------------------------------------------+
-        //| Make sure at least minBars are loaded before the engine starts --  |
-        //| cAlgo lazy-loads history, unlike MQL5 where CopyOpen() would just  |
-        //| return what it could. Bars loaded this way are permanent: index 0  |
-        //| never moves and nothing ever drops off (see the note on Refresh()  |
-        //| above), so this only needs to run once, at start.                  |
+        //| Request extra history without blocking. Bars.LoadMoreHistory() is |
+        //| asynchronous -- it queues a request and the data arrives later via |
+        //| the platform's event loop. A synchronous wait-loop on bars.Count   |
+        //| (the previous version of this method) deadlocks OnStart(): the     |
+        //| loop never returns control to the platform, so the very event     |
+        //| that would satisfy it can never fire. Fire-and-forget instead --   |
+        //| whatever is already loaded is used immediately, and more history   |
+        //| simply becomes visible to later Refresh() calls once it arrives.  |
+        //| Bars loaded this way are permanent (see the note on Refresh()      |
+        //| above), so nothing is ever lost once it shows up.                  |
         //+------------------------------------------------------------------+
-        private Bars EnsureBars(TimeFrame tf, int minBars)
+        private Bars GetEngineBars(TimeFrame tf)
         {
             var bars = MarketData.GetBars(tf, SymbolName);
-            while (bars.Count < minBars)
-            {
-                int before = bars.Count;
-                bars.LoadMoreHistory();
-                if (bars.Count == before) break; // no more history available from the broker
-            }
+            bars.LoadMoreHistory();
             return bars;
         }
 
         protected override void OnStart()
         {
-            _dailyBars = EnsureBars(TimeFrame.Daily, InpDailyBars);
-            _h4Bars = EnsureBars(TimeFrame.Hour4, InpH4Bars);
-            _h1Bars = EnsureBars(TimeFrame.Hour, InpH1Bars);
+            _dailyBars = GetEngineBars(TimeFrame.Daily);
+            _h4Bars = GetEngineBars(TimeFrame.Hour4);
+            _h1Bars = GetEngineBars(TimeFrame.Hour);
 
             _daily = new OBEngine(_dailyBars);
             _h4 = new OBEngine(_h4Bars);
