@@ -57,6 +57,15 @@ namespace cAlgo.Robots
         [Parameter("Position label (magic-number equivalent)", DefaultValue = "ICT_EA_1", Group = "Misc")]
         public string InpLabel { get; set; }
 
+        [Parameter("Show Daily structure on chart", DefaultValue = true, Group = "Visuals")]
+        public bool InpShowDaily { get; set; }
+
+        [Parameter("Show H4 structure on chart", DefaultValue = true, Group = "Visuals")]
+        public bool InpShowH4 { get; set; }
+
+        [Parameter("Show H1 structure on chart", DefaultValue = true, Group = "Visuals")]
+        public bool InpShowH1 { get; set; }
+
         //================================ ENGINE TYPES ================================
         private struct SwEv
         {
@@ -78,7 +87,13 @@ namespace cAlgo.Robots
             public int TouchK;      // -1 = not yet touched; else the candle index of first Impact
             public int State;
             public int OrigState;   // classification for stranding direction (0/4 = IFOB-style, 1 = AOB-style)
+            public int PreSpentState = -1; // state right before transitioning to SPENT(3) -- lets callers
+                                            // tell a genuine live touch (was 0/1/4) apart from a touch that
+                                            // only happened AFTER the zone was already stranded (was 2/OOB)
         }
+
+        // one entry per genuine regime flip (MSS), for chart marking
+        private struct MssEvent { public int K; public bool Bullish; }
 
         //+------------------------------------------------------------------+
         //| OBEngine -- one instance per timeframe. Refresh() reprocesses the  |
@@ -98,6 +113,7 @@ namespace cAlgo.Robots
 
             public readonly List<SwEv> Ev = new List<SwEv>();
             public readonly List<ObZone> Ob = new List<ObZone>();
+            public readonly List<MssEvent> Mss = new List<MssEvent>();
 
             public bool HaveSWH; public double SwhPrice; public int SwhIdx;
             public bool HaveSWL; public double SwlPrice; public int SwlIdx;
@@ -202,6 +218,7 @@ namespace cAlgo.Robots
 
                 Ev.Clear();
                 Ob.Clear();
+                Mss.Clear();
                 HaveSWH = false; SwhPrice = 0; SwhIdx = 0;
                 HaveSWL = false; SwlPrice = 0; SwlIdx = 0;
                 Regime = 0; LastSWHidx = -1; LastSWLidx = -1;
@@ -404,6 +421,10 @@ namespace cAlgo.Robots
                         }
                     }
 
+                    // MSS = the swing break that actually flips or establishes the regime.
+                    if (Regime != prevRegime)
+                        Mss.Add(new MssEvent { K = k, Bullish = Regime == 1 });
+
                     //--- STEP2: arm + eligibility ---
                     while (ei < Ev.Count && Ev[ei].ConfirmIdx == k)
                     {
@@ -434,7 +455,11 @@ namespace cAlgo.Robots
                         bool impacted = false;
                         if (Ob[z].EligibleK != -1 && k >= Ob[z].EligibleK)
                         {
-                            if (H(k) >= zb && L(k) <= zt) { Ob[z].State = 3; Ob[z].TouchK = k; impacted = true; }
+                            if (H(k) >= zb && L(k) <= zt)
+                            {
+                                Ob[z].PreSpentState = Ob[z].State; // remember what it was JUST before impact
+                                Ob[z].State = 3; Ob[z].TouchK = k; impacted = true;
+                            }
                         }
                         if (!impacted && (Ob[z].State == 0 || Ob[z].State == 1 || Ob[z].State == 4) && Ob[z].EligibleK != -1)
                         {
@@ -465,6 +490,22 @@ namespace cAlgo.Robots
         //================================ THE THREE ENGINE INSTANCES ================================
         private OBEngine _daily, _h4, _h1;
         private Bars _dailyBars, _h4Bars, _h1Bars;
+
+        //================================ CHART DRAWING ================================
+        // Tracks what's already been drawn for one engine so Refresh() -> Draw() doesn't
+        // redraw the whole history every bar: swings and MSS marks are append-only (drawn
+        // once, never change); OB zones keep redrawing (extending their right edge to "now")
+        // only while still live (IFOB/AOB/AIFOB) -- once a zone resolves (OOB or SPENT) it's
+        // drawn once more at its final color/edge and then left alone.
+        private class DrawCache
+        {
+            public List<int> ObState = new List<int>(); // last-drawn state per OB index, -1 = not drawn yet
+            public int EvDrawn = 0;
+            public int MssDrawn = 0;
+        }
+        private readonly DrawCache _dailyDraw = new DrawCache();
+        private readonly DrawCache _h4Draw = new DrawCache();
+        private readonly DrawCache _h1Draw = new DrawCache();
 
         //================================ EA CASCADE STATE ================================
         // bias: 0 none, 1 bullish, 2 bearish -- mirrors _daily.Regime once established
@@ -601,6 +642,9 @@ namespace cAlgo.Robots
                     var ob = _h1.Ob[z];
                     if (ob.Bullish != _h1Buy) continue;
                     if (ob.T <= _h1WatchStart) continue;
+                    // 1H only ever trades IFOB/AOB -- never pick up something already stranded (OOB)
+                    // or already touched (SPENT) before we even started watching it.
+                    if (ob.State != 0 && ob.State != 1 && ob.State != 4) continue;
                     if (found == -1 || ob.T < foundTime) { found = z; foundTime = ob.T; }
                 }
                 if (found != -1)
@@ -687,6 +731,10 @@ namespace cAlgo.Robots
                     double slPips = Math.Abs(entryPrice - slPrice) / Symbol.PipSize;
                     double tpPips = Math.Abs(tpPrice - entryPrice) / Symbol.PipSize;
                     ExecuteMarketOrder(_h1Buy ? TradeType.Buy : TradeType.Sell, SymbolName, volume, InpLabel, slPips, tpPips, InpLabel);
+                    Chart.DrawIcon($"entry_{entryTime.Ticks}", _h1Buy ? ChartIconType.UpArrow : ChartIconType.DownArrow,
+                        entryTime, entryPrice, _h1Buy ? Color.Lime : Color.Red);
+                    Chart.DrawText($"entrytxt_{entryTime.Ticks}", _h1Buy ? "BUY 3R" : "SELL 3R", entryTime, entryPrice,
+                        _h1Buy ? Color.Lime : Color.Red);
                 }
                 _h1Stage = 0;
             }
@@ -735,6 +783,9 @@ namespace cAlgo.Robots
             for (int z = 0; z < _daily.Ob.Count; z++)
             {
                 if (_daily.Ob[z].TouchK != lc) continue; // only react to a touch that JUST happened
+                // OOB (stranded before ever being touched) is a dead POI -- structural violation
+                // is one of the three ways a daily OB becomes invalid, not a route back to relevance.
+                if (_daily.Ob[z].PreSpentState == 2) continue;
                 if (z == _activeDailyIdx) break;         // this IS the one we're already tracking
                 bool isOpposing = (_bias != 0) && (_daily.Ob[z].Bullish == (_bias == 2));
                 if (DailyRespected(z, lc))
@@ -813,8 +864,10 @@ namespace cAlgo.Robots
             for (int z = _h4.Ob.Count - 1; z >= 0; z--)
             {
                 var ob = _h4.Ob[z];
-                // any state (including OOB) is eligible, matching the daily-level rule --
-                // what matters is whether price just touched it, not its current state.
+                // 4H only ever trades IFOB/AOB -- OOB doesn't exist as a usable concept here.
+                // If this zone was already stranded before price ever touched it, it's dead,
+                // not a signal, no matter how "fresh" the touch itself looks.
+                if (ob.PreSpentState == 2) continue;
                 if (ob.T < _huntStartTime) continue; // only OBs formed since hunting began
                 if (ob.Bullish && !allowBuy) continue;
                 if (!ob.Bullish && !allowSell) continue;
@@ -849,6 +902,97 @@ namespace cAlgo.Robots
                     Print($"[HUNT] ambiguity resolved (c) reclaimed below {_usedUpSwingPrice} -> huntMode=2");
                 }
             }
+        }
+
+        //+------------------------------------------------------------------+
+        //| Chart drawing: swing highs/lows, MSS marks, and OB zones (colored |
+        //| and labeled by exact type) for one engine. Daily draws all five   |
+        //| states (IFOB/AOB/AIFOB/OOB/SPENT); 4H and 1H only ever ACT on     |
+        //| IFOB/AOB, but OOB zones are still drawn there too (gray) purely   |
+        //| for transparency -- so you can see a zone existed and why it was  |
+        //| never traded, not just that nothing happened.                     |
+        //+------------------------------------------------------------------+
+        private Color ObColor(int state, int origState)
+        {
+            if (state == 2) return Color.Gray;                                   // OOB -- dead
+            if (state == 3)                                                       // SPENT -- shade by original type
+                return origState == 1 ? Color.RoyalBlue : origState == 4 ? Color.Teal : Color.SeaGreen;
+            if (origState == 1) return Color.DeepSkyBlue;   // AOB, live
+            if (origState == 4) return Color.Turquoise;     // AIFOB, live
+            return Color.LimeGreen;                          // IFOB, live
+        }
+
+        private string ObLabel(int state, int origState)
+        {
+            string baseLabel = origState == 1 ? "AOB" : origState == 4 ? "AIFOB" : "IFOB";
+            if (state == 2) return "OOB";
+            if (state == 3) return baseLabel + " (spent)";
+            return baseLabel;
+        }
+
+        private void DrawEngine(OBEngine eng, DrawCache cache, string prefix)
+        {
+            // swings -- append-only, never change once drawn
+            for (int i = cache.EvDrawn; i < eng.Ev.Count; i++)
+            {
+                var e = eng.Ev[i];
+                DateTime t = eng.T(e.SwingIdx);
+                bool isHigh = e.Kind == 0;
+                Chart.DrawIcon($"{prefix}_sw_{i}", ChartIconType.Circle, t, e.Price, isHigh ? Color.OrangeRed : Color.DodgerBlue);
+            }
+            cache.EvDrawn = eng.Ev.Count;
+
+            // MSS marks -- append-only too
+            for (int i = cache.MssDrawn; i < eng.Mss.Count; i++)
+            {
+                var m = eng.Mss[i];
+                DateTime t = eng.T(m.K);
+                double y = m.Bullish ? eng.L(m.K) : eng.H(m.K);
+                Chart.DrawText($"{prefix}_mss_{i}", "MSS", t, y, m.Bullish ? Color.LimeGreen : Color.OrangeRed);
+            }
+            cache.MssDrawn = eng.Mss.Count;
+
+            // OB zones -- keep redrawing (extending the right edge to "now") only while
+            // still live; once resolved (OOB or SPENT), draw the final version once, then skip.
+            for (int i = 0; i < eng.Ob.Count; i++)
+            {
+                var ob = eng.Ob[i];
+                bool stillLive = (ob.State == 0 || ob.State == 1 || ob.State == 4);
+                int lastState = i < cache.ObState.Count ? cache.ObState[i] : -1;
+                if (!stillLive && lastState == ob.State) continue; // already drawn at its final state
+
+                Color c = ObColor(ob.State, ob.OrigState);
+                string label = ObLabel(ob.State, ob.OrigState);
+                DateTime t1 = eng.T(ob.Candle);
+                DateTime t2 = stillLive ? eng.T(eng.N - 1) : (ob.TouchK != -1 ? eng.T(ob.TouchK) : t1);
+
+                var rect = Chart.DrawRectangle($"{prefix}_ob_{i}", t1, ob.Zt, t2, ob.Zb, c, 1);
+                rect.IsFilled = false;
+                Chart.DrawText($"{prefix}_obtxt_{i}", $"{prefix} {label}", t1, ob.Bullish ? ob.Zb : ob.Zt, c);
+
+                while (cache.ObState.Count <= i) cache.ObState.Add(-1);
+                cache.ObState[i] = ob.State;
+            }
+        }
+
+        //+------------------------------------------------------------------+
+        //| Live status readout, corner-anchored (not tied to a chart time/   |
+        //| price) so you can see the cascade's current state at a glance.   |
+        //+------------------------------------------------------------------+
+        private void UpdateStatusText()
+        {
+            string biasTxt = _bias == 1 ? "BULLISH" : _bias == 2 ? "BEARISH" : "none yet";
+            string huntTxt = _huntMode == 0 ? "inactive" :
+                              _huntMode == 1 ? "BUY only" :
+                              _huntMode == 2 ? "SELL only" : "BOTH (ambiguous)";
+            string stageTxt;
+            if (_h1Stage == 0) stageTxt = "idle";
+            else if (_h1Stage == 1) stageTxt = "watching for a fresh " + (_h1Buy ? "bullish" : "bearish") + " 1H IFOB/AOB";
+            else if (_h1Stage == 2) stageTxt = $"watching 1H OB #{_h1OBIdx} for the reaction";
+            else stageTxt = "reaction confirmed -- waiting for session window / SL check";
+
+            string text = $"Daily bias: {biasTxt}\nHunt mode: {huntTxt}\n1H stage: {stageTxt}";
+            Chart.DrawStaticText("ict_status", text, VerticalAlignment.Top, HorizontalAlignment.Left, Color.White);
         }
 
         //+------------------------------------------------------------------+
@@ -889,17 +1033,25 @@ namespace cAlgo.Robots
             _daily.Refresh(); UpdateDailyLevel();
             _h4.Refresh();
             _h1.Refresh(); UpdateHuntLevel(); Advance1H();
+
+            if (InpShowDaily) DrawEngine(_daily, _dailyDraw, "D");
+            if (InpShowH4) DrawEngine(_h4, _h4Draw, "H4");
+            if (InpShowH1) DrawEngine(_h1, _h1Draw, "H1");
+            UpdateStatusText();
         }
 
         private void OnDailyBarOpened(BarOpenedEventArgs args)
         {
             _daily.Refresh();
             UpdateDailyLevel();
+            if (InpShowDaily) DrawEngine(_daily, _dailyDraw, "D");
+            UpdateStatusText();
         }
 
         private void OnH4BarOpened(BarOpenedEventArgs args)
         {
             _h4.Refresh();
+            if (InpShowH4) DrawEngine(_h4, _h4Draw, "H4");
         }
 
         private void OnH1BarOpened(BarOpenedEventArgs args)
@@ -907,6 +1059,8 @@ namespace cAlgo.Robots
             _h1.Refresh();
             UpdateHuntLevel();
             Advance1H();
+            if (InpShowH1) DrawEngine(_h1, _h1Draw, "H1");
+            UpdateStatusText();
         }
 
         protected override void OnTick()
