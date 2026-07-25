@@ -11,7 +11,8 @@
 #property indicator_plots 0
 #property strict
 
-input int   InpMonthsBack  = 6;             // months to display (from last closed candle)
+input int   InpMonthsBack  = 6;             // months to display (from last closed candle) -- ignored if InpDisplayFrom is set
+input datetime InpDisplayFrom = D'2025.07.25'; // exact date to display everything from (0 = fall back to InpMonthsBack)
 input datetime InpReplayUpTo = 0;            // replay up to this date (0 = show all)
 input color InpColorHigh   = clrCrimson;    // swing high color
 input color InpColorLow    = clrRoyalBlue;  // swing low color
@@ -608,8 +609,8 @@ int OnCalculate(const int rates_total, const int prev_calculated,
    Process(open, high, low, close, time, n);
 
    int lastClosed = n - 2;
-   g_displayFrom  = time[lastClosed]
-                     - (datetime)(InpMonthsBack * PeriodSeconds(PERIOD_MN1));
+   g_displayFrom  = (InpDisplayFrom > 0) ? InpDisplayFrom :
+                     time[lastClosed] - (datetime)(InpMonthsBack * PeriodSeconds(PERIOD_MN1));
 
    ObjectsDeleteAll(0, PFX);
 
@@ -674,13 +675,13 @@ int OnCalculate(const int rates_total, const int prev_calculated,
    static string stateName[4] = {"IFOB","AOB","OOB","SPENT"};
    for(int z = 0; z < g_obCount; z++)
      {
-      // draw + diagnose either the last 15 OBs, or a single focused OB
-      // (InpFocusOB, counted from end) -- both drawing and diagnostics
-      // share this one filter, so it stays consistent either way.
-      if(InpFocusOB > 0) { if(g_obCount - z != InpFocusOB) continue; }
-      else               { if(z < g_obCount - 50) continue; }
+      // draw + diagnose either everything from g_displayFrom onward (the
+      // SAME date window used for swing highs/lows/MSS, so all four line
+      // up), or a single focused OB (InpFocusOB, counted from end).
       int idx = g_ob[z].candle;
       if(idx < 0 || idx >= n) continue;
+      if(InpFocusOB > 0) { if(g_obCount - z != InpFocusOB) continue; }
+      else               { if(time[idx] < g_displayFrom) continue; }
 
       datetime rightT = (g_ob[z].stopK != -1 && g_ob[z].stopK < n) ? time[g_ob[z].stopK] : extT;
       color col;
