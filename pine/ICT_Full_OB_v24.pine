@@ -35,6 +35,9 @@ colAIFOB         = input.color(color.orange, title = "AIFOB Color")
 // state: 0=IFOB, 1=AOB, 2=OOB, 3=SPENT, 4=AIFOB
 type ObZone
     int   candleIdx
+    int   candleTime  // time of candleIdx's bar, captured at creation (when
+                       // the historical offset is still small/safe) so the
+                       // draw loop never needs a large-offset [] lookup later
     float zb
     float zt
     bool  bullish
@@ -114,7 +117,8 @@ f_pickHighestBullish(lo, hi) =>
 
 f_addOB(candleIdx, zb, zt, bullish, triggerK, st) =>
     int elig = (st == 1 or st == 4) ? triggerK : -1
-    z = ObZone.new(candleIdx = candleIdx, zb = zb, zt = zt, bullish = bullish, triggerK = triggerK,
+    int cTime = time[bar_index - candleIdx]
+    z = ObZone.new(candleIdx = candleIdx, candleTime = cTime, zb = zb, zt = zt, bullish = bullish, triggerK = triggerK,
                    eligibleK = elig, stopK = -1, state = st, origState = st, preSpentState = st, zoneBox = na)
     array.push(obList, z)
     array.size(obList) - 1
@@ -486,7 +490,7 @@ if array.size(obList) > 0
 if array.size(obList) > 0
     for z = 0 to array.size(obList) - 1
         zone = array.get(obList, z)
-        if barTimeAt(zone.candleIdx) >= displayFromInput
+        if zone.candleTime >= displayFromInput
             int drawState = zone.state == 3 ? zone.preSpentState : zone.state
             color col = zone.bullish ? colIFOBBull : colIFOBBear
             if drawState == 1
