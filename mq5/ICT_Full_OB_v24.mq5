@@ -51,7 +51,7 @@ void AddMss(int atIdx, int brokenIdx, double price, bool toUp)
    g_mssCount++;
   }
 
-//--- Order Blocks: 0=IFOB, 1=AOB, 2=OOB, 3=SPENT
+//--- Order Blocks: 0=IFOB, 1=AOB, 2=OOB, 3=SPENT, 4=AIFOB
 struct ObZone {
    int    candle;       // OB candle (zone body)
    double zb, zt;       // zone bottom/top (open-to-close)
@@ -59,9 +59,11 @@ struct ObZone {
    int    triggerK;     // candle that triggered creation
    int    eligibleK;    // impact eligible from this candle (-1=not yet)
    int    stopK;        // box stops here (-1=extending)
-   int    state;        // 0=IFOB, 1=AOB, 2=OOB, 3=SPENT
+   int    state;        // 0=IFOB, 1=AOB, 2=OOB, 3=SPENT, 4=AIFOB
    int    origState;    // original state at creation (used for IFOB/AOB
-                         // classification, e.g. which stranding direction applies)
+                         // classification, e.g. which stranding direction
+                         // applies -- AIFOB counts as IFOB-style here, and
+                         // gets rewritten to 0 on conversion, see STEP 1)
    int    preSpentState; // state held right before Impact set state=3 (for
                           // drawing color once SPENT -- may differ from
                           // origState if it passed through OOB first)
@@ -77,7 +79,9 @@ void AddOB(int candle, double zb, double zt, bool bull, int triggerK, int state)
    g_ob[g_obCount].zt        = zt;
    g_ob[g_obCount].bullish   = bull;
    g_ob[g_obCount].triggerK  = triggerK;
-   g_ob[g_obCount].eligibleK = (state == 1) ? triggerK : -1;
+   // AOB and AIFOB are both immediately eligible -- no waiting swing needed,
+   // since AIFOB's own creation trigger already IS that confirming swing.
+   g_ob[g_obCount].eligibleK = (state == 1 || state == 4) ? triggerK : -1;
    g_ob[g_obCount].stopK     = -1;
    g_ob[g_obCount].state         = state;
    g_ob[g_obCount].origState     = state;
@@ -179,6 +183,79 @@ void TryBearishAOB(int prevRegime, int aobSWLidx, int newSwhIdx, double newSwhPr
                   (best2!=-1?TimeToString(Time[best2], TIME_DATE):"-"), passGuard2);
    if(passGuard2)
       AddOB(best2, MathMin(O[best2],C[best2]), MathMax(O[best2],C[best2]), false, k, 1);
+  }
+
+//+------------------------------------------------------------------+
+//| AIFOB hunts -- an IFOB created EARLY: the armed swing (that would  |
+//| normally need to be exceeded to trigger a real IFOB) hasn't been   |
+//| exceeded yet, but the OPPOSITE swing has already confirmed, so the |
+//| range that a real IFOB would eventually use can already be scanned.|
+//| Uses IFOB's own range shape and candle-selection rule (not AOB's), |
+//| is immediately eligible like AOB, and returns the new g_ob[] index |
+//| (or -1 if nothing qualified) so the caller can track it as pending.|
+//+------------------------------------------------------------------+
+int TryBullishAIFOB(int prevRegime, bool haveSWH, int swhIdx, int lastSWLidx,
+                     int newSwlIdx,
+                     const double &O[], const double &H[], const double &L[], const double &C[],
+                     const datetime &Time[], int k, int n)
+  {
+   bool diag = (k >= n - 40);
+   if(prevRegime != 1 || !haveSWH || swhIdx < 0 || lastSWLidx < 0)
+     {
+      if(diag)
+         PrintFormat("AIFOB-HUNT(bull) swl=%s SKIPPED prevRegime=%d haveSWH=%d swhIdx=%s lastSWLidx=%s",
+                     TimeToString(Time[k], TIME_DATE), prevRegime, haveSWH,
+                     (swhIdx>=0?TimeToString(Time[swhIdx], TIME_DATE):"-1"),
+                     (lastSWLidx>=0?TimeToString(Time[lastSWLidx], TIME_DATE):"-1"));
+      return -1;
+     }
+   // same range shape as a real Bullish IFOB ([lastSWLidx .. swhIdx .. far
+   // candle]), but the far candle is the newly confirmed swing low itself
+   // (no exceedance candle exists yet) -- and widen one candle before the
+   // armed swing high, same rule already applied to AOB range scans.
+   int lo = MathMax(0, MathMin(MathMin(lastSWLidx, newSwlIdx), swhIdx - 1));
+   int hi = MathMax(MathMax(lastSWLidx, newSwlIdx), swhIdx - 1);
+   int best = -1;
+   for(int x = lo; x <= hi; x++)
+      if(C[x] < O[x] && (best == -1 || C[x] < C[best])) best = x;
+   if(diag)
+      PrintFormat("AIFOB-HUNT(bull) swl=%s prevRegime=%d range=[%s..%s] best=%s",
+                  TimeToString(Time[k], TIME_DATE), prevRegime,
+                  TimeToString(Time[lo], TIME_DATE), TimeToString(Time[hi], TIME_DATE),
+                  (best!=-1?TimeToString(Time[best], TIME_DATE):"-"));
+   if(best == -1) return -1;
+   AddOB(best, MathMin(O[best],C[best]), MathMax(O[best],C[best]), true, k, 4);
+   return g_obCount - 1;
+  }
+
+int TryBearishAIFOB(int prevRegime, bool haveSWL, int swlIdx, int lastSWHidx,
+                     int newSwhIdx,
+                     const double &O[], const double &H[], const double &L[], const double &C[],
+                     const datetime &Time[], int k, int n)
+  {
+   bool diag = (k >= n - 40);
+   if(prevRegime != 2 || !haveSWL || swlIdx < 0 || lastSWHidx < 0)
+     {
+      if(diag)
+         PrintFormat("AIFOB-HUNT(bear) swh=%s SKIPPED prevRegime=%d haveSWL=%d swlIdx=%s lastSWHidx=%s",
+                     TimeToString(Time[k], TIME_DATE), prevRegime, haveSWL,
+                     (swlIdx>=0?TimeToString(Time[swlIdx], TIME_DATE):"-1"),
+                     (lastSWHidx>=0?TimeToString(Time[lastSWHidx], TIME_DATE):"-1"));
+      return -1;
+     }
+   int lo = MathMax(0, MathMin(MathMin(lastSWHidx, newSwhIdx), swlIdx - 1));
+   int hi = MathMax(MathMax(lastSWHidx, newSwhIdx), swlIdx - 1);
+   int best = -1;
+   for(int x = lo; x <= hi; x++)
+      if(C[x] > O[x] && (best == -1 || C[x] > C[best])) best = x;
+   if(diag)
+      PrintFormat("AIFOB-HUNT(bear) swh=%s prevRegime=%d range=[%s..%s] best=%s",
+                  TimeToString(Time[k], TIME_DATE), prevRegime,
+                  TimeToString(Time[lo], TIME_DATE), TimeToString(Time[hi], TIME_DATE),
+                  (best!=-1?TimeToString(Time[best], TIME_DATE):"-"));
+   if(best == -1) return -1;
+   AddOB(best, MathMin(O[best],C[best]), MathMax(O[best],C[best]), false, k, 4);
+   return g_obCount - 1;
   }
 
 //+------------------------------------------------------------------+
@@ -325,6 +402,12 @@ void Process(const double &O[], const double &H[],
    int    ei      = 0;
    int    lastSWHidx = -1, lastSWLidx = -1;  // OB scan boundaries
    int    prevRegime = 0;  // track regime before this candle for AOB conversion
+   // AIFOB pending trackers: g_ob[] index of the AIFOB (if any) waiting on
+   // the CURRENTLY armed swing high/low, reset whenever that swing gets
+   // superseded by a fresher one (the old AIFOB is then judged solely by
+   // the generic stranding rule, same as any IFOB/AOB).
+   int    pendingBullAifobIdx = -1;   // waits on swhIdx being exceeded
+   int    pendingBearAifobIdx = -1;   // waits on swlIdx being exceeded
 
    for(int k = 0; k < n; k++)
      {
@@ -357,8 +440,16 @@ void Process(const double &O[], const double &H[],
            {
             if(regime == 0)      regime = 1;
             else if(regime == 2) { regime = 1; AddMss(k, swhIdx, swhPrice, true); }
-            // IFOB: bullish OB — scan from lastSWLidx through swhIdx to k
-            if(lastSWLidx >= 0)
+            // IFOB: bullish OB — scan from lastSWLidx through swhIdx to k.
+            // But if a pending AIFOB is already waiting on THIS swing high,
+            // promote it to a real IFOB instead of creating a duplicate.
+            if(pendingBullAifobIdx != -1)
+              {
+               g_ob[pendingBullAifobIdx].state     = 0;
+               g_ob[pendingBullAifobIdx].origState = 0;
+               pendingBullAifobIdx = -1;
+              }
+            else if(lastSWLidx >= 0)
               {
                int lo = MathMin(MathMin(lastSWLidx, k), swhIdx);
                int hi = MathMax(MathMax(lastSWLidx, k), swhIdx);
@@ -372,7 +463,7 @@ void Process(const double &O[], const double &H[],
               }
             haveSWH = false; swhConsumed = true;
            }
-         // MID-ARM: arm events + create AOBs (before the second break creates IFOBs)
+         // MID-ARM: arm events + create AOBs/AIFOBs (before the second break creates IFOBs)
          {
             int peek2 = ei;
             while(peek2 < g_evCount && g_ev[peek2].confirmIdx == k)
@@ -380,18 +471,41 @@ void Process(const double &O[], const double &H[],
                if(g_ev[peek2].kind == 0)
                  {
                   haveSWH = true; swhPrice = g_ev[peek2].price; swhIdx = g_ev[peek2].swingIdx;
+                  // this swing high supersedes whatever the old one was --
+                  // any AIFOB waiting on the OLD one is now judged solely by
+                  // the generic stranding rule, not by this reference anymore.
+                  pendingBullAifobIdx = -1;
                   // Bearish AOB: SWH just confirmed while a downtrend was in
                   // effect -- runs regardless of this candle's own body
                   // direction, so it isn't missed like OB near 2026.06.24.
                   TryBearishAOB(prevRegime, aobSWLidx, g_ev[peek2].swingIdx, g_ev[peek2].price,
                                 O, H, L, C, Time, k, n);
+                  // Bearish AIFOB: the swing low this would need to exceed
+                  // hasn't been exceeded yet -- scan the same range a real
+                  // Bearish IFOB would eventually use, early.
+                  if(pendingBearAifobIdx == -1)
+                    {
+                     int idx = TryBearishAIFOB(prevRegime, haveSWL, aobSWLidx, lastSWHidx,
+                                                g_ev[peek2].swingIdx, O, H, L, C, Time, k, n);
+                     if(idx != -1) pendingBearAifobIdx = idx;
+                    }
                  }
                else
                  {
                   haveSWL = true; swlPrice = g_ev[peek2].price; swlIdx = g_ev[peek2].swingIdx;
+                  pendingBearAifobIdx = -1;
                   // Bullish AOB: SWL just confirmed while an uptrend was in effect.
                   TryBullishAOB(prevRegime, aobSWHidx, g_ev[peek2].swingIdx, g_ev[peek2].price,
                                 O, H, L, C, Time, k, n);
+                  // Bullish AIFOB: the swing high this would need to exceed
+                  // hasn't been exceeded yet -- scan the same range a real
+                  // Bullish IFOB would eventually use, early.
+                  if(pendingBullAifobIdx == -1)
+                    {
+                     int idx = TryBullishAIFOB(prevRegime, haveSWH, aobSWHidx, lastSWLidx,
+                                                g_ev[peek2].swingIdx, O, H, L, C, Time, k, n);
+                     if(idx != -1) pendingBullAifobIdx = idx;
+                    }
                  }
                peek2++;
               }
@@ -400,8 +514,16 @@ void Process(const double &O[], const double &H[],
            {
             if(regime == 0)      regime = 2;
             else if(regime == 1) { regime = 2; AddMss(k, swlIdx, swlPrice, false); }
-            // IFOB: bearish OB — scan from lastSWHidx through swlIdx to k
-            if(lastSWHidx >= 0)
+            // IFOB: bearish OB — scan from lastSWHidx through swlIdx to k.
+            // But if a pending AIFOB is already waiting on THIS swing low,
+            // promote it to a real IFOB instead of creating a duplicate.
+            if(pendingBearAifobIdx != -1)
+              {
+               g_ob[pendingBearAifobIdx].state     = 0;
+               g_ob[pendingBearAifobIdx].origState = 0;
+               pendingBearAifobIdx = -1;
+              }
+            else if(lastSWHidx >= 0)
               {
                int lo = MathMin(MathMin(lastSWHidx, k), swlIdx);
                int hi = MathMax(MathMax(lastSWHidx, k), swlIdx);
@@ -423,7 +545,13 @@ void Process(const double &O[], const double &H[],
            {
             if(regime == 0)      regime = 2;
             else if(regime == 1) { regime = 2; AddMss(k, swlIdx, swlPrice, false); }
-            if(lastSWHidx >= 0)
+            if(pendingBearAifobIdx != -1)
+              {
+               g_ob[pendingBearAifobIdx].state     = 0;
+               g_ob[pendingBearAifobIdx].origState = 0;
+               pendingBearAifobIdx = -1;
+              }
+            else if(lastSWHidx >= 0)
               {
                int lo = MathMin(MathMin(lastSWHidx, k), swlIdx);
                int hi = MathMax(MathMax(lastSWHidx, k), swlIdx);
@@ -437,7 +565,7 @@ void Process(const double &O[], const double &H[],
               }
             haveSWL = false; swlConsumed = true;
            }
-         // MID-ARM: arm events + create AOBs (before the second break creates IFOBs)
+         // MID-ARM: arm events + create AOBs/AIFOBs (before the second break creates IFOBs)
          {
             int peek2 = ei;
             while(peek2 < g_evCount && g_ev[peek2].confirmIdx == k)
@@ -445,18 +573,38 @@ void Process(const double &O[], const double &H[],
                if(g_ev[peek2].kind == 0)
                  {
                   haveSWH = true; swhPrice = g_ev[peek2].price; swhIdx = g_ev[peek2].swingIdx;
+                  pendingBullAifobIdx = -1;
                   // Bearish AOB: SWH just confirmed while a downtrend was in effect.
                   TryBearishAOB(prevRegime, aobSWLidx, g_ev[peek2].swingIdx, g_ev[peek2].price,
                                 O, H, L, C, Time, k, n);
+                  // Bearish AIFOB: the swing low this would need to exceed
+                  // hasn't been exceeded yet -- scan the same range a real
+                  // Bearish IFOB would eventually use, early.
+                  if(pendingBearAifobIdx == -1)
+                    {
+                     int idx = TryBearishAIFOB(prevRegime, haveSWL, aobSWLidx, lastSWHidx,
+                                                g_ev[peek2].swingIdx, O, H, L, C, Time, k, n);
+                     if(idx != -1) pendingBearAifobIdx = idx;
+                    }
                  }
                else
                  {
                   haveSWL = true; swlPrice = g_ev[peek2].price; swlIdx = g_ev[peek2].swingIdx;
+                  pendingBearAifobIdx = -1;
                   // Bullish AOB: SWL just confirmed while an uptrend was in
                   // effect -- runs regardless of this candle's own body
                   // direction, so it isn't missed like OB near 2026.06.24.
                   TryBullishAOB(prevRegime, aobSWHidx, g_ev[peek2].swingIdx, g_ev[peek2].price,
                                 O, H, L, C, Time, k, n);
+                  // Bullish AIFOB: the swing high this would need to exceed
+                  // hasn't been exceeded yet -- scan the same range a real
+                  // Bullish IFOB would eventually use, early.
+                  if(pendingBullAifobIdx == -1)
+                    {
+                     int idx = TryBullishAIFOB(prevRegime, haveSWH, aobSWHidx, lastSWLidx,
+                                                g_ev[peek2].swingIdx, O, H, L, C, Time, k, n);
+                     if(idx != -1) pendingBullAifobIdx = idx;
+                    }
                  }
                peek2++;
               }
@@ -465,7 +613,13 @@ void Process(const double &O[], const double &H[],
            {
             if(regime == 0)      regime = 1;
             else if(regime == 2) { regime = 1; AddMss(k, swhIdx, swhPrice, true); }
-            if(lastSWLidx >= 0)
+            if(pendingBullAifobIdx != -1)
+              {
+               g_ob[pendingBullAifobIdx].state     = 0;
+               g_ob[pendingBullAifobIdx].origState = 0;
+               pendingBullAifobIdx = -1;
+              }
+            else if(lastSWLidx >= 0)
               {
                int lo = MathMin(MathMin(lastSWLidx, k), swhIdx);
                int hi = MathMax(MathMax(lastSWLidx, k), swhIdx);
@@ -512,7 +666,7 @@ void Process(const double &O[], const double &H[],
       //--- STEP 3: OB lifecycle at this candle ---
       for(int z = 0; z < g_obCount; z++)
         {
-         if(g_ob[z].state >= 3) continue; // SPENT
+         if(g_ob[z].state == 3) continue; // SPENT (state==4/AIFOB is still active, don't skip it)
 
          double zb = g_ob[z].zb, zt = g_ob[z].zt;
          bool bull = g_ob[z].bullish;
@@ -537,9 +691,11 @@ void Process(const double &O[], const double &H[],
          // creation, so Impact means the ORIGINAL trend resuming and
          // reaching back to it; staleness is proven by a swing point on the
          // NEAR side (a recovery attempt that fails to reach back).
-         if((g_ob[z].state == 0 || g_ob[z].state == 1) && g_ob[z].eligibleK != -1)
+         if((g_ob[z].state == 0 || g_ob[z].state == 1 || g_ob[z].state == 4) && g_ob[z].eligibleK != -1)
            {
-            bool isIFOB = (g_ob[z].origState == 0);
+            // AIFOB (origState==4) uses the same mirrored direction as a
+            // real IFOB -- only AOB (origState==1) gets the opposite one.
+            bool isIFOB = (g_ob[z].origState != 1);
             for(int e2 = 0; e2 < g_evCount; e2++)
               {
                if(g_ev[e2].confirmIdx != k) continue;
@@ -566,12 +722,13 @@ void Process(const double &O[], const double &H[],
    static bool logged = false;
    if(!logged)
      {
-      int nIFOB=0, nAOB=0, nOOB=0, nSpent=0;
+      int nIFOB=0, nAOB=0, nOOB=0, nSpent=0, nAifob=0;
       for(int z=0;z<g_obCount;z++)
         { if(g_ob[z].state==0) nIFOB++; else if(g_ob[z].state==1) nAOB++;
-          else if(g_ob[z].state==2) nOOB++; else nSpent++; }
-      PrintFormat("SwingMSS+OB: bars=%d SWH=%d SWL=%d MSS=%d OB=%d (ifob=%d aob=%d oob=%d spent=%d)",
-                  n, g_shCount, g_slCount, g_mssCount, g_obCount, nIFOB, nAOB, nOOB, nSpent);
+          else if(g_ob[z].state==2) nOOB++; else if(g_ob[z].state==4) nAifob++;
+          else nSpent++; }
+      PrintFormat("SwingMSS+OB: bars=%d SWH=%d SWL=%d MSS=%d OB=%d (ifob=%d aob=%d oob=%d spent=%d aifob=%d)",
+                  n, g_shCount, g_slCount, g_mssCount, g_obCount, nIFOB, nAOB, nOOB, nSpent, nAifob);
       logged = true;
      }
   }
@@ -674,9 +831,9 @@ int OnCalculate(const int rates_total, const int prev_calculated,
      }
 
    //--- draw OB zones ---
-   // IFOB bullish=blue, IFOB bearish=black, AOB=green, OOB=red, SPENT=stopped
+   // IFOB bullish=blue, IFOB bearish=black, AOB=green, OOB=red, SPENT=stopped, AIFOB=orange
    datetime extT = time[n-1] + (datetime)(6 * PeriodSeconds(PERIOD_MN1));
-   static string stateName[4] = {"IFOB","AOB","OOB","SPENT"};
+   static string stateName[5] = {"IFOB","AOB","OOB","SPENT","AIFOB"};
    for(int z = 0; z < g_obCount; z++)
      {
       // draw + diagnose either everything from g_displayFrom onward (the
@@ -695,6 +852,7 @@ int OnCalculate(const int rates_total, const int prev_calculated,
          case 0: col = g_ob[z].bullish ? clrBlue : clrBlack; break;  // IFOB
          case 1: col = clrGreen; break;                                // AOB
          case 2: col = clrRed; break;                                  // OOB
+         case 4: col = clrOrange; break;                                // AIFOB
          default: col = g_ob[z].bullish ? clrBlue : clrBlack; break;
         }
 
@@ -713,7 +871,7 @@ int OnCalculate(const int rates_total, const int prev_calculated,
       if(g_ob[z].eligibleK != -1)
         {
          int auditImpactK = -1, auditStrandK = -1;
-         bool auditIsIFOB = (g_ob[z].origState == 0);
+         bool auditIsIFOB = (g_ob[z].origState != 1); // AIFOB (4) counts as IFOB-style too
          for(int kk = g_ob[z].eligibleK; kk < n && auditImpactK == -1; kk++)
             if(high[kk] >= g_ob[z].zb && low[kk] <= g_ob[z].zt) auditImpactK = kk;
          for(int e2 = 0; e2 < g_evCount; e2++)
