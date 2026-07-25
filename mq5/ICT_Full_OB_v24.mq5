@@ -124,8 +124,10 @@ void TryBullishAOB(int prevRegime, int aobSWHidx, int newSwlIdx, double newSwlPr
                      (aobSWHidx>=0?TimeToString(Time[aobSWHidx], TIME_DATE):"-1"));
       return;
      }
-   int lo2 = MathMin(aobSWHidx, newSwlIdx);
-   int hi2 = MathMax(aobSWHidx, newSwlIdx);
+   // widen the far side by one candle before the armed swing high, per
+   // the same rule applied to OB range scans.
+   int lo2 = MathMax(0, MathMin(aobSWHidx - 1, newSwlIdx));
+   int hi2 = MathMax(aobSWHidx - 1, newSwlIdx);
    int best2 = -1;
    // rank by body extremity (close), not wick -- the zone itself is drawn
    // open-to-close, so selection should match.
@@ -157,8 +159,10 @@ void TryBearishAOB(int prevRegime, int aobSWLidx, int newSwhIdx, double newSwhPr
                      (aobSWLidx>=0?TimeToString(Time[aobSWLidx], TIME_DATE):"-1"));
       return;
      }
-   int lo2 = MathMin(aobSWLidx, newSwhIdx);
-   int hi2 = MathMax(aobSWLidx, newSwhIdx);
+   // widen the far side by one candle before the armed swing low, per
+   // the same rule applied to OB range scans.
+   int lo2 = MathMax(0, MathMin(aobSWLidx - 1, newSwhIdx));
+   int hi2 = MathMax(aobSWLidx - 1, newSwhIdx);
    int best2 = -1;
    // rank by body extremity (close), not wick -- the zone itself is drawn
    // open-to-close, so selection should match.
