@@ -27,6 +27,7 @@ input int    InpSessionWindowHrs = 2;     // trading window length from each ses
 input int    InpDailyBars        = 800;   // daily bars to keep in the engine
 input int    InpH4Bars           = 2000;  // H4 bars to keep in the engine
 input int    InpH1Bars           = 4000;  // H1 bars to keep in the engine
+input int    InpMaxWaitH1Bars    = 120;   // give up a stalled 1H watch/setup after this many hours
 input ulong  InpMagic            = 202601;
 
 CTrade trade;
@@ -474,6 +475,8 @@ bool     g_1hBuy    = false;
 datetime g_1hWatchStart = 0;   // only 1H OBs created after this time count
 int      g_1hOBIdx  = -1;      // index into g_h1.ob[] once found
 int      g_1hReactionCandle = -1;
+double   g_1hSLPrice = 0;      // SL level fixed at the reaction candle, checked while we wait for session window
+datetime g_1hStageStart = 0;   // when we entered the CURRENT stage -- for the stall timeout
 
 datetime g_lastDailyBarTime = 0;
 datetime g_lastH4BarTime    = 0;
@@ -535,6 +538,7 @@ void StartWatching1H(bool buyDirection, datetime fromTime)
    g_1hWatchStart = fromTime;
    g_1hOBIdx      = -1;
    g_1hReactionCandle = -1;
+   g_1hStageStart = TimeCurrent();
   }
 
 //+------------------------------------------------------------------+
@@ -546,6 +550,19 @@ void Advance1H()
   {
    if(g_1hStage == 0) return;
 
+   // Stall guard: none of the three sub-stages has a bound on how long they may
+   // wait (stage 1 for a matching 1H structure, stage 2 for the wick reaction,
+   // stage 3 for a session window to open). Left unbounded, a direction that
+   // simply doesn't produce the next piece of structure for a long stretch would
+   // occupy g_1hStage forever and block UpdateHuntLevel()'s "one setup at a
+   // time" gate from ever starting a fresh, more current setup. Give up and
+   // free the slot after InpMaxWaitH1Bars hours with no resolution.
+   if(TimeCurrent() - g_1hStageStart >= (long)InpMaxWaitH1Bars * 3600)
+     {
+      g_1hStage = 0;
+      return;
+     }
+
    if(g_1hStage == 1)
      {
       int found = -1; datetime foundTime = 0;
@@ -555,7 +572,7 @@ void Advance1H()
          if(g_h1.ob[z].t <= g_1hWatchStart) continue;
          if(found == -1 || g_h1.ob[z].t < foundTime) { found = z; foundTime = g_h1.ob[z].t; }
         }
-      if(found != -1) { g_1hOBIdx = found; g_1hStage = 2; }
+      if(found != -1) { g_1hOBIdx = found; g_1hStage = 2; g_1hStageStart = TimeCurrent(); }
       return;
      }
 
@@ -563,30 +580,53 @@ void Advance1H()
      {
       int lc = g_h1.LastClosedIdx();
       if(lc < 0) return;
-      if(g_h1.ob[g_1hOBIdx].state == 2) { g_1hStage = 1; g_1hOBIdx = -1; return; } // stranded before reacting
+      if(g_h1.ob[g_1hOBIdx].state == 2)
+        { g_1hStage = 1; g_1hOBIdx = -1; g_1hStageStart = TimeCurrent(); return; } // stranded before reacting
       double zb = g_h1.ob[g_1hOBIdx].zb, zt = g_h1.ob[g_1hOBIdx].zt;
       bool wicked = (g_h1.H[lc] >= zb && g_h1.L[lc] <= zt);
       if(!wicked) return;
 
       bool respected = g_1hBuy ? (g_h1.C[lc] >= zt) : (g_h1.C[lc] <= zb);
-      if(respected) { g_1hReactionCandle = lc; g_1hStage = 3; }
-      else          { g_1hStage = 1; g_1hOBIdx = -1; } // violated -- keep watching for the next 1H setup
+      if(respected)
+        {
+         g_1hReactionCandle = lc;
+         g_1hSLPrice = g_1hBuy ? g_h1.L[lc] : g_h1.H[lc];
+         g_1hStage = 3;
+         g_1hStageStart = TimeCurrent();
+        }
+      else
+        { g_1hStage = 1; g_1hOBIdx = -1; g_1hStageStart = TimeCurrent(); } // violated -- keep watching for the next 1H setup
       return;
      }
 
    if(g_1hStage == 3)
      {
-      int entryIdx = g_1hReactionCandle + 1;
-      if(entryIdx >= g_h1.n) return; // next hour hasn't opened yet
-      datetime entryTime = g_h1.Time[entryIdx];
-      if(!InSessionWindow(entryTime)) { g_1hStage = 0; return; } // outside session -- setup skipped
-      if(PositionsTotal() > 0)        { g_1hStage = 0; return; } // one trade at a time
+      // The session-time rule is a TIMING gate on when to fire the entry, not a
+      // filter on which setups are eligible. A confirmed reaction that happens
+      // to land outside the window must WAIT for the next in-window hour, not
+      // be thrown away -- discarding it here was silently killing the large
+      // majority of otherwise-valid setups (only ~4 of 24 hours qualify).
+      int cur = g_h1.n - 1; // the bar that just opened this tick (still forming)
+      if(cur <= g_1hReactionCandle) return; // the bar right after the reaction hasn't opened yet
 
-      double entryPrice = g_h1.O[entryIdx];
-      double slPrice, riskDist;
-      if(g_1hBuy) { slPrice = g_h1.L[g_1hReactionCandle]; riskDist = entryPrice - slPrice; }
-      else        { slPrice = g_h1.H[g_1hReactionCandle]; riskDist = slPrice - entryPrice; }
-      if(riskDist <= 0) { g_1hStage = 0; return; }
+      // While we wait, make sure price hasn't already breached the reaction
+      // candle's SL level -- entering late on a setup that already failed
+      // would put the stop on the wrong side of price.
+      for(int x = g_1hReactionCandle + 1; x <= cur; x++)
+        {
+         bool breached = g_1hBuy ? (g_h1.L[x] <= g_1hSLPrice) : (g_h1.H[x] >= g_1hSLPrice);
+         if(breached) { g_1hStage = 1; g_1hOBIdx = -1; g_1hStageStart = TimeCurrent(); return; }
+        }
+
+      datetime entryTime = g_h1.Time[cur];
+      if(!InSessionWindow(entryTime)) return; // keep waiting for the next in-window hour
+
+      if(PositionsTotal() > 0) { g_1hStage = 0; return; } // one trade at a time
+
+      double entryPrice = g_h1.O[cur];
+      double slPrice = g_1hSLPrice;
+      double riskDist = g_1hBuy ? (entryPrice - slPrice) : (slPrice - entryPrice);
+      if(riskDist <= 0) { g_1hStage = 1; g_1hOBIdx = -1; g_1hStageStart = TimeCurrent(); return; }
 
       double tpPrice = g_1hBuy ? entryPrice + riskDist * InpRR_Target : entryPrice - riskDist * InpRR_Target;
       double lots = CalcLotSize(riskDist);
@@ -636,26 +676,31 @@ void UpdateDailyLevel()
   {
    g_bias = (g_daily.regime == 1 || g_daily.regime == 2) ? g_daily.regime : g_bias;
 
-   // no OB currently being tracked -- look for the most recent touch
-   if(g_activeDailyIdx == -1)
+   // Always check for a fresh touch on the last closed candle, even while
+   // another OB is still being tracked -- a "used up" confirmation can take
+   // a long time (or never come) in a quiet market, and a new touch is
+   // objectively more current. Without this, one early OB that never
+   // resolves would permanently block all future daily engagement.
+   int lc = g_daily.LastClosedIdx();
+   for(int z = 0; z < g_daily.obCount; z++)
      {
-      int lc = g_daily.LastClosedIdx();
-      for(int z = 0; z < g_daily.obCount; z++)
+      if(g_daily.ob[z].touchK != lc) continue; // only react to a touch that JUST happened
+      if(z == g_activeDailyIdx) break;         // this IS the one we're already tracking
+      bool isOpposing = (g_bias != 0) && (g_daily.ob[z].bullish == (g_bias == 2));
+      if(DailyRespected(z, lc))
         {
-         if(g_daily.ob[z].touchK != lc) continue; // only react to a touch that JUST happened
-         bool isOpposing = (g_bias != 0) && (g_daily.ob[z].bullish == (g_bias == 2));
-         if(DailyRespected(z, lc))
-           {
-            g_activeDailyIdx = z;
-            g_activeDailyIsOpp = isOpposing;
-            g_dailyEvPtr = g_daily.evCount; // only swings AFTER this count matter for "used up"
-            StartWatching1H(g_daily.ob[z].bullish, g_daily.Time[lc]);
-           }
-         // violated: nothing to do, this OB is simply done
-         break;
+         g_activeDailyIdx = z;
+         g_activeDailyIsOpp = isOpposing;
+         g_dailyEvPtr = g_daily.evCount; // only swings AFTER this count matter for "used up"
+         StartWatching1H(g_daily.ob[z].bullish, g_daily.Time[lc]);
         }
-      return;
+      else if(g_activeDailyIdx == -1)
+        {
+         // violated and nothing was already active: nothing to do, this OB is simply done
+        }
+      break;
      }
+   if(g_activeDailyIdx == -1) return;
 
    // we ARE tracking one -- watch for the confirming swing that makes it "used up"
    bool wantHighConfirm = g_daily.ob[g_activeDailyIdx].bullish ? false : true; // bearish OB -> wait for a SWH
