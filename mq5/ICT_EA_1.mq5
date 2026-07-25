@@ -559,6 +559,8 @@ void Advance1H()
    // free the slot after InpMaxWaitH1Bars hours with no resolution.
    if(TimeCurrent() - g_1hStageStart >= (long)InpMaxWaitH1Bars * 3600)
      {
+      PrintFormat("[1H] %s stalled in stage %d for >%d hours -- giving up this watch",
+                  TimeToString(TimeCurrent()), g_1hStage, InpMaxWaitH1Bars);
       g_1hStage = 0;
       return;
      }
@@ -572,7 +574,12 @@ void Advance1H()
          if(g_h1.ob[z].t <= g_1hWatchStart) continue;
          if(found == -1 || g_h1.ob[z].t < foundTime) { found = z; foundTime = g_h1.ob[z].t; }
         }
-      if(found != -1) { g_1hOBIdx = found; g_1hStage = 2; g_1hStageStart = TimeCurrent(); }
+      if(found != -1)
+        {
+         g_1hOBIdx = found; g_1hStage = 2; g_1hStageStart = TimeCurrent();
+         PrintFormat("[1H] found matching %s H1 OB #%d (formed %s) -- watching for reaction",
+                     g_1hBuy?"bullish":"bearish", found, TimeToString(foundTime));
+        }
       return;
      }
 
@@ -581,7 +588,10 @@ void Advance1H()
       int lc = g_h1.LastClosedIdx();
       if(lc < 0) return;
       if(g_h1.ob[g_1hOBIdx].state == 2)
-        { g_1hStage = 1; g_1hOBIdx = -1; g_1hStageStart = TimeCurrent(); return; } // stranded before reacting
+        {
+         PrintFormat("[1H] %s watched OB #%d stranded before reacting -- resume watching", TimeToString(g_h1.Time[lc]), g_1hOBIdx);
+         g_1hStage = 1; g_1hOBIdx = -1; g_1hStageStart = TimeCurrent(); return; // stranded before reacting
+        }
       double zb = g_h1.ob[g_1hOBIdx].zb, zt = g_h1.ob[g_1hOBIdx].zt;
       bool wicked = (g_h1.H[lc] >= zb && g_h1.L[lc] <= zt);
       if(!wicked) return;
@@ -593,9 +603,13 @@ void Advance1H()
          g_1hSLPrice = g_1hBuy ? g_h1.L[lc] : g_h1.H[lc];
          g_1hStage = 3;
          g_1hStageStart = TimeCurrent();
+         PrintFormat("[1H] %s reaction RESPECTED on OB #%d -- pending entry (SL=%f)", TimeToString(g_h1.Time[lc]), g_1hOBIdx, g_1hSLPrice);
         }
       else
-        { g_1hStage = 1; g_1hOBIdx = -1; g_1hStageStart = TimeCurrent(); } // violated -- keep watching for the next 1H setup
+        {
+         PrintFormat("[1H] %s reaction VIOLATED on OB #%d -- resume watching", TimeToString(g_h1.Time[lc]), g_1hOBIdx);
+         g_1hStage = 1; g_1hOBIdx = -1; g_1hStageStart = TimeCurrent(); // violated -- keep watching for the next 1H setup
+        }
       return;
      }
 
@@ -615,13 +629,21 @@ void Advance1H()
       for(int x = g_1hReactionCandle + 1; x <= cur; x++)
         {
          bool breached = g_1hBuy ? (g_h1.L[x] <= g_1hSLPrice) : (g_h1.H[x] >= g_1hSLPrice);
-         if(breached) { g_1hStage = 1; g_1hOBIdx = -1; g_1hStageStart = TimeCurrent(); return; }
+         if(breached)
+           {
+            PrintFormat("[1H] %s SL level breached while waiting for session window -- resume watching", TimeToString(g_h1.Time[x]));
+            g_1hStage = 1; g_1hOBIdx = -1; g_1hStageStart = TimeCurrent(); return;
+           }
         }
 
       datetime entryTime = g_h1.Time[cur];
       if(!InSessionWindow(entryTime)) return; // keep waiting for the next in-window hour
 
-      if(PositionsTotal() > 0) { g_1hStage = 0; return; } // one trade at a time
+      if(PositionsTotal() > 0)
+        {
+         PrintFormat("[1H] %s setup ready but a position is already open -- setup skipped", TimeToString(entryTime));
+         g_1hStage = 0; return; // one trade at a time
+        }
 
       double entryPrice = g_h1.O[cur];
       double slPrice = g_1hSLPrice;
@@ -630,6 +652,7 @@ void Advance1H()
 
       double tpPrice = g_1hBuy ? entryPrice + riskDist * InpRR_Target : entryPrice - riskDist * InpRR_Target;
       double lots = CalcLotSize(riskDist);
+      PrintFormat("[1H] %s ENTRY %s @ %f SL=%f TP=%f lots=%f", TimeToString(entryTime), g_1hBuy?"BUY":"SELL", entryPrice, slPrice, tpPrice, lots);
       if(lots > 0)
         {
          trade.SetExpertMagicNumber(InpMagic);
@@ -674,7 +697,10 @@ void ManageBreakeven()
 //+------------------------------------------------------------------+
 void UpdateDailyLevel()
   {
+   int prevBias = g_bias;
    g_bias = (g_daily.regime == 1 || g_daily.regime == 2) ? g_daily.regime : g_bias;
+   if(g_bias != prevBias)
+      PrintFormat("[DAILY] %s bias -> %s", TimeToString(g_daily.Time[g_daily.LastClosedIdx()]), g_bias==1?"BULLISH":"BEARISH");
 
    // Always check for a fresh touch on the last closed candle, even while
    // another OB is still being tracked -- a "used up" confirmation can take
@@ -693,10 +719,13 @@ void UpdateDailyLevel()
          g_activeDailyIsOpp = isOpposing;
          g_dailyEvPtr = g_daily.evCount; // only swings AFTER this count matter for "used up"
          StartWatching1H(g_daily.ob[z].bullish, g_daily.Time[lc]);
+         PrintFormat("[DAILY] %s touch RESPECTED on %s OB #%d (opposing=%s) -- now tracking for used-up",
+                     TimeToString(g_daily.Time[lc]), g_daily.ob[z].bullish?"bullish":"bearish", z, isOpposing?"true":"false");
         }
-      else if(g_activeDailyIdx == -1)
+      else
         {
-         // violated and nothing was already active: nothing to do, this OB is simply done
+         PrintFormat("[DAILY] %s touch VIOLATED on %s OB #%d -- done, no action",
+                     TimeToString(g_daily.Time[lc]), g_daily.ob[z].bullish?"bullish":"bearish", z);
         }
       break;
      }
@@ -721,6 +750,8 @@ void UpdateDailyLevel()
             g_usedUpSwingIsHigh = (kind == 0);
            }
          g_huntStartTime = g_daily.Time[g_daily.LastClosedIdx()];
+         PrintFormat("[DAILY] %s USED UP OB #%d -- huntMode=%d, huntStartTime=%s",
+                     TimeToString(g_daily.Time[g_daily.LastClosedIdx()]), g_activeDailyIdx, g_huntMode, TimeToString(g_huntStartTime));
          g_activeDailyIdx = -1;
          break;
         }
@@ -734,6 +765,25 @@ void UpdateDailyLevel()
 void UpdateHuntLevel()
   {
    if(g_huntMode == 0) return;
+
+   // Whenever the daily regime flips to a direction huntMode doesn't already
+   // reflect -- a genuine new daily MSS -- redirect hunting to follow it
+   // immediately, in EVERY huntMode (not just the ambiguous one, 3). Previously
+   // this reversal was only ever detected while huntMode==3, so a clean
+   // single-direction hunt (1 or 2) set up once would keep hunting that same
+   // stale direction forever even after the trend reversed days or months
+   // later, since nothing else ever re-touches g_huntMode. Any stale 1H watch
+   // for the old direction is abandoned along with it.
+   if(g_daily.regime != 0 && g_daily.regime != g_huntMode)
+     {
+      PrintFormat("[HUNT] %s daily regime flip -- huntMode %d -> %d, abandoning any stale watch",
+                  TimeToString(g_daily.Time[g_daily.LastClosedIdx()]), g_huntMode, g_daily.regime);
+      g_huntMode      = g_daily.regime; // 1=up/buy, 2=down/sell -- same encoding as regime
+      g_bias          = g_daily.regime;
+      g_huntStartTime = g_daily.Time[g_daily.LastClosedIdx()];
+      g_1hStage       = 0;
+     }
+
    if(g_1hStage != 0) return; // already busy watching/entering one setup at a time
 
    int lc = g_h4.LastClosedIdx();
@@ -753,36 +803,32 @@ void UpdateHuntLevel()
         {
          StartWatching1H(g_h4.ob[z].bullish, g_h4.Time[lc]);
          g_active4hIdx = z;
+         PrintFormat("[HUNT] %s escalating %s H4 OB #%d to 1H watch (huntMode=%d)",
+                     TimeToString(g_h4.Time[lc]), g_h4.ob[z].bullish?"bullish":"bearish", z, g_huntMode);
          break;
         }
      }
 
-   // ambiguity resolution (only relevant while huntMode == 3). Resolution (a) --
-   // reaching a fresh in-trend daily IFOB/AIFOB -- is already handled by
-   // UpdateDailyLevel(), since a touch matching the original g_bias runs
-   // through the exact same touch/respect/used-up tracking and sets
-   // g_huntMode to a clean single direction once used up. Only (b) and (c)
-   // need handling here.
+   // ambiguity resolution (b), reaching a fresh in-trend daily IFOB/AIFOB, is
+   // handled by UpdateDailyLevel()'s own touch/respect/used-up tracking; case
+   // (b), a genuine regime flip, is now handled generically above for every
+   // huntMode. Only (c) -- price reclaiming past the opposing-OB reaction's
+   // swing without waiting for a full new daily cycle -- needs handling here.
    if(g_huntMode == 3)
      {
       double last = iClose(_Symbol, PERIOD_D1, 1);
-      if(g_daily.regime != 0 && g_daily.regime != g_bias)
-        {
-         // (b) genuine daily MSS -- the protected swing broke, direction changed
-         g_huntMode = g_daily.regime; // 1=up/buy, 2=down/sell -- same encoding as g_huntMode
-         g_bias = g_daily.regime;
-         g_huntStartTime = g_daily.Time[g_daily.LastClosedIdx()];
-        }
-      else if(g_usedUpSwingIsHigh && last > g_usedUpSwingPrice)
+      if(g_usedUpSwingIsHigh && last > g_usedUpSwingPrice)
         {
          // (c) price reclaimed back above the opposing-OB reaction's swing high
          g_huntMode = 1;
          g_huntStartTime = g_h4.Time[lc];
+         PrintFormat("[HUNT] ambiguity resolved (c) reclaimed above %f -> huntMode=1", g_usedUpSwingPrice);
         }
       else if(!g_usedUpSwingIsHigh && last < g_usedUpSwingPrice)
         {
          g_huntMode = 2;
          g_huntStartTime = g_h4.Time[lc];
+         PrintFormat("[HUNT] ambiguity resolved (c) reclaimed below %f -> huntMode=2", g_usedUpSwingPrice);
         }
      }
   }
