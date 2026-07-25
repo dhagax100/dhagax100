@@ -476,11 +476,13 @@ for z = 0 to array.size(obList) - 1
     zone = array.get(obList, z)
     if barTimeAt(zone.candleIdx) >= displayFromInput
         int drawState = zone.state == 3 ? zone.preSpentState : zone.state
-        color col = drawState == 0 ? (zone.bullish ? colIFOBBull : colIFOBBear) :
-                    drawState == 1 ? colAOB :
-                    drawState == 2 ? colOOB :
-                    drawState == 4 ? colAIFOB :
-                    (zone.bullish ? colIFOBBull : colIFOBBear)
+        color col = zone.bullish ? colIFOBBull : colIFOBBear
+        if drawState == 1
+            col := colAOB
+        else if drawState == 2
+            col := colOOB
+        else if drawState == 4
+            col := colAIFOB
         int rightEdge = zone.stopK != -1 ? zone.stopK : bar_index
         if na(zone.zoneBox)
             zone.zoneBox := box.new(left = zone.candleIdx, top = zone.zt, bottom = zone.zb, right = rightEdge,
