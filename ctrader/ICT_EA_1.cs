@@ -10,12 +10,19 @@
 // have moderate-but-not-certain confidence in the exact cAlgo method name/
 // signature for your SDK version -- check those first if it doesn't compile.
 //
-// Architecture (unchanged from the .mq5): three independent instances of the
-// same swing/MSS/OB engine (dual-candle swing detection, alternation rule,
-// MSS, IFOB/AOB/AIFOB/OOB/SPENT, body-superiority ranking, AOB/AIFOB range
-// widening, mirrored stranding direction) -- one on Daily (bias + highest-
-// conviction setups), one on H4 (continuation hunting once daily is used up),
-// one on H1 (entry timing: MSS/AOB formation, respect-check, execution).
+// Architecture (unchanged from the .mq5, plus FVG added as a second POI
+// flavor in the same unified list): three independent instances of the same
+// swing/MSS/OB+FVG engine (dual-candle swing detection, alternation rule,
+// MSS, IFOB/AOB/AIFOB/OOB/SPENT -- and the FVG equivalents IFVG/AFVG/AIFVG/
+// OFVG/spent, all sharing the identical lifecycle since a POI is a POI
+// regardless of whether it came from a single-candle body pick (OB) or a
+// 3-candle gap (FVG, and unlike OB, EVERY qualifying gap in a leg is marked,
+// not just the best one), body-superiority ranking, AOB/AFVG range widening
+// and straddle guard, mirrored stranding direction) -- one on Daily (bias +
+// highest-conviction setups, OOB/OFVG only exist here), one on H4
+// (continuation hunting once daily is used up, IFOB/AOB/IFVG/AFVG only), one
+// on H1 (entry timing: MSS/retracement formation, respect-check, execution,
+// IFOB/AOB/IFVG/AFVG only).
 
 using System;
 using System.Collections.Generic;
@@ -90,6 +97,10 @@ namespace cAlgo.Robots
             public int PreSpentState = -1; // state right before transitioning to SPENT(3) -- lets callers
                                             // tell a genuine live touch (was 0/1/4) apart from a touch that
                                             // only happened AFTER the zone was already stranded (was 2/OOB)
+            public bool IsFvg = false;      // display-only: OB (single-candle body pick) vs FVG (3-candle
+                                            // gap). Every lifecycle rule (eligibility, touch, stranding,
+                                            // used-up, hunting, entry) is identical either way -- OB and
+                                            // FVG are just two flavors of the same POI in one unified list.
         }
 
         // one entry per genuine regime flip (MSS), for chart marking
@@ -154,6 +165,42 @@ namespace cAlgo.Robots
                 return Ob.Count - 1;
             }
 
+            public int AddFvg(int candle, double zb, double zt, bool bull, int triggerK, int state)
+            {
+                int idx = AddOB(candle, zb, zt, bull, triggerK, state);
+                Ob[idx].IsFvg = true;
+                return idx;
+            }
+
+            // Scans (lo..hi) for every qualifying 3-candle gap in the given direction and
+            // creates one FVG zone per gap found -- "mark all of them", unlike OB's
+            // single-best-candle pick. straddlePrice mirrors the OB straddle guard (only
+            // applied where the corresponding OB call applies it: AOB, not IFOB/AIFOB).
+            public void ScanFvgs(int lo, int hi, bool bullish, int triggerK, int state, double? straddlePrice = null)
+            {
+                lo = Math.Max(lo, 0);
+                int limit = Math.Min(hi, N - 3);
+                for (int i = lo; i <= limit; i++)
+                {
+                    if (bullish)
+                    {
+                        if (L(i + 2) > H(i))
+                        {
+                            if (straddlePrice.HasValue && H(i) <= straddlePrice.Value) continue; // straddle guard
+                            AddFvg(i, H(i), L(i + 2), true, triggerK, state);
+                        }
+                    }
+                    else
+                    {
+                        if (H(i + 2) < L(i))
+                        {
+                            if (straddlePrice.HasValue && L(i) >= straddlePrice.Value) continue; // straddle guard
+                            AddFvg(i, H(i + 2), L(i), false, triggerK, state);
+                        }
+                    }
+                }
+            }
+
             // rank by body extremity (close), not wick -- zones are drawn/measured open-to-close
             public int PickLowestBearish(int lo, int hi)
             {
@@ -176,6 +223,7 @@ namespace cAlgo.Robots
                 if (prevRegime != 1 || aobSWHidx < 0) return -1;
                 int lo = Math.Max(0, Math.Min(aobSWHidx - 1, newSwlIdx));
                 int hi = Math.Max(aobSWHidx - 1, newSwlIdx);
+                ScanFvgs(lo, hi, true, k, 1, newSwlPrice);
                 int best = PickHighestBullish(lo, hi);
                 if (best == -1 || L(best) <= newSwlPrice) return -1; // straddle guard
                 return AddOB(best, Math.Min(O(best), C(best)), Math.Max(O(best), C(best)), true, k, 1);
@@ -186,6 +234,7 @@ namespace cAlgo.Robots
                 if (prevRegime != 2 || aobSWLidx < 0) return -1;
                 int lo = Math.Max(0, Math.Min(aobSWLidx - 1, newSwhIdx));
                 int hi = Math.Max(aobSWLidx - 1, newSwhIdx);
+                ScanFvgs(lo, hi, false, k, 1, newSwhPrice);
                 int best = PickLowestBearish(lo, hi);
                 if (best == -1 || H(best) >= newSwhPrice) return -1; // straddle guard
                 return AddOB(best, Math.Min(O(best), C(best)), Math.Max(O(best), C(best)), false, k, 1);
@@ -196,6 +245,7 @@ namespace cAlgo.Robots
                 if (prevRegime != 1 || !haveSWH_ || swhIdx_ < 0 || lastSWLidx_ < 0) return -1;
                 int lo = Math.Max(0, Math.Min(Math.Min(lastSWLidx_, newSwlIdx), swhIdx_ - 1));
                 int hi = Math.Max(Math.Max(lastSWLidx_, newSwlIdx), swhIdx_ - 1);
+                ScanFvgs(lo, hi, true, k, 4);
                 int best = PickLowestBearish(lo, hi);
                 if (best == -1) return -1;
                 return AddOB(best, Math.Min(O(best), C(best)), Math.Max(O(best), C(best)), true, k, 4);
@@ -206,6 +256,7 @@ namespace cAlgo.Robots
                 if (prevRegime != 2 || !haveSWL_ || swlIdx_ < 0 || lastSWHidx_ < 0) return -1;
                 int lo = Math.Max(0, Math.Min(Math.Min(lastSWHidx_, newSwhIdx), swlIdx_ - 1));
                 int hi = Math.Max(Math.Max(lastSWHidx_, newSwhIdx), swlIdx_ - 1);
+                ScanFvgs(lo, hi, false, k, 4);
                 int best = PickHighestBullish(lo, hi);
                 if (best == -1) return -1;
                 return AddOB(best, Math.Min(O(best), C(best)), Math.Max(O(best), C(best)), false, k, 4);
@@ -311,6 +362,7 @@ namespace cAlgo.Robots
                             {
                                 int lo = Math.Min(Math.Min(LastSWLidx, k), SwhIdx);
                                 int hi = Math.Max(Math.Max(LastSWLidx, k), SwhIdx);
+                                ScanFvgs(lo, hi, true, k, 0);
                                 int best = PickLowestBearish(lo, hi);
                                 if (best != -1) AddOB(best, Math.Min(O(best), C(best)), Math.Max(O(best), C(best)), true, k, 0);
                             }
@@ -354,6 +406,7 @@ namespace cAlgo.Robots
                             {
                                 int lo = Math.Min(Math.Min(LastSWHidx, k), SwlIdx);
                                 int hi = Math.Max(Math.Max(LastSWHidx, k), SwlIdx);
+                                ScanFvgs(lo, hi, false, k, 0);
                                 int best = PickHighestBullish(lo, hi);
                                 if (best != -1) AddOB(best, Math.Min(O(best), C(best)), Math.Max(O(best), C(best)), false, k, 0);
                             }
@@ -371,6 +424,7 @@ namespace cAlgo.Robots
                             {
                                 int lo = Math.Min(Math.Min(LastSWHidx, k), SwlIdx);
                                 int hi = Math.Max(Math.Max(LastSWHidx, k), SwlIdx);
+                                ScanFvgs(lo, hi, false, k, 0);
                                 int best = PickHighestBullish(lo, hi);
                                 if (best != -1) AddOB(best, Math.Min(O(best), C(best)), Math.Max(O(best), C(best)), false, k, 0);
                             }
@@ -414,6 +468,7 @@ namespace cAlgo.Robots
                             {
                                 int lo = Math.Min(Math.Min(LastSWLidx, k), SwhIdx);
                                 int hi = Math.Max(Math.Max(LastSWLidx, k), SwhIdx);
+                                ScanFvgs(lo, hi, true, k, 0);
                                 int best = PickLowestBearish(lo, hi);
                                 if (best != -1) AddOB(best, Math.Min(O(best), C(best)), Math.Max(O(best), C(best)), true, k, 0);
                             }
@@ -912,20 +967,36 @@ namespace cAlgo.Robots
         //| for transparency -- so you can see a zone existed and why it was  |
         //| never traded, not just that nothing happened.                     |
         //+------------------------------------------------------------------+
-        private Color ObColor(int state, int origState)
+        private Color ObColor(int state, int origState, bool isFvg)
         {
-            if (state == 2) return Color.Gray;                                   // OOB -- dead
-            if (state == 3)                                                       // SPENT -- shade by original type
-                return origState == 1 ? Color.RoyalBlue : origState == 4 ? Color.Teal : Color.SeaGreen;
-            if (origState == 1) return Color.DeepSkyBlue;   // AOB, live
-            if (origState == 4) return Color.Turquoise;     // AIFOB, live
-            return Color.LimeGreen;                          // IFOB, live
+            if (!isFvg)
+            {
+                // OB palette: green/blue family
+                if (state == 2) return Color.Gray;                                   // OOB -- dead
+                if (state == 3)                                                       // SPENT -- shade by original type
+                    return origState == 1 ? Color.RoyalBlue : origState == 4 ? Color.Teal : Color.SeaGreen;
+                if (origState == 1) return Color.DeepSkyBlue;   // AOB, live
+                if (origState == 4) return Color.Turquoise;     // AIFOB, live
+                return Color.LimeGreen;                          // IFOB, live
+            }
+            else
+            {
+                // FVG palette: gold/orange/purple family -- never confusable with OB
+                if (state == 2) return Color.DimGray;                                 // OFVG -- dead (Daily only)
+                if (state == 3)                                                       // spent/invalidated -- shade by original type
+                    return origState == 1 ? Color.MediumPurple : origState == 4 ? Color.Indigo : Color.Purple;
+                if (origState == 1) return Color.Orange;         // AFVG, live
+                if (origState == 4) return Color.DarkOrange;     // AIFVG, live
+                return Color.Gold;                                // IFVG, live
+            }
         }
 
-        private string ObLabel(int state, int origState)
+        private string ObLabel(int state, int origState, bool isFvg)
         {
-            string baseLabel = origState == 1 ? "AOB" : origState == 4 ? "AIFOB" : "IFOB";
-            if (state == 2) return "OOB";
+            string baseLabel = !isFvg
+                ? (origState == 1 ? "AOB" : origState == 4 ? "AIFOB" : "IFOB")
+                : (origState == 1 ? "AFVG" : origState == 4 ? "AIFVG" : "IFVG");
+            if (state == 2) return isFvg ? "OFVG" : "OOB";
             if (state == 3) return baseLabel + " (spent)";
             return baseLabel;
         }
@@ -961,13 +1032,15 @@ namespace cAlgo.Robots
                 int lastState = i < cache.ObState.Count ? cache.ObState[i] : -1;
                 if (!stillLive && lastState == ob.State) continue; // already drawn at its final state
 
-                Color c = ObColor(ob.State, ob.OrigState);
-                string label = ObLabel(ob.State, ob.OrigState);
+                Color c = ObColor(ob.State, ob.OrigState, ob.IsFvg);
+                string label = ObLabel(ob.State, ob.OrigState, ob.IsFvg);
                 DateTime t1 = eng.T(ob.Candle);
                 DateTime t2 = stillLive ? eng.T(eng.N - 1) : (ob.TouchK != -1 ? eng.T(ob.TouchK) : t1);
 
                 var rect = Chart.DrawRectangle($"{prefix}_ob_{i}", t1, ob.Zt, t2, ob.Zb, c, 1);
                 rect.IsFilled = false;
+                // NOTE: verify this property name (LineStyle vs Style) against your cAlgo API version.
+                rect.LineStyle = ob.IsFvg ? LineStyle.Dots : LineStyle.Solid; // FVG = dashed, OB = solid
                 Chart.DrawText($"{prefix}_obtxt_{i}", $"{prefix} {label}", t1, ob.Bullish ? ob.Zb : ob.Zt, c);
 
                 while (cache.ObState.Count <= i) cache.ObState.Add(-1);
