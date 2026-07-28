@@ -10,7 +10,7 @@
 // have moderate-but-not-certain confidence in the exact cAlgo method name/
 // signature for your SDK version -- check those first if it doesn't compile.
 //
-// Architecture (unchanged from the .mq5, plus FVG added as a second POI
+// Structure engine (unchanged from the .mq5, plus FVG added as a second POI
 // flavor in the same unified list): three independent instances of the same
 // swing/MSS/OB+FVG engine (dual-candle swing detection, alternation rule,
 // MSS, IFOB/AOB/AIFOB/OOB/SPENT -- and the FVG equivalents IFVG/AFVG/AIFVG/
@@ -18,11 +18,20 @@
 // regardless of whether it came from a single-candle body pick (OB) or a
 // 3-candle gap (FVG, and unlike OB, EVERY qualifying gap in a leg is marked,
 // not just the best one), body-superiority ranking, AOB/AFVG range widening
-// and straddle guard, mirrored stranding direction) -- one on Daily (bias +
-// highest-conviction setups, OOB/OFVG only exist here), one on H4
-// (continuation hunting once daily is used up, IFOB/AOB/IFVG/AFVG only), one
-// on H1 (entry timing: MSS/retracement formation, respect-check, execution,
-// IFOB/AOB/IFVG/AFVG only).
+// and straddle guard, mirrored stranding direction) -- one on Daily, one on
+// H4, one on H1. All three are drawn; 4H is visualization only now.
+//
+// Trading logic (this is a from-scratch entry design, not the old
+// daily-bias/4H-hunt/1H-escalation cascade): triggered purely by a live daily
+// IFOB getting wicked (no daily respect-check anymore -- the raw touch is
+// the whole signal). From there the cascade watches the 1H chart only, for
+// two mutually exclusive ways price can flip direction to match the daily
+// IFOB's own bias -- see AdvanceCascade()'s stage-2 comments for the exact
+// scenario A (genuine 1H MSS, trades the fresh continuation IFOB it creates)
+// vs scenario B (a same-direction retracement swing confirms without
+// exceeding the armed swing first, trades an ad-hoc "reversal AOB" candle)
+// distinction -- then waits for a wick+close-respect reaction on whichever
+// zone won, and fires at the next hour's open if within the session window.
 
 using System;
 using System.Collections.Generic;
@@ -59,7 +68,7 @@ namespace cAlgo.Robots
         // cAlgo has no "magic number" concept -- a position Label is the
         // functional equivalent used to tag and later filter this bot's own
         // positions (ManageBreakeven uses it; the one-trade-at-a-time gate in
-        // Advance1H deliberately does NOT filter by it, matching the .mq5's
+        // AdvanceCascade deliberately does NOT filter by it, matching the .mq5's
         // own PositionsTotal() check, which is also unfiltered).
         [Parameter("Position label (magic-number equivalent)", DefaultValue = "ICT_EA_1", Group = "Misc")]
         public string InpLabel { get; set; }
@@ -563,34 +572,40 @@ namespace cAlgo.Robots
         private readonly DrawCache _h1Draw = new DrawCache();
 
         //================================ EA CASCADE STATE ================================
-        // bias: 0 none, 1 bullish, 2 bearish -- mirrors _daily.Regime once established
-        private int _bias = 0;
+        // Daily-IFOB-triggered cascade, entirely driven by Daily -> 1H (4H is drawn only,
+        // no longer part of the trading logic). Stages:
+        //   0 idle              -- waiting for a fresh daily IFOB touch
+        //   1 waiting for pivot -- waiting for the first opposite-direction 1H swing after touch
+        //   2 waiting for flip  -- waiting for either a genuine 1H MSS (scenario A) or a
+        //                          same-direction retracement swing that does NOT exceed the
+        //                          armed swing (scenario B), whichever happens first
+        //   3 watching reaction -- watching the resulting zone (a real 1H IFOB for scenario A,
+        //                          or an ad-hoc "reversal AOB" candle for scenario B) for a
+        //                          wick-touch + close-respect reaction
+        //   4 pending entry     -- reaction confirmed, waiting for next-hour open + session window
+        private int _cascadeStage = 0;
+        private DateTime _stageStart; // when we entered the CURRENT stage -- for the stall timeout
 
-        // the daily OB we are currently tracking through touch -> violate/respect -> used-up
-        private int _activeDailyIdx = -1;    // index into _daily.Ob
-        private bool _activeDailyIsOpp = false; // true if this is an OPPOSING (counter-bias) daily OB
-        private int _dailyEvPtr = 0;          // how far into _daily.Ev we've already scanned for the "used-up" swing
+        private bool _targetBuy;      // the daily IFOB's own direction -- what we ultimately want to trade
+        private int _pivotKind;       // 0 = wait for a new swing HIGH as pivot, 1 = wait for a new swing LOW
+        private int _cascadeEvPtr;    // _h1.Ev.Count snapshot at daily touch -- only later events count
 
-        // 4H hunting mode: 0 inactive, 1 buy-only, 2 sell-only, 3 both (ambiguous)
-        private int _huntMode = 0;
-        private DateTime _huntStartTime; // only 4H OBs formed after this count as fresh hunting POIs
+        private int _pivotSwingIdx = -1;   // the pivot's own swing index (e.g. SWH1)
+        private int _pivotConfirmIdx = -1; // the candle where the pivot swing CONFIRMED
+        private int _stage2MssPtr;         // _h1.Mss.Count snapshot at stage 1->2 transition
+        private int _stage2EvPtr;          // _h1.Ev.Count snapshot at stage 1->2 transition
 
-        // which 4H OB (if any) is currently escalated to the 1H entry-watch
-        private int _active4hIdx = -1;
+        // the zone being watched for reaction (stage 3+): either a real engine Ob index
+        // (scenario A's freshly created continuation IFOB) or an ad-hoc candle (scenario B's
+        // "reversal AOB", which is not the engine's own regime-continuation AOB and so isn't
+        // added to _h1.Ob at all -- see AdvanceCascade's scenario B branch).
+        private bool _zoneIsAdHoc;
+        private int _zoneObIdx = -1;
+        private double _zoneZb, _zoneZt;
+        private bool _zoneBullish;
 
-        // ambiguity-resolution reference (set when an OPPOSING daily OB gets used up)
-        private double _usedUpSwingPrice = 0;
-        private bool _usedUpSwingIsHigh = false; // true = watch for price reclaiming ABOVE it (bullish resolution)
-
-        // ---- 1H entry sub-state machine (reusable for daily- or 4h-driven setups) ----
-        // 0 idle, 1 watching for the first matching 1H OB, 2 watching for the respect reaction, 3 pending entry
-        private int _h1Stage = 0;
-        private bool _h1Buy = false;
-        private DateTime _h1WatchStart; // only 1H OBs created after this time count
-        private int _h1OBIdx = -1;      // index into _h1.Ob once found
-        private int _h1ReactionCandle = -1;
-        private double _h1SLPrice = 0;  // SL level fixed at the reaction candle, checked while we wait for session window
-        private DateTime _h1StageStart; // when we entered the CURRENT stage -- for the stall timeout
+        private int _reactionCandle = -1;
+        private double _entrySL = 0; // SL level fixed at the reaction candle, checked while we wait for session window
 
         //+------------------------------------------------------------------+
         //| Session filter: only enter in the first InpSessionWindowHrs of   |
@@ -642,123 +657,184 @@ namespace cAlgo.Robots
         }
 
         //+------------------------------------------------------------------+
-        //| Was a given daily OB just touched, and did it respect or violate  |
-        //| on that same candle (body close through = violate)?                |
+        //| Reset to stage 1 ("resume watching the same way") -- keeps the    |
+        //| same target direction/daily-touch context, just waits for a       |
+        //| fresh pivot swing. Used on every violation/stranding/failure.     |
         //+------------------------------------------------------------------+
-        private bool DailyRespected(int obIdx, int candleIdx)
+        private void ResumeWatchingPivot()
         {
-            var ob = _daily.Ob[obIdx];
-            if (ob.Bullish) return _daily.C(candleIdx) >= ob.Zb; // did NOT close below the demand zone
-            return _daily.C(candleIdx) <= ob.Zt; // did NOT close above the supply zone
+            _cascadeStage = 1;
+            _cascadeEvPtr = _h1.Ev.Count;
+            _stageStart = Server.Time;
         }
 
         //+------------------------------------------------------------------+
-        //| Start the 1H entry-watch for a setup spawned by a daily or 4H OB. |
+        //| Advance the daily-IFOB-triggered cascade one step (call after     |
+        //| each H1 bar close). Places the entry order itself when respect    |
+        //| confirms and the next hour's bar has opened.                       |
         //+------------------------------------------------------------------+
-        private void StartWatching1H(bool buyDirection, DateTime fromTime)
+        private void AdvanceCascade()
         {
-            _h1Stage = 1;
-            _h1Buy = buyDirection;
-            _h1WatchStart = fromTime;
-            _h1OBIdx = -1;
-            _h1ReactionCandle = -1;
-            _h1StageStart = Server.Time;
-        }
+            if (_cascadeStage == 0) return;
 
-        //+------------------------------------------------------------------+
-        //| Advance the 1H sub-state machine one step (call after each H1     |
-        //| bar close). Places the entry order itself when respect confirms   |
-        //| and the next hour's bar has opened.                                |
-        //+------------------------------------------------------------------+
-        private void Advance1H()
-        {
-            if (_h1Stage == 0) return;
-
-            // Stall guard: none of the three sub-stages has a bound on how long they
-            // may wait (stage 1 for a matching 1H structure, stage 2 for the wick
-            // reaction, stage 3 for a session window to open). Left unbounded, a
-            // direction that simply doesn't produce the next piece of structure for
-            // a long stretch would occupy _h1Stage forever and block
-            // UpdateHuntLevel()'s "one setup at a time" gate from ever starting a
-            // fresh, more current setup. Give up and free the slot after
-            // InpMaxWaitH1Bars hours with no resolution.
-            if ((Server.Time - _h1StageStart).TotalHours >= InpMaxWaitH1Bars)
+            // Stall guard -- none of the four sub-stages has an inherent bound on how
+            // long it may wait. Give up and go idle after InpMaxWaitH1Bars hours with
+            // no progress, so a direction that just stops producing structure doesn't
+            // occupy the cascade forever.
+            if ((Server.Time - _stageStart).TotalHours >= InpMaxWaitH1Bars)
             {
-                Print($"[1H] {Server.Time:u} stalled in stage {_h1Stage} for >{InpMaxWaitH1Bars} hours -- giving up this watch");
-                _h1Stage = 0;
+                Print($"[CASCADE] {Server.Time:u} stalled in stage {_cascadeStage} for >{InpMaxWaitH1Bars} hours -- giving up");
+                _cascadeStage = 0;
                 return;
             }
 
-            if (_h1Stage == 1)
+            if (_cascadeStage == 1)
             {
-                int found = -1; DateTime foundTime = DateTime.MinValue;
-                for (int z = 0; z < _h1.Ob.Count; z++)
+                for (int e = _cascadeEvPtr; e < _h1.Ev.Count; e++)
                 {
-                    var ob = _h1.Ob[z];
-                    if (ob.Bullish != _h1Buy) continue;
-                    if (ob.T <= _h1WatchStart) continue;
-                    // 1H only ever trades IFOB/AOB -- never pick up something already stranded (OOB)
-                    // or already touched (SPENT) before we even started watching it.
-                    if (ob.State != 0 && ob.State != 1 && ob.State != 4) continue;
-                    if (found == -1 || ob.T < foundTime) { found = z; foundTime = ob.T; }
-                }
-                if (found != -1)
-                {
-                    _h1OBIdx = found; _h1Stage = 2; _h1StageStart = Server.Time;
-                    Print($"[1H] found matching {(_h1Buy ? "bullish" : "bearish")} H1 OB #{found} (formed {foundTime:u}) -- watching for reaction");
+                    if (_h1.Ev[e].Kind != _pivotKind) continue;
+                    _pivotSwingIdx = _h1.Ev[e].SwingIdx;
+                    _pivotConfirmIdx = _h1.Ev[e].ConfirmIdx;
+                    _stage2MssPtr = _h1.Mss.Count;
+                    _stage2EvPtr = e + 1;
+                    _cascadeStage = 2;
+                    _stageStart = Server.Time;
+                    Print($"[CASCADE] pivot {(_pivotKind == 0 ? "high" : "low")} confirmed at {_h1.T(_pivotSwingIdx):u} -- watching for direction change");
+                    break;
                 }
                 return;
             }
 
-            if (_h1Stage == 2)
+            if (_cascadeStage == 2)
             {
-                int lc = _h1.LastClosedIdx();
-                if (lc < 0) return;
-                if (_h1.Ob[_h1OBIdx].State == 2)
+                // Scenario A: a genuine 1H MSS in the target direction, at/after the pivot.
+                int mssFoundK = -1;
+                for (int m = _stage2MssPtr; m < _h1.Mss.Count; m++)
                 {
-                    Print($"[1H] {_h1.T(lc):u} watched OB #{_h1OBIdx} stranded before reacting -- resume watching");
-                    _h1Stage = 1; _h1OBIdx = -1; _h1StageStart = Server.Time; return; // stranded before reacting
+                    if (_h1.Mss[m].K < _pivotConfirmIdx) continue;
+                    if (_h1.Mss[m].Bullish != _targetBuy) continue;
+                    mssFoundK = _h1.Mss[m].K;
+                    _stage2MssPtr = m + 1;
+                    break;
                 }
-                double zb = _h1.Ob[_h1OBIdx].Zb, zt = _h1.Ob[_h1OBIdx].Zt;
-                bool wicked = (_h1.H(lc) >= zb && _h1.L(lc) <= zt);
-                if (!wicked) return;
 
-                bool respected = _h1Buy ? (_h1.C(lc) >= zt) : (_h1.C(lc) <= zb);
-                if (respected)
+                // Scenario B: the first opposite-kind swing confirming after the pivot,
+                // without (yet) an MSS -- a same-direction retracement that holds.
+                int oppKind = 1 - _pivotKind;
+                int oppFoundEvIdx = -1;
+                for (int e = _stage2EvPtr; e < _h1.Ev.Count; e++)
                 {
-                    _h1ReactionCandle = lc;
-                    _h1SLPrice = _h1Buy ? _h1.L(lc) : _h1.H(lc);
-                    _h1Stage = 3;
-                    _h1StageStart = Server.Time;
-                    Print($"[1H] {_h1.T(lc):u} reaction RESPECTED on OB #{_h1OBIdx} -- pending entry (SL={_h1SLPrice})");
+                    if (_h1.Ev[e].Kind != oppKind) continue;
+                    oppFoundEvIdx = e;
+                    break;
+                }
+
+                bool haveA = mssFoundK != -1;
+                bool haveB = oppFoundEvIdx != -1;
+                if (!haveA && !haveB) return;
+
+                // whichever happened at the earlier candle wins
+                int bConfirmIdx = haveB ? _h1.Ev[oppFoundEvIdx].ConfirmIdx : int.MaxValue;
+                bool takeA = haveA && (!haveB || mssFoundK <= bConfirmIdx);
+
+                if (takeA)
+                {
+                    // find the freshly created continuation IFOB from this exact MSS candle
+                    int found = -1;
+                    for (int z = 0; z < _h1.Ob.Count; z++)
+                        if (_h1.Ob[z].TriggerK == mssFoundK && _h1.Ob[z].Bullish == _targetBuy && _h1.Ob[z].State == 0)
+                        { found = z; break; }
+                    if (found == -1) { ResumeWatchingPivot(); return; } // shouldn't happen, but don't get stuck
+                    _zoneIsAdHoc = false;
+                    _zoneObIdx = found;
+                    _zoneBullish = _targetBuy;
+                    _cascadeStage = 3;
+                    _stageStart = Server.Time;
+                    Print($"[CASCADE] scenario A: 1H MSS confirmed -- watching fresh 1H IFOB #{found} for reaction");
                 }
                 else
                 {
-                    Print($"[1H] {_h1.T(lc):u} reaction VIOLATED on OB #{_h1OBIdx} -- resume watching");
-                    _h1Stage = 1; _h1OBIdx = -1; _h1StageStart = Server.Time; // violated -- keep watching for the next 1H setup
+                    var e = _h1.Ev[oppFoundEvIdx];
+                    // range = [one candle before the pivot .. this retracement swing's own
+                    // confirm], same widen-by-one convention as everywhere else. Pick the
+                    // highest-closing BULLISH candle -- same pick rule as any bearish
+                    // zone elsewhere -- but this is NOT the engine's own regime-continuation
+                    // AOB (which would classify this same leg as bullish/continuation); it's
+                    // traded in the daily IFOB's target direction, betting the retracement is
+                    // actually a reversal. Computed ad-hoc rather than added to _h1.Ob.
+                    int lo = Math.Max(0, Math.Min(_pivotSwingIdx - 1, e.SwingIdx));
+                    int hi = Math.Max(_pivotSwingIdx - 1, e.SwingIdx);
+                    int best = _targetBuy ? _h1.PickLowestBearish(lo, hi) : _h1.PickHighestBullish(lo, hi);
+                    if (best == -1) { ResumeWatchingPivot(); return; } // no qualifying candle -- resume watching
+                    _zoneIsAdHoc = true;
+                    _zoneZb = Math.Min(_h1.O(best), _h1.C(best));
+                    _zoneZt = Math.Max(_h1.O(best), _h1.C(best));
+                    _zoneBullish = _targetBuy;
+                    _cascadeStage = 3;
+                    _stageStart = Server.Time;
+                    Print($"[CASCADE] scenario B: retracement swing at {_h1.T(e.SwingIdx):u} -- watching ad-hoc AOB candle={best} for reaction");
                 }
                 return;
             }
 
-            if (_h1Stage == 3)
+            if (_cascadeStage == 3)
+            {
+                int lc = _h1.LastClosedIdx();
+                if (lc < 0) return;
+
+                double zb, zt;
+                if (!_zoneIsAdHoc)
+                {
+                    if (_h1.Ob[_zoneObIdx].State == 2)
+                    {
+                        Print($"[CASCADE] {_h1.T(lc):u} watched IFOB #{_zoneObIdx} stranded before reacting -- resume watching");
+                        ResumeWatchingPivot();
+                        return;
+                    }
+                    zb = _h1.Ob[_zoneObIdx].Zb; zt = _h1.Ob[_zoneObIdx].Zt;
+                }
+                else { zb = _zoneZb; zt = _zoneZt; }
+
+                bool wicked = (_h1.H(lc) >= zb && _h1.L(lc) <= zt);
+                if (!wicked) return;
+
+                bool respected = _zoneBullish ? (_h1.C(lc) >= zt) : (_h1.C(lc) <= zb);
+                if (respected)
+                {
+                    _reactionCandle = lc;
+                    _entrySL = _zoneBullish ? _h1.L(lc) : _h1.H(lc);
+                    _cascadeStage = 4;
+                    _stageStart = Server.Time;
+                    Print($"[CASCADE] {_h1.T(lc):u} reaction RESPECTED -- pending entry (SL={_entrySL})");
+                }
+                else
+                {
+                    Print($"[CASCADE] {_h1.T(lc):u} reaction VIOLATED -- resume watching for next opportunity");
+                    ResumeWatchingPivot();
+                }
+                return;
+            }
+
+            if (_cascadeStage == 4)
             {
                 // The session-time rule is a TIMING gate on when to fire the entry,
                 // not a filter on which setups are eligible. A confirmed reaction
                 // that happens to land outside the window must WAIT for the next
                 // in-window hour, not be thrown away.
                 int cur = _h1.N - 1; // the bar that just opened this tick (still forming)
-                if (cur <= _h1ReactionCandle) return; // the bar right after the reaction hasn't opened yet
+                if (cur <= _reactionCandle) return; // the bar right after the reaction hasn't opened yet
 
                 // While we wait, make sure price hasn't already breached the reaction
                 // candle's SL level -- entering late on a setup that already failed
                 // would put the stop on the wrong side of price.
-                for (int x = _h1ReactionCandle + 1; x <= cur; x++)
+                for (int x = _reactionCandle + 1; x <= cur; x++)
                 {
-                    bool breached = _h1Buy ? (_h1.L(x) <= _h1SLPrice) : (_h1.H(x) >= _h1SLPrice);
+                    bool breached = _zoneBullish ? (_h1.L(x) <= _entrySL) : (_h1.H(x) >= _entrySL);
                     if (breached)
                     {
-                        Print($"[1H] {_h1.T(x):u} SL level breached while waiting for session window -- resume watching");
-                        _h1Stage = 1; _h1OBIdx = -1; _h1StageStart = Server.Time; return;
+                        Print($"[CASCADE] {_h1.T(x):u} SL level breached while waiting for session window -- resume watching");
+                        ResumeWatchingPivot();
+                        return;
                     }
                 }
 
@@ -769,29 +845,29 @@ namespace cAlgo.Robots
                 // this counts ALL open positions on the account, not just this bot's.
                 if (Positions.Count > 0)
                 {
-                    Print($"[1H] {entryTime:u} setup ready but a position is already open -- setup skipped");
-                    _h1Stage = 0; return; // one trade at a time
+                    Print($"[CASCADE] {entryTime:u} setup ready but a position is already open -- setup skipped");
+                    _cascadeStage = 0; return; // one trade at a time
                 }
 
                 double entryPrice = _h1.O(cur);
-                double slPrice = _h1SLPrice;
-                double riskDist = _h1Buy ? (entryPrice - slPrice) : (slPrice - entryPrice);
-                if (riskDist <= 0) { _h1Stage = 1; _h1OBIdx = -1; _h1StageStart = Server.Time; return; }
+                double slPrice = _entrySL;
+                double riskDist = _zoneBullish ? (entryPrice - slPrice) : (slPrice - entryPrice);
+                if (riskDist <= 0) { ResumeWatchingPivot(); return; }
 
-                double tpPrice = _h1Buy ? entryPrice + riskDist * InpRR_Target : entryPrice - riskDist * InpRR_Target;
-                double volume = CalcLotSize(riskDist, _h1Buy, entryPrice);
-                Print($"[1H] {entryTime:u} ENTRY {(_h1Buy ? "BUY" : "SELL")} @ {entryPrice} SL={slPrice} TP={tpPrice} volume={volume}");
+                double tpPrice = _zoneBullish ? entryPrice + riskDist * InpRR_Target : entryPrice - riskDist * InpRR_Target;
+                double volume = CalcLotSize(riskDist, _zoneBullish, entryPrice);
+                Print($"[CASCADE] {entryTime:u} ENTRY {(_zoneBullish ? "BUY" : "SELL")} @ {entryPrice} SL={slPrice} TP={tpPrice} volume={volume}");
                 if (volume > 0)
                 {
                     double slPips = Math.Abs(entryPrice - slPrice) / Symbol.PipSize;
                     double tpPips = Math.Abs(tpPrice - entryPrice) / Symbol.PipSize;
-                    ExecuteMarketOrder(_h1Buy ? TradeType.Buy : TradeType.Sell, SymbolName, volume, InpLabel, slPips, tpPips, InpLabel);
-                    Chart.DrawIcon($"entry_{entryTime.Ticks}", _h1Buy ? ChartIconType.UpArrow : ChartIconType.DownArrow,
-                        entryTime, entryPrice, _h1Buy ? Color.Lime : Color.Red);
-                    Chart.DrawText($"entrytxt_{entryTime.Ticks}", _h1Buy ? "BUY 3R" : "SELL 3R", entryTime, entryPrice,
-                        _h1Buy ? Color.Lime : Color.Red);
+                    ExecuteMarketOrder(_zoneBullish ? TradeType.Buy : TradeType.Sell, SymbolName, volume, InpLabel, slPips, tpPips, InpLabel);
+                    Chart.DrawIcon($"entry_{entryTime.Ticks}", _zoneBullish ? ChartIconType.UpArrow : ChartIconType.DownArrow,
+                        entryTime, entryPrice, _zoneBullish ? Color.Lime : Color.Red);
+                    Chart.DrawText($"entrytxt_{entryTime.Ticks}", _zoneBullish ? "BUY 3R" : "SELL 3R", entryTime, entryPrice,
+                        _zoneBullish ? Color.Lime : Color.Red);
                 }
-                _h1Stage = 0;
+                _cascadeStage = 0; // done -- wait for the next fresh daily IFOB touch
             }
         }
 
@@ -819,143 +895,30 @@ namespace cAlgo.Robots
         }
 
         //+------------------------------------------------------------------+
-        //| Daily-level cascade: find/track the active daily OB through       |
-        //| touch -> violate (done) / respect -> used-up (advance hunt mode). |
+        //| Daily trigger: the moment price wicks into a live daily IFOB      |
+        //| zone (no respect/violate check -- raw entry is the whole signal), |
+        //| (re)start the cascade from scratch. A fresher touch always wins   |
+        //| over whatever cascade was already in progress -- it's objectively |
+        //| more current, and an old one that never resolves shouldn't block  |
+        //| engagement forever.                                               |
         //+------------------------------------------------------------------+
-        private void UpdateDailyLevel()
+        private void UpdateDailyTrigger()
         {
-            int prevBias = _bias;
-            _bias = (_daily.Regime == 1 || _daily.Regime == 2) ? _daily.Regime : _bias;
-            if (_bias != prevBias)
-                Print($"[DAILY] {_daily.T(_daily.LastClosedIdx()):u} bias -> {(_bias == 1 ? "BULLISH" : "BEARISH")}");
-
-            // Always check for a fresh touch on the last closed candle, even while
-            // another OB is still being tracked -- a "used up" confirmation can take
-            // a long time (or never come) in a quiet market, and a new touch is
-            // objectively more current. Without this, one early OB that never
-            // resolves would permanently block all future daily engagement.
             int lc = _daily.LastClosedIdx();
+            if (lc < 0) return;
             for (int z = 0; z < _daily.Ob.Count; z++)
             {
-                if (_daily.Ob[z].TouchK != lc) continue; // only react to a touch that JUST happened
-                // OOB (stranded before ever being touched) is a dead POI -- structural violation
-                // is one of the three ways a daily OB becomes invalid, not a route back to relevance.
-                if (_daily.Ob[z].PreSpentState == 2) continue;
-                if (z == _activeDailyIdx) break;         // this IS the one we're already tracking
-                bool isOpposing = (_bias != 0) && (_daily.Ob[z].Bullish == (_bias == 2));
-                if (DailyRespected(z, lc))
-                {
-                    _activeDailyIdx = z;
-                    _activeDailyIsOpp = isOpposing;
-                    _dailyEvPtr = _daily.Ev.Count; // only swings AFTER this count matter for "used up"
-                    StartWatching1H(_daily.Ob[z].Bullish, _daily.T(lc));
-                    Print($"[DAILY] {_daily.T(lc):u} touch RESPECTED on {(_daily.Ob[z].Bullish ? "bullish" : "bearish")} OB #{z} (opposing={isOpposing}) -- now tracking for used-up");
-                }
-                else
-                {
-                    Print($"[DAILY] {_daily.T(lc):u} touch VIOLATED on {(_daily.Ob[z].Bullish ? "bullish" : "bearish")} OB #{z} -- done, no action");
-                }
+                var ob = _daily.Ob[z];
+                if (ob.TouchK != lc) continue;      // only a touch that JUST happened
+                if (ob.PreSpentState != 0) continue; // only IFOB -- not AOB/AIFOB/already-stranded
+
+                _targetBuy = ob.Bullish;
+                _pivotKind = ob.Bullish ? 1 : 0; // buy target -> wait for a new swing LOW; sell target -> new swing HIGH
+                _cascadeEvPtr = _h1.Ev.Count;
+                _cascadeStage = 1;
+                _stageStart = Server.Time;
+                Print($"[CASCADE] {_daily.T(lc):u} fresh daily IFOB #{z} touch ({(ob.Bullish ? "bullish" : "bearish")}) -- watching 1H for pivot");
                 break;
-            }
-            if (_activeDailyIdx == -1) return;
-
-            // we ARE tracking one -- watch for the confirming swing that makes it "used up"
-            bool wantHighConfirm = !_daily.Ob[_activeDailyIdx].Bullish; // bearish OB -> wait for a SWH
-            for (int e = _dailyEvPtr; e < _daily.Ev.Count; e++)
-            {
-                int kind = _daily.Ev[e].Kind;
-                if ((wantHighConfirm && kind == 0) || (!wantHighConfirm && kind == 1))
-                {
-                    // USED UP
-                    if (!_activeDailyIsOpp)
-                    {
-                        _huntMode = _daily.Ob[_activeDailyIdx].Bullish ? 1 : 2; // resume/continue single-direction hunt
-                    }
-                    else
-                    {
-                        _huntMode = 3; // ambiguous -- opposing OB proved itself, watch both ways
-                        _usedUpSwingPrice = _daily.Ev[e].Price;
-                        _usedUpSwingIsHigh = (kind == 0);
-                    }
-                    _huntStartTime = _daily.T(_daily.LastClosedIdx());
-                    Print($"[DAILY] {_daily.T(_daily.LastClosedIdx()):u} USED UP OB #{_activeDailyIdx} -- huntMode={_huntMode}, huntStartTime={_huntStartTime:u}");
-                    _activeDailyIdx = -1;
-                    break;
-                }
-            }
-        }
-
-        //+------------------------------------------------------------------+
-        //| 4H hunting: mark fresh 4H OBs matching the allowed direction(s)   |
-        //| and escalate the first one to the 1H entry-watch.                 |
-        //+------------------------------------------------------------------+
-        private void UpdateHuntLevel()
-        {
-            if (_huntMode == 0) return;
-
-            // Whenever the daily regime flips to a direction huntMode doesn't
-            // already reflect -- a genuine new daily MSS -- redirect hunting to
-            // follow it immediately, in EVERY huntMode (not just the ambiguous
-            // one, 3). A clean single-direction hunt (1 or 2) set up once must not
-            // keep hunting that same stale direction forever after the trend
-            // reverses. Any stale 1H watch for the old direction is abandoned too.
-            if (_daily.Regime != 0 && _daily.Regime != _huntMode)
-            {
-                Print($"[HUNT] {_daily.T(_daily.LastClosedIdx()):u} daily regime flip -- huntMode {_huntMode} -> {_daily.Regime}, abandoning any stale watch");
-                _huntMode = _daily.Regime; // 1=up/buy, 2=down/sell -- same encoding as regime
-                _bias = _daily.Regime;
-                _huntStartTime = _daily.T(_daily.LastClosedIdx());
-                _h1Stage = 0;
-            }
-
-            if (_h1Stage != 0) return; // already busy watching/entering one setup at a time
-
-            int lc = _h4.LastClosedIdx();
-            if (lc < 0) return;
-
-            bool allowBuy = (_huntMode == 1 || _huntMode == 3);
-            bool allowSell = (_huntMode == 2 || _huntMode == 3);
-
-            for (int z = _h4.Ob.Count - 1; z >= 0; z--)
-            {
-                var ob = _h4.Ob[z];
-                // 4H only ever trades IFOB/AOB -- OOB doesn't exist as a usable concept here.
-                // If this zone was already stranded before price ever touched it, it's dead,
-                // not a signal, no matter how "fresh" the touch itself looks.
-                if (ob.PreSpentState == 2) continue;
-                if (ob.T < _huntStartTime) continue; // only OBs formed since hunting began
-                if (ob.Bullish && !allowBuy) continue;
-                if (!ob.Bullish && !allowSell) continue;
-                if (ob.TouchK == lc) // price just reached this 4H OB
-                {
-                    StartWatching1H(ob.Bullish, _h4.T(lc));
-                    _active4hIdx = z;
-                    Print($"[HUNT] {_h4.T(lc):u} escalating {(ob.Bullish ? "bullish" : "bearish")} H4 OB #{z} to 1H watch (huntMode={_huntMode})");
-                    break;
-                }
-            }
-
-            // ambiguity resolution (b), reaching a fresh in-trend daily IFOB/AIFOB, is
-            // handled by UpdateDailyLevel()'s own touch/respect/used-up tracking; case
-            // (b), a genuine regime flip, is handled generically above for every
-            // huntMode. Only (c) -- price reclaiming past the opposing-OB reaction's
-            // swing without waiting for a full new daily cycle -- needs handling here.
-            if (_huntMode == 3)
-            {
-                double last = _daily.C(_daily.LastClosedIdx());
-                if (_usedUpSwingIsHigh && last > _usedUpSwingPrice)
-                {
-                    // (c) price reclaimed back above the opposing-OB reaction's swing high
-                    _huntMode = 1;
-                    _huntStartTime = _h4.T(lc);
-                    Print($"[HUNT] ambiguity resolved (c) reclaimed above {_usedUpSwingPrice} -> huntMode=1");
-                }
-                else if (!_usedUpSwingIsHigh && last < _usedUpSwingPrice)
-                {
-                    _huntMode = 2;
-                    _huntStartTime = _h4.T(lc);
-                    Print($"[HUNT] ambiguity resolved (c) reclaimed below {_usedUpSwingPrice} -> huntMode=2");
-                }
             }
         }
 
@@ -1054,17 +1017,14 @@ namespace cAlgo.Robots
         //+------------------------------------------------------------------+
         private void UpdateStatusText()
         {
-            string biasTxt = _bias == 1 ? "BULLISH" : _bias == 2 ? "BEARISH" : "none yet";
-            string huntTxt = _huntMode == 0 ? "inactive" :
-                              _huntMode == 1 ? "BUY only" :
-                              _huntMode == 2 ? "SELL only" : "BOTH (ambiguous)";
             string stageTxt;
-            if (_h1Stage == 0) stageTxt = "idle";
-            else if (_h1Stage == 1) stageTxt = "watching for a fresh " + (_h1Buy ? "bullish" : "bearish") + " 1H IFOB/AOB";
-            else if (_h1Stage == 2) stageTxt = $"watching 1H OB #{_h1OBIdx} for the reaction";
+            if (_cascadeStage == 0) stageTxt = "idle -- waiting for a fresh daily IFOB touch";
+            else if (_cascadeStage == 1) stageTxt = $"daily IFOB touched ({(_targetBuy ? "buy" : "sell")} target) -- watching 1H for pivot {(_pivotKind == 0 ? "high" : "low")}";
+            else if (_cascadeStage == 2) stageTxt = "pivot confirmed -- watching for 1H direction change";
+            else if (_cascadeStage == 3) stageTxt = _zoneIsAdHoc ? "watching ad-hoc AOB for reaction" : $"watching 1H IFOB #{_zoneObIdx} for reaction";
             else stageTxt = "reaction confirmed -- waiting for session window / SL check";
 
-            string text = $"Daily bias: {biasTxt}\nHunt mode: {huntTxt}\n1H stage: {stageTxt}";
+            string text = $"Cascade stage: {stageTxt}";
             Chart.DrawStaticText("ict_status", text, VerticalAlignment.Top, HorizontalAlignment.Left, Color.White);
         }
 
@@ -1103,9 +1063,9 @@ namespace cAlgo.Robots
 
             // establish a baseline state immediately, same as the .mq5's first tick
             // (which always refreshes all three engines unconditionally)
-            _daily.Refresh(); UpdateDailyLevel();
-            _h4.Refresh();
-            _h1.Refresh(); UpdateHuntLevel(); Advance1H();
+            _daily.Refresh(); UpdateDailyTrigger();
+            _h4.Refresh(); // 4H is drawn only -- no longer part of the trading cascade
+            _h1.Refresh(); AdvanceCascade();
 
             if (InpShowDaily) DrawEngine(_daily, _dailyDraw, "D");
             if (InpShowH4) DrawEngine(_h4, _h4Draw, "H4");
@@ -1116,7 +1076,7 @@ namespace cAlgo.Robots
         private void OnDailyBarOpened(BarOpenedEventArgs args)
         {
             _daily.Refresh();
-            UpdateDailyLevel();
+            UpdateDailyTrigger();
             if (InpShowDaily) DrawEngine(_daily, _dailyDraw, "D");
             UpdateStatusText();
         }
@@ -1130,8 +1090,7 @@ namespace cAlgo.Robots
         private void OnH1BarOpened(BarOpenedEventArgs args)
         {
             _h1.Refresh();
-            UpdateHuntLevel();
-            Advance1H();
+            AdvanceCascade();
             if (InpShowH1) DrawEngine(_h1, _h1Draw, "H1");
             UpdateStatusText();
         }
