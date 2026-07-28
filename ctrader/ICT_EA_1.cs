@@ -657,21 +657,28 @@ namespace cAlgo.Robots
         }
 
         //+------------------------------------------------------------------+
-        //| Reset to stage 1 ("resume watching the same way") -- keeps the    |
-        //| same target direction/daily-touch context, just waits for a       |
-        //| fresh pivot swing. Used on every violation/stranding/failure.     |
+        //| Abandon the cascade back to idle -- ANY failure (violation,        |
+        //| stranding, no qualifying candle, SL breached while waiting) ends    |
+        //| this daily IFOB's one shot entirely. It does NOT retry with a       |
+        //| fresh pivot: a daily IFOB is used once, then it expires, same as    |
+        //| the engine's own zones (which can also only ever be touched once). |
+        //| Trading it again on a later, separate reaction is a later stage.   |
         //+------------------------------------------------------------------+
-        private void ResumeWatchingPivot()
+        private void AbandonCascade(string reason)
         {
-            _cascadeStage = 1;
-            _cascadeEvPtr = _h1.Ev.Count;
-            _stageStart = Server.Time;
+            Print($"[CASCADE] {Server.Time:u} {reason} -- IFOB expired, waiting for a fresh daily touch");
+            _cascadeStage = 0;
         }
 
         //+------------------------------------------------------------------+
         //| Advance the daily-IFOB-triggered cascade one step (call after     |
         //| each H1 bar close). Places the entry order itself when respect    |
-        //| confirms and the next hour's bar has opened.                       |
+        //| confirms and the next hour's bar has opened. Falls straight       |
+        //| through into the next stage's own check within the SAME call     |
+        //| whenever a stage transition happens, rather than waiting for the  |
+        //| next hourly call -- otherwise the very candle a transition should  |
+        //| act on immediately (e.g. checking the entry candle right after a  |
+        //| confirmed reaction) gets skipped, delaying entry by a full hour.  |
         //+------------------------------------------------------------------+
         private void AdvanceCascade()
         {
@@ -683,8 +690,7 @@ namespace cAlgo.Robots
             // occupy the cascade forever.
             if ((Server.Time - _stageStart).TotalHours >= InpMaxWaitH1Bars)
             {
-                Print($"[CASCADE] {Server.Time:u} stalled in stage {_cascadeStage} for >{InpMaxWaitH1Bars} hours -- giving up");
-                _cascadeStage = 0;
+                AbandonCascade($"stalled in stage {_cascadeStage} for >{InpMaxWaitH1Bars} hours");
                 return;
             }
 
@@ -744,7 +750,7 @@ namespace cAlgo.Robots
                     for (int z = 0; z < _h1.Ob.Count; z++)
                         if (_h1.Ob[z].TriggerK == mssFoundK && _h1.Ob[z].Bullish == _targetBuy && _h1.Ob[z].State == 0)
                         { found = z; break; }
-                    if (found == -1) { ResumeWatchingPivot(); return; } // shouldn't happen, but don't get stuck
+                    if (found == -1) { AbandonCascade("scenario A fired but no matching continuation IFOB found (shouldn't happen)"); return; }
                     _zoneIsAdHoc = false;
                     _zoneObIdx = found;
                     _zoneBullish = _targetBuy;
@@ -765,7 +771,7 @@ namespace cAlgo.Robots
                     int lo = Math.Max(0, Math.Min(_pivotSwingIdx - 1, e.SwingIdx));
                     int hi = Math.Max(_pivotSwingIdx - 1, e.SwingIdx);
                     int best = _targetBuy ? _h1.PickLowestBearish(lo, hi) : _h1.PickHighestBullish(lo, hi);
-                    if (best == -1) { ResumeWatchingPivot(); return; } // no qualifying candle -- resume watching
+                    if (best == -1) { AbandonCascade("scenario B retracement had no qualifying candle in range"); return; }
                     _zoneIsAdHoc = true;
                     _zoneZb = Math.Min(_h1.O(best), _h1.C(best));
                     _zoneZt = Math.Max(_h1.O(best), _h1.C(best));
@@ -787,8 +793,7 @@ namespace cAlgo.Robots
                 {
                     if (_h1.Ob[_zoneObIdx].State == 2)
                     {
-                        Print($"[CASCADE] {_h1.T(lc):u} watched IFOB #{_zoneObIdx} stranded before reacting -- resume watching");
-                        ResumeWatchingPivot();
+                        AbandonCascade($"{_h1.T(lc):u} watched IFOB #{_zoneObIdx} stranded before reacting");
                         return;
                     }
                     zb = _h1.Ob[_zoneObIdx].Zb; zt = _h1.Ob[_zoneObIdx].Zt;
@@ -799,20 +804,20 @@ namespace cAlgo.Robots
                 if (!wicked) return;
 
                 bool respected = _zoneBullish ? (_h1.C(lc) >= zt) : (_h1.C(lc) <= zb);
-                if (respected)
+                if (!respected)
                 {
-                    _reactionCandle = lc;
-                    _entrySL = _zoneBullish ? _h1.L(lc) : _h1.H(lc);
-                    _cascadeStage = 4;
-                    _stageStart = Server.Time;
-                    Print($"[CASCADE] {_h1.T(lc):u} reaction RESPECTED -- pending entry (SL={_entrySL})");
+                    AbandonCascade($"{_h1.T(lc):u} reaction VIOLATED");
+                    return;
                 }
-                else
-                {
-                    Print($"[CASCADE] {_h1.T(lc):u} reaction VIOLATED -- resume watching for next opportunity");
-                    ResumeWatchingPivot();
-                }
-                return;
+
+                _reactionCandle = lc;
+                _entrySL = _zoneBullish ? _h1.L(lc) : _h1.H(lc);
+                _cascadeStage = 4;
+                _stageStart = Server.Time;
+                Print($"[CASCADE] {_h1.T(lc):u} reaction RESPECTED -- pending entry (SL={_entrySL})");
+                // fall straight through into stage 4 -- the very next candle after the
+                // reaction is exactly what stage 4 needs to check for session-window
+                // entry, and it may already be available in THIS same call.
             }
 
             if (_cascadeStage == 4)
@@ -832,8 +837,7 @@ namespace cAlgo.Robots
                     bool breached = _zoneBullish ? (_h1.L(x) <= _entrySL) : (_h1.H(x) >= _entrySL);
                     if (breached)
                     {
-                        Print($"[CASCADE] {_h1.T(x):u} SL level breached while waiting for session window -- resume watching");
-                        ResumeWatchingPivot();
+                        AbandonCascade($"{_h1.T(x):u} SL level breached while waiting for session window");
                         return;
                     }
                 }
@@ -852,7 +856,7 @@ namespace cAlgo.Robots
                 double entryPrice = _h1.O(cur);
                 double slPrice = _entrySL;
                 double riskDist = _zoneBullish ? (entryPrice - slPrice) : (slPrice - entryPrice);
-                if (riskDist <= 0) { ResumeWatchingPivot(); return; }
+                if (riskDist <= 0) { AbandonCascade("entry price already past SL at fire time"); return; }
 
                 double tpPrice = _zoneBullish ? entryPrice + riskDist * InpRR_Target : entryPrice - riskDist * InpRR_Target;
                 double volume = CalcLotSize(riskDist, _zoneBullish, entryPrice);
