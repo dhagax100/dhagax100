@@ -895,30 +895,72 @@ namespace cAlgo.Robots
         }
 
         //+------------------------------------------------------------------+
-        //| Daily trigger: the moment price wicks into a live daily IFOB      |
-        //| zone (no respect/violate check -- raw entry is the whole signal), |
-        //| (re)start the cascade from scratch. A fresher touch always wins   |
-        //| over whatever cascade was already in progress -- it's objectively |
-        //| more current, and an old one that never resolves shouldn't block  |
-        //| engagement forever.                                               |
+        //| Shared bookkeeping: which daily Ob indices have already triggered |
+        //| the cascade, so a stale/older touch never resurfaces after a      |
+        //| newer one takes over, and the tick-level scanner below and the    |
+        //| once-daily official-close catch-up never double-fire the same     |
+        //| zone.                                                              |
         //+------------------------------------------------------------------+
-        private void UpdateDailyTrigger()
+        private readonly HashSet<int> _dailyTriggeredObIdx = new HashSet<int>();
+
+        private void StartCascadeFromDailyIfob(int obIdx, bool bullish)
         {
-            int lc = _daily.LastClosedIdx();
-            if (lc < 0) return;
+            _dailyTriggeredObIdx.Add(obIdx);
+            _targetBuy = bullish;
+            _pivotKind = bullish ? 1 : 0; // buy target -> wait for a new swing LOW; sell target -> new swing HIGH
+            _cascadeEvPtr = _h1.Ev.Count;
+            _cascadeStage = 1;
+            _stageStart = Server.Time;
+            Print($"[CASCADE] fresh daily IFOB #{obIdx} touch ({(bullish ? "bullish" : "bearish")}) -- watching 1H for pivot");
+        }
+
+        //+------------------------------------------------------------------+
+        //| Intraday touch scanner (call every tick): checks the CURRENT,     |
+        //| still-forming daily candle's live high/low against every already- |
+        //| confirmed (from a prior day's CLOSE), still-live daily IFOB zone. |
+        //| Zone CREATION only ever happens off closed-bar data, via          |
+        //| _daily.Refresh() once a day, so boundaries stay stable -- but     |
+        //| "has price entered it" is a plain price-level check that doesn't  |
+        //| need the candle to close first, so this runs on every tick for    |
+        //| the moment-of-entry reaction the entry rule actually calls for,   |
+        //| not a reaction delayed until the daily candle finishes.           |
+        //+------------------------------------------------------------------+
+        private void CheckDailyTouchIntraday()
+        {
+            if (_dailyBars == null || _dailyBars.Count == 0 || _daily.Ob.Count == 0) return;
+            int curIdx = _dailyBars.Count - 1;
+            double curH = _dailyBars.HighPrices[curIdx];
+            double curL = _dailyBars.LowPrices[curIdx];
+
             for (int z = 0; z < _daily.Ob.Count; z++)
             {
                 var ob = _daily.Ob[z];
-                if (ob.TouchK != lc) continue;      // only a touch that JUST happened
-                if (ob.PreSpentState != 0) continue; // only IFOB -- not AOB/AIFOB/already-stranded
+                if (ob.State != 0) continue;              // only a still-live IFOB (covers a promoted AIFOB too)
+                if (ob.EligibleK == -1) continue;          // not yet armed
+                if (_dailyTriggeredObIdx.Contains(z)) continue;
+                if (curH >= ob.Zb && curL <= ob.Zt)
+                    StartCascadeFromDailyIfob(z, ob.Bullish);
+            }
+        }
 
-                _targetBuy = ob.Bullish;
-                _pivotKind = ob.Bullish ? 1 : 0; // buy target -> wait for a new swing LOW; sell target -> new swing HIGH
-                _cascadeEvPtr = _h1.Ev.Count;
-                _cascadeStage = 1;
-                _stageStart = Server.Time;
-                Print($"[CASCADE] {_daily.T(lc):u} fresh daily IFOB #{z} touch ({(ob.Bullish ? "bullish" : "bearish")}) -- watching 1H for pivot");
-                break;
+        //+------------------------------------------------------------------+
+        //| Once-daily catch-up (call after _daily.Refresh()): the intraday   |
+        //| scanner above should already have caught any touch as it          |
+        //| happened. This just covers a touch the scanner could have missed  |
+        //| (e.g. the EA was started mid-day, after the touch already         |
+        //| happened), using the engine's own official TouchK/PreSpentState   |
+        //| -- sharing the same _dailyTriggeredObIdx bookkeeping so nothing    |
+        //| ever double-fires.                                                 |
+        //+------------------------------------------------------------------+
+        private void UpdateDailyTrigger()
+        {
+            for (int z = 0; z < _daily.Ob.Count; z++)
+            {
+                var ob = _daily.Ob[z];
+                if (ob.TouchK == -1) continue;
+                if (ob.PreSpentState != 0) continue; // only IFOB -- not AOB/AIFOB/already-stranded
+                if (_dailyTriggeredObIdx.Contains(z)) continue;
+                StartCascadeFromDailyIfob(z, ob.Bullish);
             }
         }
 
@@ -1098,6 +1140,7 @@ namespace cAlgo.Robots
         protected override void OnTick()
         {
             ManageBreakeven();
+            CheckDailyTouchIntraday();
         }
     }
 }
