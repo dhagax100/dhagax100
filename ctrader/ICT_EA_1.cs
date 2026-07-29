@@ -907,15 +907,18 @@ namespace cAlgo.Robots
         //+------------------------------------------------------------------+
         private readonly HashSet<int> _dailyTriggeredObIdx = new HashSet<int>();
 
-        private void StartCascadeFromDailyIfob(int obIdx, bool bullish)
+        private void StartCascadeFromDailyIfob(int obIdx, bool bullish, DateTime dayTime, double dayH, double dayL)
         {
+            var ob = _daily.Ob[obIdx];
             _dailyTriggeredObIdx.Add(obIdx);
             _targetBuy = bullish;
             _pivotKind = bullish ? 1 : 0; // buy target -> wait for a new swing LOW; sell target -> new swing HIGH
             _cascadeEvPtr = _h1.Ev.Count;
             _cascadeStage = 1;
             _stageStart = Server.Time;
-            Print($"[CASCADE] fresh daily IFOB #{obIdx} touch ({(bullish ? "bullish" : "bearish")}) -- watching 1H for pivot");
+            Print($"[CASCADE] fresh daily IFOB #{obIdx} touch ({(bullish ? "bullish" : "bearish")}) "
+                + $"zone=[{ob.Zb:F5}..{ob.Zt:F5}] zoneFormedAt={ob.T:u} "
+                + $"dailyCandle={dayTime:u} H={dayH:F5} L={dayL:F5} -- watching 1H for pivot");
         }
 
         //+------------------------------------------------------------------+
@@ -935,6 +938,7 @@ namespace cAlgo.Robots
             int curIdx = _dailyBars.Count - 1;
             double curH = _dailyBars.HighPrices[curIdx];
             double curL = _dailyBars.LowPrices[curIdx];
+            DateTime curT = _dailyBars.OpenTimes[curIdx];
 
             for (int z = 0; z < _daily.Ob.Count; z++)
             {
@@ -943,7 +947,7 @@ namespace cAlgo.Robots
                 if (ob.EligibleK == -1) continue;          // not yet armed
                 if (_dailyTriggeredObIdx.Contains(z)) continue;
                 if (curH >= ob.Zb && curL <= ob.Zt)
-                    StartCascadeFromDailyIfob(z, ob.Bullish);
+                    StartCascadeFromDailyIfob(z, ob.Bullish, curT, curH, curL);
             }
         }
 
@@ -974,7 +978,7 @@ namespace cAlgo.Robots
                 if (ob.TouchK != lc) continue;
                 if (ob.PreSpentState != 0) continue; // only IFOB -- not AOB/AIFOB/already-stranded
                 if (_dailyTriggeredObIdx.Contains(z)) continue;
-                StartCascadeFromDailyIfob(z, ob.Bullish);
+                StartCascadeFromDailyIfob(z, ob.Bullish, _daily.T(lc), _daily.H(lc), _daily.L(lc));
             }
         }
 
