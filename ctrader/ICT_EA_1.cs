@@ -958,10 +958,20 @@ namespace cAlgo.Robots
         //+------------------------------------------------------------------+
         private void UpdateDailyTrigger()
         {
+            // Must only ever consider a touch on the LAST CLOSED daily candle -- this
+            // exists purely to catch a touch that happened earlier TODAY before the
+            // intraday tick scanner had a chance to see it (e.g. the EA just started).
+            // Scanning ALL of _daily.Ob for anything EVER touched (the previous bug)
+            // reaches back into years of pre-loaded history and fires long-past
+            // touches as if they just happened, using today's 1H data to hunt a pivot
+            // that has nothing to do with that old touch -- i.e. trading off a touch
+            // that isn't actually current at all.
+            int lc = _daily.LastClosedIdx();
+            if (lc < 0) return;
             for (int z = 0; z < _daily.Ob.Count; z++)
             {
                 var ob = _daily.Ob[z];
-                if (ob.TouchK == -1) continue;
+                if (ob.TouchK != lc) continue;
                 if (ob.PreSpentState != 0) continue; // only IFOB -- not AOB/AIFOB/already-stranded
                 if (_dailyTriggeredObIdx.Contains(z)) continue;
                 StartCascadeFromDailyIfob(z, ob.Bullish);
