@@ -607,6 +607,17 @@ namespace cAlgo.Robots
         private int _zoneObIdx = -1;
         private double _zoneZb, _zoneZt;
         private bool _zoneBullish;
+        // First candle index eligible to react against this zone. For scenario A's fresh
+        // IFOB, that's the candle AFTER the MSS/breakout candle -- the breakout candle
+        // itself is created FROM inside the leg it just broke out of, so it cannot also
+        // be the one wicking back into that same zone; the earliest possible touch is the
+        // next hour. For scenario B's AOB, the swing-confirming candle itself can also be
+        // the one touching the zone (both can happen in the same motion), so that same
+        // candle is eligible immediately.
+        private int _zoneEligibleFromK;
+        // The candle that CREATED the currently-watched real IFOB (scenario A, or an AOB
+        // pivoted into one) -- used only to determine the SL rule on reaction (see stage 3).
+        private int _zoneCreationK = -1;
 
         private int _reactionCandle = -1;
         private double _entrySL = 0; // SL level fixed at the reaction candle, checked while we wait for session window
@@ -756,6 +767,8 @@ namespace cAlgo.Robots
                     _zoneIsAdHoc = false;
                     _zoneObIdx = found;
                     _zoneBullish = _targetBuy;
+                    _zoneCreationK = mssFoundK;
+                    _zoneEligibleFromK = mssFoundK + 1; // the breakout candle itself can't also be the one reacting
                     _cascadeStage = 3;
                     Print($"[CASCADE] scenario A: 1H MSS confirmed -- watching fresh 1H IFOB #{found} for reaction");
                 }
@@ -777,6 +790,7 @@ namespace cAlgo.Robots
                     _zoneZb = Math.Min(_h1.O(best), _h1.C(best));
                     _zoneZt = Math.Max(_h1.O(best), _h1.C(best));
                     _zoneBullish = _targetBuy;
+                    _zoneEligibleFromK = e.ConfirmIdx; // the swing-confirming candle can also be the touch itself
                     _cascadeStage = 3;
                     Print($"[CASCADE] scenario B: retracement swing at {_h1.T(e.SwingIdx):u} -- watching ad-hoc AOB candle={best} for reaction");
                 }
@@ -816,10 +830,14 @@ namespace cAlgo.Robots
                             Print($"[CASCADE] ad-hoc AOB invalidated (armed swing exceeded, MSS at k={mssK}) -- pivoting to fresh 1H IFOB #{found}");
                             _zoneIsAdHoc = false;
                             _zoneObIdx = found;
+                            _zoneCreationK = mssK;
+                            _zoneEligibleFromK = mssK + 1; // same rule as scenario A: breakout candle can't also react
                         }
                         break;
                     }
                 }
+
+                if (lc < _zoneEligibleFromK) return; // too early -- this candle can't validly react yet
 
                 double zb, zt;
                 if (!_zoneIsAdHoc)
@@ -843,8 +861,37 @@ namespace cAlgo.Robots
                     return;
                 }
 
+                // SL rule: an AOB (always tied to an already-confirmed swing by
+                // construction) and a 1H IFOB where a qualifying swing ALSO happened to
+                // confirm before this reaction both use the reaction candle's own wick --
+                // that candle carries real structural weight either way. But a 1H IFOB
+                // reacted to via the special no-swing-required exception (plain
+                // continuation, no fresh swing in between) has no such structural
+                // candle -- its own wick is arbitrary -- so the SL instead sits behind the
+                // last confirmed 1H swing in the stop-relevant direction.
+                double slPrice;
+                if (_zoneIsAdHoc)
+                {
+                    slPrice = _zoneBullish ? _h1.L(lc) : _h1.H(lc);
+                }
+                else
+                {
+                    int confirmingKind = _zoneBullish ? 0 : 1; // buy zone needs a swing HIGH; sell zone needs a swing LOW
+                    bool swingFormed = false;
+                    for (int e = 0; e < _h1.Ev.Count; e++)
+                    {
+                        if (_h1.Ev[e].ConfirmIdx <= _zoneCreationK) continue;
+                        if (_h1.Ev[e].ConfirmIdx > lc) break;
+                        if (_h1.Ev[e].Kind == confirmingKind) { swingFormed = true; break; }
+                    }
+                    int lastSwingIdx = _zoneBullish ? _h1.LastSWLidx : _h1.LastSWHidx;
+                    slPrice = (swingFormed || lastSwingIdx < 0) // no swing of that kind ever confirmed -- fall back safely
+                        ? (_zoneBullish ? _h1.L(lc) : _h1.H(lc))
+                        : (_zoneBullish ? _h1.L(lastSwingIdx) : _h1.H(lastSwingIdx));
+                }
+
                 _reactionCandle = lc;
-                _entrySL = _zoneBullish ? _h1.L(lc) : _h1.H(lc);
+                _entrySL = slPrice;
                 _cascadeStage = 4;
                 Print($"[CASCADE] {_h1.T(lc):u} reaction RESPECTED -- pending entry (SL={_entrySL})");
                 // fall straight through into stage 4 -- the very next candle after the
