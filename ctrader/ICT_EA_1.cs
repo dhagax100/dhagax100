@@ -792,6 +792,35 @@ namespace cAlgo.Robots
                 int lc = _h1.LastClosedIdx();
                 if (lc < 0) return;
 
+                // Ad-hoc (scenario B) zones aren't real Ob entries, so they get none of
+                // the engine's own OOB-stranding checks for free. Their equivalent: if
+                // the armed swing scenario A needed all along finally gets exceeded (a
+                // genuine MSS) before this ad-hoc zone is ever touched, the reversal bet
+                // failed -- it was just a retracement after all. Per the "OOB is useless,
+                // never traded" rule, abandon this ad-hoc watch and pivot straight to the
+                // fresh continuation IFOB that MSS just created, rather than stubbornly
+                // continuing to watch a now-invalidated zone.
+                if (_zoneIsAdHoc)
+                {
+                    for (int m = _stage2MssPtr; m < _h1.Mss.Count; m++)
+                    {
+                        if (_h1.Mss[m].Bullish != _targetBuy) continue;
+                        int mssK = _h1.Mss[m].K;
+                        _stage2MssPtr = m + 1;
+                        int found = -1;
+                        for (int z = 0; z < _h1.Ob.Count; z++)
+                            if (_h1.Ob[z].TriggerK == mssK && _h1.Ob[z].Bullish == _targetBuy && _h1.Ob[z].State == 0)
+                            { found = z; break; }
+                        if (found != -1)
+                        {
+                            Print($"[CASCADE] ad-hoc AOB invalidated (armed swing exceeded, MSS at k={mssK}) -- pivoting to fresh 1H IFOB #{found}");
+                            _zoneIsAdHoc = false;
+                            _zoneObIdx = found;
+                        }
+                        break;
+                    }
+                }
+
                 double zb, zt;
                 if (!_zoneIsAdHoc)
                 {
