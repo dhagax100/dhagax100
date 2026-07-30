@@ -62,8 +62,8 @@ namespace cAlgo.Robots
         [Parameter("Trading window length from each session start (hrs)", DefaultValue = 2, Group = "Session")]
         public int InpSessionWindowHrs { get; set; }
 
-        [Parameter("Give up a stalled 1H watch/setup after this many hours", DefaultValue = 120, Group = "Engine")]
-        public int InpMaxWaitH1Bars { get; set; }
+        [Parameter("New York session end hour (broker/server time) -- a cascade never survives past this on the day its daily IFOB was touched", DefaultValue = 22, Group = "Session")]
+        public int InpNewYorkSessionEndHour { get; set; }
 
         // cAlgo has no "magic number" concept -- a position Label is the
         // functional equivalent used to tag and later filter this bot's own
@@ -584,7 +584,11 @@ namespace cAlgo.Robots
         //                          wick-touch + close-respect reaction
         //   4 pending entry     -- reaction confirmed, waiting for next-hour open + session window
         private int _cascadeStage = 0;
-        private DateTime _stageStart; // when we entered the CURRENT stage -- for the stall timeout
+        // The whole cascade dies at the end of the New York session on the day its daily
+        // IFOB was touched -- never a rolling per-stage timeout. We'll never trade after
+        // New York closes for that day, so there's nothing left to wait for past this
+        // point regardless of which stage the cascade is stuck in.
+        private DateTime _cascadeDeadline;
 
         private bool _targetBuy;      // the daily IFOB's own direction -- what we ultimately want to trade
         private int _pivotKind;       // 0 = wait for a new swing HIGH as pivot, 1 = wait for a new swing LOW
@@ -684,13 +688,12 @@ namespace cAlgo.Robots
         {
             if (_cascadeStage == 0) return;
 
-            // Stall guard -- none of the four sub-stages has an inherent bound on how
-            // long it may wait. Give up and go idle after InpMaxWaitH1Bars hours with
-            // no progress, so a direction that just stops producing structure doesn't
-            // occupy the cascade forever.
-            if ((Server.Time - _stageStart).TotalHours >= InpMaxWaitH1Bars)
+            // We never trade after New York closes for the day the daily IFOB was
+            // touched -- so nothing past that point is worth waiting for, regardless
+            // of which stage the cascade is stuck in.
+            if (Server.Time >= _cascadeDeadline)
             {
-                AbandonCascade($"stalled in stage {_cascadeStage} for >{InpMaxWaitH1Bars} hours");
+                AbandonCascade($"reached end of New York session ({_cascadeDeadline:u}) for the day this daily IFOB was touched, still in stage {_cascadeStage}");
                 return;
             }
 
@@ -704,7 +707,6 @@ namespace cAlgo.Robots
                     _stage2MssPtr = _h1.Mss.Count;
                     _stage2EvPtr = e + 1;
                     _cascadeStage = 2;
-                    _stageStart = Server.Time;
                     Print($"[CASCADE] pivot {(_pivotKind == 0 ? "high" : "low")} confirmed at {_h1.T(_pivotSwingIdx):u} -- watching for direction change");
                     break;
                 }
@@ -755,7 +757,6 @@ namespace cAlgo.Robots
                     _zoneObIdx = found;
                     _zoneBullish = _targetBuy;
                     _cascadeStage = 3;
-                    _stageStart = Server.Time;
                     Print($"[CASCADE] scenario A: 1H MSS confirmed -- watching fresh 1H IFOB #{found} for reaction");
                 }
                 else
@@ -777,7 +778,6 @@ namespace cAlgo.Robots
                     _zoneZt = Math.Max(_h1.O(best), _h1.C(best));
                     _zoneBullish = _targetBuy;
                     _cascadeStage = 3;
-                    _stageStart = Server.Time;
                     Print($"[CASCADE] scenario B: retracement swing at {_h1.T(e.SwingIdx):u} -- watching ad-hoc AOB candle={best} for reaction");
                 }
                 // fall straight through into stage 3 -- the swing-confirming candle itself
@@ -846,7 +846,6 @@ namespace cAlgo.Robots
                 _reactionCandle = lc;
                 _entrySL = _zoneBullish ? _h1.L(lc) : _h1.H(lc);
                 _cascadeStage = 4;
-                _stageStart = Server.Time;
                 Print($"[CASCADE] {_h1.T(lc):u} reaction RESPECTED -- pending entry (SL={_entrySL})");
                 // fall straight through into stage 4 -- the very next candle after the
                 // reaction is exactly what stage 4 needs to check for session-window
@@ -948,10 +947,13 @@ namespace cAlgo.Robots
             _pivotKind = bullish ? 1 : 0; // buy target -> wait for a new swing LOW; sell target -> new swing HIGH
             _cascadeEvPtr = _h1.Ev.Count;
             _cascadeStage = 1;
-            _stageStart = Server.Time;
+            // The cascade dies at the end of the New York session on THIS SAME calendar
+            // day (the day of the daily touch) -- we never trade after New York, so
+            // there's nothing to gain by surviving past it, no matter which stage it's in.
+            _cascadeDeadline = new DateTime(dayTime.Year, dayTime.Month, dayTime.Day, InpNewYorkSessionEndHour, 0, 0, DateTimeKind.Utc);
             Print($"[CASCADE] fresh daily IFOB #{obIdx} touch ({(bullish ? "bullish" : "bearish")}) "
                 + $"zone=[{ob.Zb:F5}..{ob.Zt:F5}] zoneFormedAt={ob.T:u} "
-                + $"dailyCandle={dayTime:u} H={dayH:F5} L={dayL:F5} -- watching 1H for pivot");
+                + $"dailyCandle={dayTime:u} H={dayH:F5} L={dayL:F5} deadline={_cascadeDeadline:u} -- watching 1H for pivot");
         }
 
         //+------------------------------------------------------------------+
