@@ -994,10 +994,19 @@ namespace cAlgo.Robots
             _pivotKind = bullish ? 1 : 0; // buy target -> wait for a new swing LOW; sell target -> new swing HIGH
             _cascadeEvPtr = _h1.Ev.Count;
             _cascadeStage = 1;
-            // The cascade dies at the end of the New York session on THIS SAME calendar
-            // day (the day of the daily touch) -- we never trade after New York, so
-            // there's nothing to gain by surviving past it, no matter which stage it's in.
-            _cascadeDeadline = new DateTime(dayTime.Year, dayTime.Month, dayTime.Day, InpNewYorkSessionEndHour, 0, 0, DateTimeKind.Utc);
+            // The cascade dies at the end of the New York session on the day of the
+            // touch -- computed from the ACTUAL moment of detection (Server.Time), not
+            // from dayTime (the daily bar's own open timestamp). The daily bar spans a
+            // full 24 hours from its own open, and the real touch can land anywhere in
+            // that span -- using dayTime's date would make the deadline whatever hour
+            // is close to the bar's OWN open, which is frequently already in the past
+            // (or only minutes away) by the time the touch actually happens partway
+            // through that 24-hour bar. Roll forward a day if we're already past today's
+            // NY close so the window is never near-zero.
+            DateTime now = Server.Time;
+            DateTime deadline = new DateTime(now.Year, now.Month, now.Day, InpNewYorkSessionEndHour, 0, 0, DateTimeKind.Utc);
+            if (deadline <= now) deadline = deadline.AddDays(1);
+            _cascadeDeadline = deadline;
             Print($"[CASCADE] fresh daily IFOB #{obIdx} touch ({(bullish ? "bullish" : "bearish")}) "
                 + $"zone=[{ob.Zb:F5}..{ob.Zt:F5}] zoneFormedAt={ob.T:u} "
                 + $"dailyCandle={dayTime:u} H={dayH:F5} L={dayL:F5} deadline={_cascadeDeadline:u} -- watching 1H for pivot");
