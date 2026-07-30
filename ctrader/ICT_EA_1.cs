@@ -780,7 +780,11 @@ namespace cAlgo.Robots
                     _stageStart = Server.Time;
                     Print($"[CASCADE] scenario B: retracement swing at {_h1.T(e.SwingIdx):u} -- watching ad-hoc AOB candle={best} for reaction");
                 }
-                return;
+                // fall straight through into stage 3 -- the swing-confirming candle itself
+                // can also be the candle whose wick reaches the zone (e.g. the very candle
+                // that breaks the prior candle's low to confirm the swing high dips down far
+                // enough to touch it in the same move). Waiting for the next hourly call
+                // would check the WRONG (later) candle and miss that same-candle case.
             }
 
             if (_cascadeStage == 3)
