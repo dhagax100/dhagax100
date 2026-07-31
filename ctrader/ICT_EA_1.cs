@@ -59,7 +59,7 @@ namespace cAlgo.Robots
         [Parameter("New York session start hour (broker/server time)", DefaultValue = 13, Group = "Session")]
         public int InpNewYorkStartHour { get; set; }
 
-        [Parameter("Trading window length from each session start (hrs)", DefaultValue = 2, Group = "Session")]
+        [Parameter("Trading window length from each session start (hrs)", DefaultValue = 4, Group = "Session")]
         public int InpSessionWindowHrs { get; set; }
 
         [Parameter("New York session end hour (broker/server time) -- a cascade never survives past this on the day its daily IFOB was touched", DefaultValue = 22, Group = "Session")]
