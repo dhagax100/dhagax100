@@ -1,0 +1,33 @@
+{
+  "high": {
+    "n": 604,
+    "regime_match_pct": 75.2,
+    "never_pct": 0.2,
+    "happened_pct": 99.8,
+    "flip_distribution": {
+      "0": 1,
+      "1": 19,
+      "2": 24,
+      "3": 26,
+      "4": 534
+    },
+    "reach_rate_never": 100.0,
+    "reach_rate_happened": 57.9,
+    "reach_rate_overall": 57.9
+  },
+  "low": {
+    "n": 663,
+    "regime_match_pct": 78.7,
+    "never_pct": 0.0,
+    "happened_pct": 100.0,
+    "flip_distribution": {
+      "1": 16,
+      "2": 28,
+      "3": 32,
+      "4": 587
+    },
+    "reach_rate_never": NaN,
+    "reach_rate_happened": 58.4,
+    "reach_rate_overall": 58.4
+  }
+}
