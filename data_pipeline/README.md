@@ -145,3 +145,75 @@ Of 1,295 data-quality-clean trading days:
 - 28.6% of days saw *both* sides swept within the killzone — meaningfully
   choppy/two-way price action that a single-direction fade doesn't handle
   cleanly.
+
+## Excursion research and validated strategy
+
+Three scripts, run in this order, replace the naive first-pass backtest:
+
+```
+python3 analyze_reversal_behavior.py --pair eurusd   # measure, don't assume
+python3 optimize_strategy.py --pair eurusd           # grid on TRAIN, one TEST look
+python3 explore_extended.py                          # cost sensitivity + wider targets
+python3 final_validation.py                          # fixed split + walk-forward
+python3 monte_carlo_prop.py                          # prop-challenge simulation
+```
+
+### What the measurement found
+
+Excursion beyond the swept level, to the actual turning point, separates the
+two populations sharply:
+
+| | median | 75th pct | 90th pct |
+|---|---|---|---|
+| Days that reached target (737) | 8.4 pips | 15.7 | 25.0 |
+| Days that failed (530) | 44.1 pips | 64.8 | 88.1 |
+
+So the earlier "stop on the sweep candle's wick" was wrong by construction --
+it sat inside the noise band that both populations share. A stop 12 pips
+beyond the level keeps 63% of winners while cutting 96% of losers.
+
+Reversal behaviour on winning days:
+
+* **100% of target-reaching days close a candle back inside the Asian range
+  before running**, vs 85.3% of failing days. Requiring that "reclaim" is a
+  free filter -- it discards ~15% of losers at zero cost to winners.
+* The reclaim is fast: median 2 minutes after the sweep.
+* Price stabs past the level a median of 3 times on winning days vs 5 on
+  failing ones.
+* After the reclaim, the worst adverse move before target is a median of 6.8
+  pips (90th pct 22.6) -- that, not the sweep wick, is what a stop must survive.
+
+### Selected configuration
+
+Reclaim entry, stop 12 pips beyond the swept level, target the opposite Asian
+level, skip days whose Asian range is under 25 pips, no breakeven move.
+
+| | trades | win rate | expectancy | profit factor | max DD |
+|---|---|---|---|---|---|
+| TRAIN 2021-2023 | 167 | 33.5% | +0.092R | 1.14 | 13.4R |
+| TEST 2024-2025 (one look) | 79 | 36.7% | +0.317R | 1.52 | 12.0R |
+| **Walk-forward pooled** | **357** | **39.8%** | **+0.088R** | **1.15** | **21.1R** |
+
+The walk-forward number is the one to trust: parameters are re-selected inside
+each rolling window and traded forward blind, so no trade influenced its own
+parameters. 4 of 7 folds were profitable.
+
+### Caveats that matter
+
+* **Execution cost decides everything.** At zero cost the tight-stop configs
+  show +0.132R; at 1 pip they are negative. Break-even sits near 0.6-0.8 pips
+  for those. Every result above already charges 1.0 pip.
+* **The stop plateau is narrow** -- 8 and 12 pips agree, but 15 is flat and 20
+  is negative. Treat stop distance as a live sensitivity, not a settled value.
+* **21.1R drawdown is too large for a funded account** at 1% risk. Monte Carlo
+  over the walk-forward trades (20,000 runs, +8% target / -10% trailing DD):
+  1% risk gives a 56.0% pass rate but a 28.4% chance of breaching drawdown
+  instead; 0.5% risk cuts blow-ups to 2.5% but the pass rate falls to 26.9%
+  with 70.6% timing out.
+* **No news filter yet**, and the DST simplification above still applies.
+
+Conclusion: a real but modest edge, not yet a fundable one. The highest-value
+next steps are a genuine market-structure entry trigger (the reclaim is a crude
+proxy for a market structure shift), a news filter, and testing GBP/USD and
+gold where wider session ranges make the fixed execution cost proportionally
+cheaper.

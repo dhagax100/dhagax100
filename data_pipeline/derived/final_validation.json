@@ -1,0 +1,168 @@
+{
+  "cost_pips": 1.0,
+  "selected_config": {
+    "entry": "reclaim",
+    "stop_pips": 12,
+    "target_frac": 1.0,
+    "min_range": 25
+  },
+  "train_summary": {
+    "entry": "reclaim",
+    "stop_pips": "12",
+    "target_frac": 1.0,
+    "min_range": "25",
+    "n_trades": "167",
+    "win_rate": 33.5,
+    "expectancy_r": 0.092,
+    "profit_factor": 1.14,
+    "max_dd_r": 13.4,
+    "avg_rr": 2.21
+  },
+  "test_summary": {
+    "n_trades": 79,
+    "win_rate": 36.7,
+    "expectancy_r": 0.317,
+    "total_r": 25.1,
+    "profit_factor": 1.52,
+    "max_dd_r": 12.0,
+    "avg_risk_pips": 14.2,
+    "avg_rr": 2.52
+  },
+  "plateau": [
+    {
+      "stop_pips": 8,
+      "n_trades": 167,
+      "win_rate": 26.3,
+      "expectancy_r": 0.094,
+      "profit_factor": 1.13,
+      "max_dd_r": 17.5
+    },
+    {
+      "stop_pips": 12,
+      "n_trades": 167,
+      "win_rate": 33.5,
+      "expectancy_r": 0.092,
+      "profit_factor": 1.14,
+      "max_dd_r": 13.4
+    },
+    {
+      "stop_pips": 15,
+      "n_trades": 167,
+      "win_rate": 35.3,
+      "expectancy_r": 0.001,
+      "profit_factor": 1.0,
+      "max_dd_r": 14.1
+    },
+    {
+      "stop_pips": 20,
+      "n_trades": 167,
+      "win_rate": 38.3,
+      "expectancy_r": -0.066,
+      "profit_factor": 0.89,
+      "max_dd_r": 17.7
+    }
+  ],
+  "walkforward_folds": [
+    {
+      "fold_start": "2022-07-01",
+      "fold_end": "2023-01-01",
+      "train_days": 379,
+      "entry": "reclaim",
+      "stop_pips": 12,
+      "target_frac": 1.0,
+      "min_range": 15,
+      "oos_n": 104,
+      "oos_win_rate": 43.3,
+      "oos_expectancy_r": 0.213,
+      "oos_total_r": 22.1
+    },
+    {
+      "fold_start": "2023-01-01",
+      "fold_end": "2023-07-01",
+      "train_days": 507,
+      "entry": "reclaim",
+      "stop_pips": 12,
+      "target_frac": 1.0,
+      "min_range": 15,
+      "oos_n": 80,
+      "oos_win_rate": 36.2,
+      "oos_expectancy_r": -0.104,
+      "oos_total_r": -8.3
+    },
+    {
+      "fold_start": "2023-07-01",
+      "fold_end": "2024-01-01",
+      "train_days": 634,
+      "entry": "reclaim",
+      "stop_pips": 12,
+      "target_frac": 1.0,
+      "min_range": 15,
+      "oos_n": 65,
+      "oos_win_rate": 44.6,
+      "oos_expectancy_r": 0.002,
+      "oos_total_r": 0.1
+    },
+    {
+      "fold_start": "2024-01-01",
+      "fold_end": "2024-07-01",
+      "train_days": 763,
+      "entry": "reclaim",
+      "stop_pips": 12,
+      "target_frac": 1.0,
+      "min_range": 25,
+      "oos_n": 5,
+      "oos_win_rate": 20.0,
+      "oos_expectancy_r": -0.433,
+      "oos_total_r": -2.2
+    },
+    {
+      "fold_start": "2024-07-01",
+      "fold_end": "2025-01-01",
+      "train_days": 891,
+      "entry": "reclaim",
+      "stop_pips": 12,
+      "target_frac": 1.0,
+      "min_range": 15,
+      "oos_n": 34,
+      "oos_win_rate": 38.2,
+      "oos_expectancy_r": -0.113,
+      "oos_total_r": -3.8
+    },
+    {
+      "fold_start": "2025-01-01",
+      "fold_end": "2025-07-01",
+      "train_days": 1019,
+      "entry": "reclaim",
+      "stop_pips": 12,
+      "target_frac": 1.0,
+      "min_range": 25,
+      "oos_n": 50,
+      "oos_win_rate": 32.0,
+      "oos_expectancy_r": 0.311,
+      "oos_total_r": 15.6
+    },
+    {
+      "fold_start": "2025-07-01",
+      "fold_end": "2026-01-01",
+      "train_days": 1143,
+      "entry": "reclaim",
+      "stop_pips": 12,
+      "target_frac": 1.0,
+      "min_range": 25,
+      "oos_n": 19,
+      "oos_win_rate": 47.4,
+      "oos_expectancy_r": 0.422,
+      "oos_total_r": 8.0
+    }
+  ],
+  "walkforward_pooled": {
+    "n_trades": 357,
+    "win_rate": 39.8,
+    "expectancy_r": 0.088,
+    "total_r": 31.6,
+    "profit_factor": 1.15,
+    "max_dd_r": 21.1,
+    "avg_risk_pips": 14.2,
+    "avg_rr": 1.79
+  }
+}

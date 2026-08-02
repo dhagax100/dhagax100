@@ -1,0 +1,84 @@
+{
+  "n_oos_trades": 357,
+  "mean_r": 0.0884,
+  "win_rate": 39.8,
+  "params": {
+    "profit_target": 0.08,
+    "max_drawdown": 0.1,
+    "trades_per_month": 10,
+    "month_limit": 6,
+    "n_sims": 20000
+  },
+  "challenge": [
+    {
+      "risk_per_trade_pct": 0.25,
+      "pass_rate_pct": 2.2,
+      "fail_drawdown_pct": 0.0,
+      "timeout_pct": 97.8,
+      "median_final_equity": 1.0123,
+      "median_trades_to_resolve": 60
+    },
+    {
+      "risk_per_trade_pct": 0.5,
+      "pass_rate_pct": 26.9,
+      "fail_drawdown_pct": 2.5,
+      "timeout_pct": 70.6,
+      "median_final_equity": 1.0239,
+      "median_trades_to_resolve": 60
+    },
+    {
+      "risk_per_trade_pct": 0.75,
+      "pass_rate_pct": 46.3,
+      "fail_drawdown_pct": 15.4,
+      "timeout_pct": 38.2,
+      "median_final_equity": 1.052,
+      "median_trades_to_resolve": 48
+    },
+    {
+      "risk_per_trade_pct": 1.0,
+      "pass_rate_pct": 56.0,
+      "fail_drawdown_pct": 28.4,
+      "timeout_pct": 15.6,
+      "median_final_equity": 1.0816,
+      "median_trades_to_resolve": 30
+    },
+    {
+      "risk_per_trade_pct": 2.0,
+      "pass_rate_pct": 56.0,
+      "fail_drawdown_pct": 44.0,
+      "timeout_pct": 0.1,
+      "median_final_equity": 1.0832,
+      "median_trades_to_resolve": 10
+    }
+  ],
+  "annual": [
+    {
+      "risk_per_trade_pct": 0.25,
+      "median_return_pct": 2.5,
+      "p10_return_pct": -2.5,
+      "p90_return_pct": 8.1,
+      "prob_negative_year_pct": 27.2
+    },
+    {
+      "risk_per_trade_pct": 0.5,
+      "median_return_pct": 4.9,
+      "p10_return_pct": -5.1,
+      "p90_return_pct": 17.0,
+      "prob_negative_year_pct": 27.0
+    },
+    {
+      "risk_per_trade_pct": 0.75,
+      "median_return_pct": 7.6,
+      "p10_return_pct": -7.3,
+      "p90_return_pct": 25.4,
+      "prob_negative_year_pct": 27.3
+    },
+    {
+      "risk_per_trade_pct": 1.0,
+      "median_return_pct": 9.5,
+      "p10_return_pct": -10.3,
+      "p90_return_pct": 34.7,
+      "prob_negative_year_pct": 28.5
+    }
+  ]
+}
