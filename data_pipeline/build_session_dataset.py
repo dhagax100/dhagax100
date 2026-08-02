@@ -166,6 +166,19 @@ def analyze_day(df: pd.DataFrame, day: pd.Timestamp) -> dict:
     row["mfe_pips"] = round(mfe, 1)
     row["mae_pips"] = round(mae, 1)
 
+    # --- how far, as a % of the Asian range, did price ever get toward the
+    # opposite level across the FULL extended window (regardless of whether
+    # it fully reached it)? Measured from the swept level itself, not the
+    # entry price, so 100% means "touched the opposite Asian level exactly".
+    if direction == "long":
+        best_price = post_sweep["high"].max()
+        progress_price = best_price - level
+    else:
+        best_price = post_sweep["low"].min()
+        progress_price = level - best_price
+    asian_range_price = asian_high - asian_low
+    row["progress_pct_of_asian_range"] = round(float(progress_price / asian_range_price * 100), 1)
+
     return row
 
 
