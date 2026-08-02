@@ -20,6 +20,7 @@ Track key decisions, who made them, and why. Update as the project progresses.
 | Representative Re and Tin for production runs | Awaiting confirmation | Workflow plan asks advisor to confirm specific values |
 | Exact nanofluid property correlations for Al₂O₃-MWCNT and Ag-MgO | Needs literature search | Fe₂O₃-GO properties available from Mohammed et al. (2022) |
 | Glass envelope and vacuum annulus modeling | Decided: excluded | Receiver-tube-scale model only. Heat loss handled via boundary conditions. |
+| Turbulence model: Realizable k-ε + Enhanced Wall Treatment | Working choice, awaiting advisor confirmation | Fluent's Fluid Flow template defaulted to SST k-omega. Switched to k-ε because solver_and_formulas.md/CLAUDE.md specify "Enhanced Wall Treatment," a k-ε-family near-wall option in Fluent that k-omega SST doesn't have. Inferred from wording, not an explicit model statement — confirm against Mohammed et al. (2022)'s actual turbulence model before production runs. Must stay identical across GCI, correlation validation, Dudley validation, and all 27 runs. |
 
 ## Corrections Made
 
