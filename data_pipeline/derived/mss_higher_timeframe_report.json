@@ -1,0 +1,94 @@
+{
+  "5min": {
+    "freq": "5min",
+    "total_mss_events": 42552,
+    "avg_minutes_between_events": 61.8,
+    "high": {
+      "n_days": 604,
+      "n_no_entry": 0,
+      "regime_match_pct": 83.3,
+      "attempts_mean": 2.79,
+      "attempts_median": 2.0,
+      "attempts_p90": 5.0,
+      "final_outcome": {
+        "WIN": 339,
+        "OPEN": 206,
+        "LOSS": 59
+      },
+      "n_attempts_total": 1687,
+      "attempt_win_rate": 20.1,
+      "median_stop_pips": 7.6,
+      "mean_stop_pips": 9.0,
+      "mean_r_per_day": -0.715,
+      "median_r_per_day": -0.871,
+      "pct_days_positive_r": 41.2
+    },
+    "low": {
+      "n_days": 663,
+      "n_no_entry": 0,
+      "regime_match_pct": 84.2,
+      "attempts_mean": 2.78,
+      "attempts_median": 2.0,
+      "attempts_p90": 5.0,
+      "final_outcome": {
+        "WIN": 386,
+        "OPEN": 210,
+        "LOSS": 67
+      },
+      "n_attempts_total": 1843,
+      "attempt_win_rate": 20.9,
+      "median_stop_pips": 7.7,
+      "mean_stop_pips": 9.0,
+      "mean_r_per_day": -0.674,
+      "median_r_per_day": -0.213,
+      "pct_days_positive_r": 45.1
+    }
+  },
+  "15min": {
+    "freq": "15min",
+    "total_mss_events": 15065,
+    "avg_minutes_between_events": 174.4,
+    "high": {
+      "n_days": 604,
+      "n_no_entry": 2,
+      "regime_match_pct": 88.1,
+      "attempts_mean": 1.62,
+      "attempts_median": 1.0,
+      "attempts_p90": 3.0,
+      "final_outcome": {
+        "WIN": 325,
+        "OPEN": 153,
+        "LOSS": 124,
+        "NO_ENTRY": 2
+      },
+      "n_attempts_total": 980,
+      "attempt_win_rate": 33.2,
+      "median_stop_pips": 10.8,
+      "mean_stop_pips": 13.5,
+      "mean_r_per_day": -0.264,
+      "median_r_per_day": 0.0,
+      "pct_days_positive_r": 39.9
+    },
+    "low": {
+      "n_days": 663,
+      "n_no_entry": 9,
+      "regime_match_pct": 89.7,
+      "attempts_mean": 1.65,
+      "attempts_median": 1.0,
+      "attempts_p90": 3.0,
+      "final_outcome": {
+        "WIN": 366,
+        "LOSS": 145,
+        "OPEN": 143,
+        "NO_ENTRY": 9
+      },
+      "n_attempts_total": 1094,
+      "attempt_win_rate": 33.5,
+      "median_stop_pips": 10.9,
+      "mean_stop_pips": 13.0,
+      "mean_r_per_day": -0.342,
+      "median_r_per_day": -0.094,
+      "pct_days_positive_r": 36.7
+    }
+  }
+}

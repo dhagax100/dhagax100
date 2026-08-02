@@ -380,3 +380,39 @@ leg's own (tiny) swing, is structurally unworkable. Points at the same two
 levers already identified: run the engine on 1H (as the original reference
 strategy specified) where legs are naturally wider, and/or use the flip
 count as a pre-entry filter rather than a per-flip trigger.
+
+## Same engine, three timeframes (`mss_higher_timeframe.py`)
+
+Resamples the same 1-minute data to 5-minute and 15-minute candles, runs the
+identical swing/MSS engine and leg-stop trade simulation on each, and compares
+against the 1-minute baseline. Two things stay fixed across all three runs so
+timeframe is the only variable: Asian/London session levels and the sweep
+moment are always computed from 1-minute data; trade execution (does price
+touch the stop or target first) is always checked against raw 1-minute bars,
+never the coarser resampled candle, to avoid same-bar stop/target ambiguity.
+Only swing/MSS detection itself runs on the coarser candles. A resampled
+bar's O/H/L/C isn't used until that bar closes (matching how the indicator
+recalculates live), so each event maps to the last 1-minute bar inside its
+candle before execution starts.
+
+```
+python3 mss_higher_timeframe.py
+```
+
+### Result: clean, monotonic improvement at every step
+
+| Timeframe | Win % / attempt | Median stop | Median re-entries/day | Mean R/day |
+|---|---|---|---|---|
+| 1m | 9.5% / 9.6% | 4.8p | 5 | -2.36 / -2.16 |
+| 5m | 20.1% / 20.9% | 7.6p / 7.7p | 2 | -0.72 / -0.67 |
+| 15m | 33.2% / 33.5% | 10.8p / 10.9p | 1 | -0.26 / -0.34 |
+
+(pairs are sweep-high/short then sweep-low/long; both sides move together at
+every step, which is itself evidence this is a real relationship and not
+noise.) Regime-at-sweep match with the "sweep implies trend" assumption also
+climbs with timeframe: 75-79% at 1m, 83-84% at 5m, 88-90% at 15m.
+
+Still net negative at 15m -- not yet a working system on its own -- but the
+trend recovered roughly 2R/day going from 1m to 15m, one step short of the
+1H timeframe the original reference strategy actually specified. That's the
+natural next test.
