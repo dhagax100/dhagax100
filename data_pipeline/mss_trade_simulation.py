@@ -85,7 +85,7 @@ def main():
     raw = opt.load_raw("eurusd", 2021, 2025)
     o, h, l, c = raw["open"].values, raw["high"].values, raw["low"].values, raw["close"].values
     print(f"Loaded {len(raw):,} bars, running engine...")
-    mss_events, _ = run_engine(o, h, l, c)
+    mss_events, _, _ = run_engine(o, h, l, c)
     print(f"{len(mss_events):,} MSS events")
 
     down_bar = np.array([e["bar"] for e in mss_events if e["dir"] == "down"])

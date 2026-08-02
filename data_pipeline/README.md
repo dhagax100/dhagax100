@@ -416,3 +416,62 @@ Still net negative at 15m -- not yet a working system on its own -- but the
 trend recovered roughly 2R/day going from 1m to 15m, one step short of the
 1H timeframe the original reference strategy actually specified. That's the
 natural next test.
+
+## Retracement into the confirmed MSS leg (`mss_retracement.py`)
+
+A different question from `entry_models.py`'s pullback test: that one measured
+retracement into the pre-MSS reclaim (before any structural confirmation
+existed). This measures retracement AFTER MSS already confirmed and price
+already printed a fresh swing extreme in the trade's favor -- i.e. a pullback
+into an already-validated leg, not a pullback that might mean the setup never
+really started.
+
+Definition, exactly as specified: after the first tradeable MSS event, find
+the next confirmed swing point in the trend's own direction (a fresh low
+after MSS-down, a fresh high after MSS-up) -- that is the 0% level. The
+original MSS stop (the leg's origin swing, per `mss_engine.py`'s `leg_price`)
+is the 100% level. The leg is the price range between them, split into
+quarters.
+
+```
+python3 mss_retracement.py
+```
+
+### Result: retracement depth predicts outcome, and a deeper limit entry pays off
+
+Median retracement into the leg: **104.0%** overall at 5m (100.9% at 15m) --
+most first attempts eventually exceed the stop and lose, consistent with
+earlier rounds. But split by outcome, the picture is informative: **days that
+reach target retrace a median of 52.7% (5m) / 45.6% (15m)** before turning
+and running, versus ~108-110% (i.e. the stop) on days that fail. A real,
+roughly-halfway pullback is normal on a winning day, not a warning sign.
+
+Limit-entry backtest at each quartile (stop still at 100%, target unchanged),
+summed across every setup:
+
+| Level | 5m total R | 15m total R |
+|---|---|---|
+| 0% (market, no wait) | -416.6R | -518.5R |
+| 25% | -193.0R | -383.2R |
+| 50% | **+136.7R** | -185.1R |
+| 75% | **+660.4R** | **+310.6R** |
+
+This is the **opposite** conclusion from `entry_models.py`'s pullback test,
+and for a coherent reason: there, waiting for a better price meant waiting on
+an unconfirmed signal, and the setups that pulled back were disproportionately
+the ones that failed. Here MSS has already confirmed and price has already
+run to a fresh extreme before retracement is even measured, so a pullback at
+this stage is normal continuation-leg behavior. Win rate drops sharply going
+deeper (30%->12% at 5m) and fill rate drops too, but the tighter stop's
+reward:risk gain outweighs both, in the total across all setups, not just the
+per-trade average.
+
+**Flagged, not adopted**: pushing further (85-95%) initially climbs higher
+(5m peaks near +999R around 85%) then reverses hard -- 5m's 95% level falls to
+-18.6R on only 57 fills, 15m's 95% level shows a suspicious +4.7R average on
+164 fills, the signature of a couple of outsized trades dominating a small
+sample rather than a real edge. Reading an "optimal" level off this
+exploratory grid would be circular. The 0/25/50/75% result is solid because
+those levels were fixed before looking at outcomes; finding the true optimum
+needs the same train-2021-2023/test-2024-2025 discipline as every other round
+here, not a number read off this chart.

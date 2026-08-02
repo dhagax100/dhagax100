@@ -149,4 +149,6 @@ def run_engine(opens, highs, lows, closes):
 
         regime_at_bar[i] = regime
 
-    return mss_events, regime_at_bar
+    event_log = {"kind": ev_kind, "confirm_idx": ev_confirm_idx,
+                "swing_idx": ev_swing_idx, "price": ev_price}
+    return mss_events, regime_at_bar, event_log

@@ -37,7 +37,7 @@ def main():
     print(f"Loaded {len(raw):,} bars")
 
     o, h, l, c = raw["open"].values, raw["high"].values, raw["low"].values, raw["close"].values
-    mss_events, regime_at_bar = run_engine(o, h, l, c)
+    mss_events, regime_at_bar, _ = run_engine(o, h, l, c)
     print(f"Engine: {len(mss_events):,} MSS events over the full 5 years")
 
     # index MSS events by bar for fast windowed lookup

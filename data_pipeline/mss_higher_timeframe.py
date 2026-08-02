@@ -62,7 +62,7 @@ def run_for_timeframe(raw: pd.DataFrame, freq_str: str):
     print(f"\n### {freq_str} candles: {len(res):,} bars (from {len(raw):,} 1-minute bars) ###")
 
     o, h, l, c = res["open"].values, res["high"].values, res["low"].values, res["close"].values
-    mss_events, regime_at_bar = run_engine(o, h, l, c)
+    mss_events, regime_at_bar, _ = run_engine(o, h, l, c)
     print(f"{len(mss_events):,} MSS events on {freq_str} ({len(mss_events)/max(1,len(res)):.3f} per bar)")
 
     mapped = map_events_to_1m(mss_events, res.index, raw.index, freq)
