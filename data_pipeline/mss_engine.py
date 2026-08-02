@@ -23,7 +23,15 @@ import numpy as np
 def run_engine(opens, highs, lows, closes):
     """Returns (mss_events, regime_at_bar).
 
-    mss_events: list of dicts {bar, direction ('up'/'down'), swing_idx, swing_price}
+    mss_events: list of dicts {bar, direction ('up'/'down'), swing_idx, swing_price,
+    leg_price, leg_idx}. `leg_price`/`leg_idx` are the price/bar of the swing
+    on the OPPOSITE side that immediately precedes, in the confirmed-event
+    sequence, the swing this MSS event just broke -- i.e. the leg's own
+    origin swing, which is what a trade entered on this MSS would use as its
+    stop. Since confirmed swings strictly alternate kind (enforced by the
+    lastWasLow/lastWasHigh guards below), the event immediately before any
+    given swing in the log is guaranteed to be the opposite kind.
+
     regime_at_bar: int array, regime AFTER processing each bar (0 warmup, 1 up, 2 down)
     """
     n = len(closes)
@@ -37,6 +45,7 @@ def run_engine(opens, highs, lows, closes):
     haveSWH = haveSWL = False
     swhPrice = swlPrice = 0.0
     swhIdx = swlIdx = 0
+    swhListPos = swlListPos = -1  # position of the armed swing in the event log
     regime = 0
     mss_events = []
 
@@ -95,19 +104,23 @@ def run_engine(opens, highs, lows, closes):
                     regime = 1
                 elif regime == 2:
                     regime = 1
-                    mss_events.append({"bar": i, "dir": "up", "swing_idx": swhIdx, "swing_price": swhPrice})
+                    leg_p, leg_i = (ev_price[swhListPos - 1], ev_swing_idx[swhListPos - 1]) if swhListPos > 0 else (None, None)
+                    mss_events.append({"bar": i, "dir": "up", "swing_idx": swhIdx, "swing_price": swhPrice,
+                                      "leg_price": leg_p, "leg_idx": leg_i})
                 haveSWH = False
             for idx in range(before, after):
                 if ev_kind[idx] == 0:
-                    haveSWH, swhPrice, swhIdx = True, ev_price[idx], ev_swing_idx[idx]
+                    haveSWH, swhPrice, swhIdx, swhListPos = True, ev_price[idx], ev_swing_idx[idx], idx
                 else:
-                    haveSWL, swlPrice, swlIdx = True, ev_price[idx], ev_swing_idx[idx]
+                    haveSWL, swlPrice, swlIdx, swlListPos = True, ev_price[idx], ev_swing_idx[idx], idx
             if haveSWL and lows[i] < swlPrice:
                 if regime == 0:
                     regime = 2
                 elif regime == 1:
                     regime = 2
-                    mss_events.append({"bar": i, "dir": "down", "swing_idx": swlIdx, "swing_price": swlPrice})
+                    leg_p, leg_i = (ev_price[swlListPos - 1], ev_swing_idx[swlListPos - 1]) if swlListPos > 0 else (None, None)
+                    mss_events.append({"bar": i, "dir": "down", "swing_idx": swlIdx, "swing_price": swlPrice,
+                                      "leg_price": leg_p, "leg_idx": leg_i})
                 haveSWL = False
         else:
             if haveSWL and lows[i] < swlPrice:
@@ -115,19 +128,23 @@ def run_engine(opens, highs, lows, closes):
                     regime = 2
                 elif regime == 1:
                     regime = 2
-                    mss_events.append({"bar": i, "dir": "down", "swing_idx": swlIdx, "swing_price": swlPrice})
+                    leg_p, leg_i = (ev_price[swlListPos - 1], ev_swing_idx[swlListPos - 1]) if swlListPos > 0 else (None, None)
+                    mss_events.append({"bar": i, "dir": "down", "swing_idx": swlIdx, "swing_price": swlPrice,
+                                      "leg_price": leg_p, "leg_idx": leg_i})
                 haveSWL = False
             for idx in range(before, after):
                 if ev_kind[idx] == 0:
-                    haveSWH, swhPrice, swhIdx = True, ev_price[idx], ev_swing_idx[idx]
+                    haveSWH, swhPrice, swhIdx, swhListPos = True, ev_price[idx], ev_swing_idx[idx], idx
                 else:
-                    haveSWL, swlPrice, swlIdx = True, ev_price[idx], ev_swing_idx[idx]
+                    haveSWL, swlPrice, swlIdx, swlListPos = True, ev_price[idx], ev_swing_idx[idx], idx
             if haveSWH and highs[i] > swhPrice:
                 if regime == 0:
                     regime = 1
                 elif regime == 2:
                     regime = 1
-                    mss_events.append({"bar": i, "dir": "up", "swing_idx": swhIdx, "swing_price": swhPrice})
+                    leg_p, leg_i = (ev_price[swhListPos - 1], ev_swing_idx[swhListPos - 1]) if swhListPos > 0 else (None, None)
+                    mss_events.append({"bar": i, "dir": "up", "swing_idx": swhIdx, "swing_price": swhPrice,
+                                      "leg_price": leg_p, "leg_idx": leg_i})
                 haveSWH = False
 
         regime_at_bar[i] = regime

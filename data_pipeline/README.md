@@ -339,3 +339,44 @@ choppy, back-and-forth ones fail. Turning "flip count so far" into an actual
 entry filter needs the same discipline as everything else here -- threshold
 and measurement window chosen on TRAIN only, validated once on TEST -- since
 reading a cutoff straight off this histogram would be circular. Not yet done.
+
+## Trading the leg-stop, not the flip count (`mss_trade_simulation.py`)
+
+The flip-count research above measured the engine's own internal regime
+oscillation, not any specific trade's risk -- a real question the user
+raised directly. `mss_engine.py` was extended to attach, to every emitted
+MSS event, `leg_price`/`leg_idx`: the swing on the opposite side that
+immediately precedes, in the confirmed-event sequence, the swing this event
+just broke -- the leg's actual origin, which is what a trade entered on that
+MSS would use as its stop (not the engine's next internal marker, which can
+be a much closer, freshly-formed level with no relation to the trade).
+
+`mss_trade_simulation.py` simulates it for real: enter on MSS-down, stop at
+that leg high; if hit, wait for the next MSS-down and re-enter; repeat until
+target or window end.
+
+```
+python3 mss_trade_simulation.py
+```
+
+### Result: this is not tradeable as a per-flip mechanism
+
+| | |
+|---|---|
+| Win rate per individual attempt | 9.5% (347/3,644) |
+| Median stop distance | 4.0 pips |
+| Median re-entries needed per day | 5 (up to 25) |
+| Mean total R per day, all re-entries summed | -2.36R |
+
+Median stop is only 4 pips because on 1-minute bars consecutive swing
+highs/lows form only a few pips apart -- ordinary 1-minute noise clips it
+repeatedly. The day still often resolves toward target overall (matching the
+~58% reach rate found earlier), but the accumulated cost of a median 5
+stop-outs along the way outweighs the eventual win almost every time.
+
+This isn't evidence the directional setup is wrong -- it's evidence that
+trading this exact engine's raw MSS on 1-minute bars, with a stop at each
+leg's own (tiny) swing, is structurally unworkable. Points at the same two
+levers already identified: run the engine on 1H (as the original reference
+strategy specified) where legs are naturally wider, and/or use the flip
+count as a pre-entry filter rather than a per-flip trigger.

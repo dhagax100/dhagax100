@@ -1,0 +1,32 @@
+{
+  "high": {
+    "n_days": 604,
+    "n_no_entry": 0,
+    "attempts_mean": 6.03,
+    "attempts_median": 5.0,
+    "attempts_p90": 13.0,
+    "final_outcome_counts": {
+      "WIN": 347,
+      "OPEN": 235,
+      "LOSS": 22
+    },
+    "n_individual_attempts": 3644,
+    "attempt_win_rate": 9.5,
+    "mean_risk_pips": 4.8
+  },
+  "low": {
+    "n_days": 663,
+    "n_no_entry": 0,
+    "attempts_mean": 6.04,
+    "attempts_median": 5.0,
+    "attempts_p90": 13.0,
+    "final_outcome_counts": {
+      "WIN": 386,
+      "OPEN": 238,
+      "LOSS": 39
+    },
+    "n_individual_attempts": 4004,
+    "attempt_win_rate": 9.6,
+    "mean_risk_pips": 4.8
+  }
+}
