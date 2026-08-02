@@ -92,6 +92,41 @@ optimum.
   those come in a later stage once the raw sweep/reversal pattern is
   validated, and will very likely change the real win rate / R:R.
 
+## Mechanical backtest (`simulate_strategy.py`)
+
+`build_session_dataset.py` is descriptive (what happened, looking at the
+whole post-sweep window at once). `simulate_strategy.py` is a real,
+path-dependent backtest: it walks the 1-minute bars in time order and
+applies an actual entry/stop/target/breakeven rule, so a trade's outcome
+depends on what happens *first* (stop vs. breakeven vs. target), not on
+where price eventually ends up.
+
+```
+python3 simulate_strategy.py --pair eurusd
+```
+
+Rule tested: entry at the sweep bar's close; stop at the sweep bar's own
+high/low (+1 pip buffer) -- known at entry time only, never a later/deeper
+excursion, to avoid lookahead bias; target = opposite Asian level. Three
+breakeven variants (`none`, move to breakeven at `1R`, move to breakeven at
+`50pct` of the distance to target) are compared on a **2021-2023 TRAIN**
+split only; the best by expectancy is then run once, untouched, on a
+**2024-2025 TEST** split. Output: `derived/backtest_results.json` and
+per-trade `derived/backtest_train_<rule>.csv` / `backtest_test_<rule>.csv`.
+
+**Result**: none of the three breakeven variants produce a strong edge with
+this stop placement. The best (`none`, i.e. no breakeven move) gets TEST
+win rate 12.1%, expectancy +0.142R/trade, profit factor 1.16, but max
+drawdown 54.65R -- far beyond what any prop firm or reasonable account
+sizing would tolerate. Cross-referencing the 1,122 losing trades against
+`progress_pct_of_asian_range` shows **53% of them were on days price
+eventually reached the target anyway** -- the stop (sweep bar's own wick)
+is simply too tight relative to normal EUR/USD noise in this window, not a
+wrong directional read. This is a real, honest negative result: it argues
+for a structural (market-structure-shift-based) entry and stop, not the
+current purely mechanical one, as the priority next step -- it is not
+evidence the underlying directional bias is wrong.
+
 ## Results on the initial EUR/USD 2021-2025 run
 
 Of 1,295 data-quality-clean trading days:

@@ -1,0 +1,64 @@
+{
+  "best_rule": "none",
+  "stop_buffer_pips": 1.0,
+  "train_period": [
+    "2021-01-01",
+    "2023-12-31"
+  ],
+  "test_period": [
+    "2024-01-01",
+    "2025-12-31"
+  ],
+  "train_all_rules": {
+    "none": {
+      "n_trades": 763,
+      "win_rate": 11.0,
+      "loss_rate": 89.0,
+      "be_rate": 0.0,
+      "expectancy_r": 0.022,
+      "total_r": 16.59,
+      "profit_factor": 1.02,
+      "max_drawdown_r": 54.04
+    },
+    "1R": {
+      "n_trades": 763,
+      "win_rate": 5.0,
+      "loss_rate": 45.3,
+      "be_rate": 49.7,
+      "expectancy_r": -0.15,
+      "total_r": -114.62,
+      "profit_factor": 0.67,
+      "max_drawdown_r": 134.18
+    },
+    "50pct": {
+      "n_trades": 763,
+      "win_rate": 9.7,
+      "loss_rate": 81.7,
+      "be_rate": 8.7,
+      "expectancy_r": 0.009,
+      "total_r": 6.59,
+      "profit_factor": 1.01,
+      "max_drawdown_r": 57.95
+    }
+  },
+  "train_summary": {
+    "n_trades": 763,
+    "win_rate": 11.0,
+    "loss_rate": 89.0,
+    "be_rate": 0.0,
+    "expectancy_r": 0.022,
+    "total_r": 16.59,
+    "profit_factor": 1.02,
+    "max_drawdown_r": 54.04
+  },
+  "test_summary": {
+    "n_trades": 504,
+    "win_rate": 12.1,
+    "loss_rate": 87.9,
+    "be_rate": 0.0,
+    "expectancy_r": 0.142,
+    "total_r": 71.6,
+    "profit_factor": 1.16,
+    "max_drawdown_r": 54.65
+  }
+}
