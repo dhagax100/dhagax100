@@ -1,0 +1,15 @@
+{
+  "n_days": 265,
+  "filled": {
+    "n": 213,
+    "win_rate": 18.3,
+    "mean_r": -0.071,
+    "total_r": -15.2
+  },
+  "never_filled": {
+    "n": 52,
+    "win_rate": 50.0,
+    "mean_r": 0.964,
+    "total_r": 50.1
+  }
+}

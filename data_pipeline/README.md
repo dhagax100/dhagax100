@@ -217,3 +217,70 @@ next steps are a genuine market-structure entry trigger (the reclaim is a crude
 proxy for a market structure shift), a news filter, and testing GBP/USD and
 gold where wider session ranges make the fixed execution cost proportionally
 cheaper.
+
+## Entry confirmation models (`entry_models.py`, `diagnose_pullback.py`, `retrace_stop.py`)
+
+Tests whether waiting for structural confirmation, and entering on a pullback,
+beats entering on the first reclaim. Standard definitions used throughout:
+Bill Williams fractal is the 5-bar pattern (2 bars either side of the extreme,
+usable only once the 5th bar closes); MSS/BOS require a candle *body* beyond
+the swing, not a wick, so `break_on="close"` is the faithful variant.
+
+```
+python3 entry_models.py        # fractal / swing / reclaim x market / pullback
+python3 diagnose_pullback.py   # why pullback entries underperform
+python3 retrace_stop.py        # retracement as the exit instead of the entry
+```
+
+### Result 1 -- structure confirmation does not beat the reclaim
+
+Waiting raises the win rate (26.5% on the fastest entry up to ~34-36% on
+swing n=5) but pushes the stop further from entry (9.2 -> 13.9 pips average),
+and the extra win rate never pays for the worse reward:risk. Mean expectancy
+by model was negative for every confirmation type; the best single configs
+were reclaim-based.
+
+### Result 2 -- pullback entries shrink the stop and lose money anyway
+
+Pullback limits genuinely reduce risk, most on the reclaim model: **9.2 -> 6.3
+pips, a 32% tighter stop**. Expectancy still fell across every model. The cause
+is adverse selection, measured directly in `diagnose_pullback.py` on the 265
+qualifying days:
+
+| | days | win rate | mean R | total R |
+|---|---|---|---|---|
+| Never pulled back | 52 (19.6%) | 50.0% | +0.964 | **+50.1R** |
+| Did pull back | 213 (80.4%) | 18.3% | -0.071 | **-15.2R** |
+
+All of the profit sits in the fifth of setups a limit order would never have
+filled; 40% of all winners never retraced. Price coming back to you is the
+first sign the reversal is failing, not an opportunity.
+
+### Result 3 -- retracement stops do not fix it either
+
+One retracement-stop config produced the best single training expectancy of
+anything tested (+0.154R) but the mode averaged **-0.294R** across its
+configurations, by far the worst of the three stop modes, and that best config
+carried a 37.3R drawdown -- the signature of a lucky parameter. Walk-forward
+pooled to +0.054R at PF 1.09, worse than a stop under the sweep extreme.
+
+### Walk-forward scoreboard across all three rounds
+
+| Approach | OOS trades | win rate | expectancy | PF | max DD |
+|---|---|---|---|---|---|
+| Reclaim entry, stop beyond level | 357 | 39.8% | +0.088R | 1.15 | 21.1R |
+| Structure confirmation models | 285 | 32.3% | +0.123R | 1.18 | 23.2R |
+| Retracement-based stops | 385 | 36.4% | +0.054R | 1.09 | 30.5R |
+
+Three genuinely different ideas landing in the same 1.09-1.18 profit-factor
+band suggests the ceiling is set by the setup itself, not by entry mechanics.
+
+### What this points at next
+
+Winners run immediately and never look back; losers retrace. The tradeable
+signal is therefore momentum right after the reclaim, not a better price -- so
+the untested lever is a **quality filter before entry** (displacement on the
+reclaim candle, whether the sweep took a genuine prior swing rather than a
+random low, news exclusion), not a smarter entry trigger. And execution cost
+keeps pointing at the same structural fix: run this on GBP/USD and gold, where
+1 pip is a much smaller share of the session range.
