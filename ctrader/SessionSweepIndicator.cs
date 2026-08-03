@@ -50,9 +50,11 @@
 //          BOTH of your "if one side is not swept or impacted" cases (never
 //          swept at all, OR swept but target never reached) with one rule.
 //   4. Frankfurt + first-hour-of-London box (blue, lightly shaded) -- the
-//      hour before London killzone start ("Frankfurt") plus London's own
-//      first hour, boxed by the high/low price actually traded in that
-//      2-hour window.
+//      real calendar Frankfurt session hour plus the real calendar London
+//      session's own first hour (each has its OWN parameter, independent of
+//      the "London killzone start" used for AH/AL above -- those are two
+//      different concepts that happen to share a similar default hour),
+//      boxed by the high/low price actually traded in that 2-hour window.
 //   5. PDH/PDL (red lines) -- yesterday's (last actual TRADING day's, i.e.
 //      Friday's on a Monday chart -- skips the empty weekend automatically
 //      because forex daily bars simply don't exist for non-trading days)
@@ -104,9 +106,17 @@ namespace cAlgo.Indicators
             Group = "Session hours (US Eastern time -- auto DST, see file header)")]
         public int InpAsianStartHourEst { get; set; }
 
-        [Parameter("London killzone start (hour, 0-23, US Eastern time)", DefaultValue = 2, MinValue = 0, MaxValue = 23,
-            Group = "Session hours (US Eastern time -- auto DST, see file header)")]
+        [Parameter("London killzone start (hour, 0-23, US Eastern time) -- feeds AH/AL sweep timing only, NOT the Frankfurt/London box below",
+            DefaultValue = 2, MinValue = 0, MaxValue = 23, Group = "Session hours (US Eastern time -- auto DST, see file header)")]
         public int InpLondonStartHourEst { get; set; }
+
+        [Parameter("Frankfurt session start (hour, 0-23, US Eastern time) -- real calendar Frankfurt open, independent of the killzone start above",
+            DefaultValue = 2, MinValue = 0, MaxValue = 23, Group = "Session hours (US Eastern time -- auto DST, see file header)")]
+        public int InpFrankfurtStartHourEst { get; set; }
+
+        [Parameter("London session start (hour, 0-23, US Eastern time) -- real calendar London open, independent of the killzone start above",
+            DefaultValue = 3, MinValue = 0, MaxValue = 23, Group = "Session hours (US Eastern time -- auto DST, see file header)")]
+        public int InpLondonSessionStartHourEst { get; set; }
 
         [Parameter("Session resolution deadline (hour, 0-23, US Eastern time) -- if a side hasn't fully swept + hit target by this hour, its line freezes here. Defaults to the same EXTENDED_END_H cutoff the backtest uses.",
             DefaultValue = 12, MinValue = 0, MaxValue = 23, Group = "Session hours (US Eastern time -- auto DST, see file header)")]
@@ -143,11 +153,17 @@ namespace cAlgo.Indicators
         [Parameter("Swing low color", DefaultValue = "Black", Group = "Colors")]
         public Color InpSwingLowColor { get; set; }
 
-        [Parameter("MSS up color", DefaultValue = "Blue", Group = "Colors")]
+        [Parameter("MSS up color (blue cross, price flips down-to-up)", DefaultValue = "Blue", Group = "Colors")]
         public Color InpMssUpColor { get; set; }
 
-        [Parameter("MSS down color", DefaultValue = "Black", Group = "Colors")]
+        [Parameter("MSS down color (black cross, price flips up-to-down)", DefaultValue = "Black", Group = "Colors")]
         public Color InpMssDownColor { get; set; }
+
+        [Parameter("Swing marker font size (tiny = 6-8)", DefaultValue = 7, MinValue = 4, MaxValue = 24, Group = "Colors")]
+        public int InpSwingMarkerFontSize { get; set; }
+
+        [Parameter("MSS marker font size", DefaultValue = 8, MinValue = 4, MaxValue = 24, Group = "Colors")]
+        public int InpMssMarkerFontSize { get; set; }
 
         [Parameter("Asian box / AH-AL line color", DefaultValue = "Red", Group = "Colors")]
         public Color InpAsianColor { get; set; }
@@ -192,14 +208,24 @@ namespace cAlgo.Indicators
         private DateTime GetTradingDay(DateTime est) => est.Hour >= InpAsianStartHourEst ? est.Date.AddDays(1) : est.Date;
         private DateTime AsianStart(DateTime tradingDay) => tradingDay.AddDays(-1).AddHours(InpAsianStartHourEst);
         private DateTime AsianEnd(DateTime tradingDay) => tradingDay; // midnight EST
-        private DateTime LondonStart(DateTime tradingDay) => tradingDay.AddHours(InpLondonStartHourEst);
-        private DateTime FrankfurtStart(DateTime tradingDay) => LondonStart(tradingDay).AddHours(-1);
-        private DateTime LondonFirstHourEnd(DateTime tradingDay) => LondonStart(tradingDay).AddHours(1);
+        private DateTime LondonStart(DateTime tradingDay) => tradingDay.AddHours(InpLondonStartHourEst); // killzone start -- AH/AL only
         private DateTime SessionDeadline(DateTime tradingDay) => tradingDay.AddHours(InpSessionDeadlineHourEst);
+
+        // Real calendar Frankfurt/London session hours -- deliberately SEPARATE
+        // parameters from the killzone start above (that was the bug you caught:
+        // the box was riding on the killzone-start parameter, which defaults to
+        // 2:00 EST for AH/AL sweep-timing reasons that have nothing to do with when
+        // Frankfurt/London actually open).
+        private DateTime FrankfurtStart(DateTime tradingDay) => tradingDay.AddHours(InpFrankfurtStartHourEst);
+        private DateTime LondonSessionStart(DateTime tradingDay) => tradingDay.AddHours(InpLondonSessionStartHourEst);
+        private DateTime LondonFirstHourEnd(DateTime tradingDay) => LondonSessionStart(tradingDay).AddHours(1);
 
         // ============================== SWING/MSS ENGINE STATE ==============================
         private struct SwEv { public int ConfirmIdx; public int Kind; public int SwingIdx; public double Price; } // Kind: 0=high,1=low
-        private struct MssEv { public int K; public bool Bullish; }
+        // MSS is drawn at the BROKEN SWING's own (SwingIdx, Price) -- exactly where
+        // pine/ICT_Full_OB_v24.pine's label.new(x=swhIdx, y=swhPrice, ...) puts it --
+        // never at the breaking candle itself. See StepBar() for why.
+        private struct MssEv { public int SwingIdx; public double Price; public bool Bullish; }
 
         private readonly List<SwEv> _ev = new List<SwEv>();
         private readonly List<MssEv> _mss = new List<MssEv>();
@@ -288,14 +314,35 @@ namespace cAlgo.Indicators
             // compares against, so it is NOT done here; every line below matches the
             // original 1:1, just without the order-block/FVG bookkeeping this
             // indicator has no use for) -- only regime/MSS and the swing arm state.
-            int prevRegime = _regime;
+            //
+            // MSS recording (the bug you spotted): pine/ICT_Full_OB_v24.pine only ever
+            // draws a label on the "else if" branch -- regime 2->1 (a genuine down-to-
+            // up flip) or 1->2 (up-to-down) -- and NEVER on the plain "if regime==0"
+            // branch, which is just the engine's FIRST-EVER regime establishing itself
+            // out of warmup, not a real reversal. My first draft fired an MSS event on
+            // ANY regime change, including that initial 0->1/0->2 warmup case, which is
+            // why you saw far more MSS marks than the reference indicator. Fixed by
+            // recording MSS only inside the matching "else if" branch below.
+            //
+            // Placement (the other half of the bug): pine draws the label at
+            // (swhIdx, swhPrice) / (swlIdx, swlPrice) -- the ORIGINAL broken swing's own
+            // bar and price -- not at the breaking candle. So the MSS event is recorded
+            // using _swhIdx/_swhPrice (or _swlIdx/_swlPrice) captured INSIDE the break
+            // check itself, before the mid-arm loop right below it has a chance to
+            // overwrite those same fields with a brand-new swing confirmed on this same
+            // bar.
             bool swhConsumed = false, swlConsumed = false;
 
             if (!bullish)
             {
                 if (_haveSwh && H(i) > _swhPrice)
                 {
-                    if (_regime == 0) _regime = 1; else if (_regime == 2) _regime = 1;
+                    if (_regime == 0) _regime = 1;
+                    else if (_regime == 2)
+                    {
+                        _mss.Add(new MssEv { SwingIdx = _swhIdx, Price = _swhPrice, Bullish = true });
+                        _regime = 1;
+                    }
                     _haveSwh = false; swhConsumed = true;
                 }
                 for (int peek = _ei; peek < _ev.Count && _ev[peek].ConfirmIdx == i; peek++)
@@ -305,7 +352,12 @@ namespace cAlgo.Indicators
                 }
                 if (_haveSwl && L(i) < _swlPrice)
                 {
-                    if (_regime == 0) _regime = 2; else if (_regime == 1) _regime = 2;
+                    if (_regime == 0) _regime = 2;
+                    else if (_regime == 1)
+                    {
+                        _mss.Add(new MssEv { SwingIdx = _swlIdx, Price = _swlPrice, Bullish = false });
+                        _regime = 2;
+                    }
                     _haveSwl = false; swlConsumed = true;
                 }
             }
@@ -313,7 +365,12 @@ namespace cAlgo.Indicators
             {
                 if (_haveSwl && L(i) < _swlPrice)
                 {
-                    if (_regime == 0) _regime = 2; else if (_regime == 1) _regime = 2;
+                    if (_regime == 0) _regime = 2;
+                    else if (_regime == 1)
+                    {
+                        _mss.Add(new MssEv { SwingIdx = _swlIdx, Price = _swlPrice, Bullish = false });
+                        _regime = 2;
+                    }
                     _haveSwl = false; swlConsumed = true;
                 }
                 for (int peek = _ei; peek < _ev.Count && _ev[peek].ConfirmIdx == i; peek++)
@@ -323,12 +380,15 @@ namespace cAlgo.Indicators
                 }
                 if (_haveSwh && H(i) > _swhPrice)
                 {
-                    if (_regime == 0) _regime = 1; else if (_regime == 2) _regime = 1;
+                    if (_regime == 0) _regime = 1;
+                    else if (_regime == 2)
+                    {
+                        _mss.Add(new MssEv { SwingIdx = _swhIdx, Price = _swhPrice, Bullish = true });
+                        _regime = 1;
+                    }
                     _haveSwh = false; swhConsumed = true;
                 }
             }
-
-            if (_regime != prevRegime) _mss.Add(new MssEv { K = i, Bullish = _regime == 1 });
 
             // Officially arm this bar's events (guarded by *Consumed so a swing that
             // was JUST used to fire a break above this same bar doesn't get
@@ -357,6 +417,12 @@ namespace cAlgo.Indicators
             // initialized from the wrong point and produce wrong swings/MSS henceforth.
             if (InpShowSwings)
             {
+                // Chart.DrawIcon has no size argument -- ChartIconType renders at a
+                // fixed size the API doesn't expose a way to shrink (confirmed: neither
+                // ICT_EA_1.cs's own icon calls nor the official reference show a size
+                // parameter). Chart.DrawText's FontSize is the only sizing knob cAlgo
+                // actually gives an indicator, so "tiny arrows" means switching to a
+                // small text glyph instead of a fixed-size icon.
                 for (int i = _evDrawn; i < _ev.Count; i++)
                 {
                     var e = _ev[i];
@@ -364,22 +430,26 @@ namespace cAlgo.Indicators
                     if (t >= _historyCutoffUtc)
                     {
                         bool isHigh = e.Kind == 0;
-                        Chart.DrawIcon($"sw_{i}", isHigh ? ChartIconType.UpArrow : ChartIconType.DownArrow, t, e.Price,
-                            isHigh ? InpSwingHighColor : InpSwingLowColor);
+                        var mark = Chart.DrawText($"sw_{i}", isHigh ? "▲" : "▼", t, e.Price, isHigh ? InpSwingHighColor : InpSwingLowColor);
+                        mark.FontSize = InpSwingMarkerFontSize;
                     }
                 }
                 _evDrawn = _ev.Count;
             }
             if (InpShowMss)
             {
+                // Cross mark ("x"), same as pine's label.style_xcross -- drawn at the
+                // BROKEN SWING's own (SwingIdx, Price), matching the reference exactly
+                // (see the long comment in StepBar() for why this needed fixing).
                 for (int i = _mssDrawn; i < _mss.Count; i++)
                 {
                     var m = _mss[i];
-                    DateTime t = T(m.K);
+                    DateTime t = T(m.SwingIdx);
                     if (t >= _historyCutoffUtc)
                     {
-                        double y = m.Bullish ? L(m.K) : H(m.K);
-                        Chart.DrawText($"mss_{i}", "MSS", t, y, m.Bullish ? InpMssUpColor : InpMssDownColor);
+                        var mark = Chart.DrawText($"mss_{i}", "x", t, m.Price, m.Bullish ? InpMssUpColor : InpMssDownColor);
+                        mark.FontSize = InpMssMarkerFontSize;
+                        mark.IsBold = true;
                     }
                 }
                 _mssDrawn = _mss.Count;
