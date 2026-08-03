@@ -49,29 +49,58 @@
 //          that full cycle completing -- freezes there instead. This covers
 //          BOTH of your "if one side is not swept or impacted" cases (never
 //          swept at all, OR swept but target never reached) with one rule.
-//   4. Frankfurt + first-hour-of-London box (blue, lightly shaded) -- the
-//      real calendar Frankfurt session hour plus the real calendar London
-//      session's own first hour (each has its OWN parameter, independent of
-//      the "London killzone start" used for AH/AL above -- those are two
-//      different concepts that happen to share a similar default hour),
-//      boxed by the high/low price actually traded in that 2-hour window.
-//   5. PDH/PDL (red lines) -- yesterday's (last actual TRADING day's, i.e.
-//      Friday's on a Monday chart -- skips the empty weekend automatically
-//      because forex daily bars simply don't exist for non-trading days)
-//      daily high/low, drawn from the start of today's Asian session and
-//      destroyed right at today's London session start.
-//   6. Asian range pips label -- printed right at the bottom of each day's
+//   4. Frankfurt + London killzone box (blue, lightly shaded) -- Frankfurt
+//      (1 hour before London killzone start) through the London killzone's
+//      own end. Default 01:00-05:00 EST (Frankfurt start=1, killzone
+//      start=2, killzone end=5 -- the same LONDON_KZ_START_H/LONDON_KZ_END_H
+//      convention used throughout data_pipeline/ in this project). VERIFIED
+//      against your own research: IC Markets server 08:00-12:00 -> (server
+//      is UTC+3 in summer, 7h ahead of EDT) -> EST/EDT 01:00-05:00. Same
+//      match.
+//   5. Asian range pips label -- printed right at the bottom of each day's
 //      Asian box, in bold, the instant the Asian session closes.
+//
+// PDH/PDL: REMOVED per your request (for now) -- was drawing yesterday's
+// daily high/low; deleted cleanly rather than left commented out. Easy to
+// re-add later if you want it back (git history has the removed version).
 //
 // "Poorly shaded" is read here as "lightly/semi-transparently shaded" -- the
 // Asian Box Alpha / Frankfurt-London Box Alpha parameters (0-255, low
 // default) control exactly how faint the fill is.
 //
+// SESSION HOURS -- VERIFIED against your IC Markets web research:
+//   - Asian: you found IC Markets server 03:00-07:00 = New York 20:00-00:00.
+//     Checking the math: IC Markets' cTrader server runs UTC+3 in summer
+//     (northern-hemisphere DST period); EDT (NY summer) is UTC-4; the gap
+//     between them is 7 hours. NY 20:00 EDT = 00:00 UTC (next day) = 03:00
+//     server (UTC+3). NY 00:00 EDT (next day) = 04:00 UTC = 07:00 server.
+//     That's an exact match to what you found -- confirms InpAsianStartHourEst
+//     (default 20, i.e. 20:00-00:00 EST) was already correct. No change made.
+//   - Frankfurt+London: you found IC Markets server 09:00-12:00 for London,
+//     08:00-12:00 once you add the Frankfurt hour before it. Same UTC+3-vs-
+//     EDT math: server 08:00 = EST/EDT 01:00, server 12:00 = EST/EDT 05:00.
+//     That's Frankfurt start 01:00 EST through killzone end 05:00 EST --
+//     which is exactly LONDON_KZ_START_H=2/LONDON_KZ_END_H=5 (killzone) plus
+//     one Frankfurt hour before it. This DIRECTLY CONTRADICTS my previous fix
+//     in this file, which invented a narrower "London's own first hour"
+//     concept (2 hours: 01:00-03:00 EST) instead of the full killzone (4
+//     hours: 01:00-05:00 EST) -- that previous fix is reverted below; the box
+//     is back to being anchored on London killzone start/end, which turns out
+//     to have been the right concept all along, it was just missing an
+//     explicit "killzone end" parameter (added now).
+//   - Daylight saving: handled automatically already (see ToEastern/ToUtc
+//     above) -- nothing broker-specific needed. Since the indicator is pinned
+//     to true UTC and converts straight to real US Eastern time via .NET's
+//     own DST-aware zone table, it does not matter at all what IC Markets'
+//     own server offset is on any given day (UTC+2 in winter, UTC+3 in
+//     summer, or anything else) -- the EST-anchored hours above stay correct
+//     through every DST transition, on this broker or any other.
+//
 // COMPATIBILITY: standard cAlgo.API C#, targets the same cAlgo Automate API
 // surface already used (and, per your prior sessions, working) in
 // ctrader/ICT_EA_1.cs in this same folder -- Chart.DrawRectangle/DrawTrendLine/
-// DrawIcon/DrawText, Bars.BarOpened, MarketData.GetBars. Paste into cTrader's
-// Automate editor as a new Indicator (not a Robot/cBot).
+// DrawText, Bars.BarOpened. Paste into cTrader's Automate editor as a new
+// Indicator (not a Robot/cBot).
 //
 // THREE CALLS I COULD NOT FULLY VERIFY against the official reference
 // (help.ctrader.com and the cTrader forum both blocked automated fetches while
@@ -84,13 +113,29 @@
 //     these, so I have no first-hand confirmation they exist on this API version.
 //     If they don't compile, just delete those two lines -- the label still
 //     draws, only slightly smaller/non-bold.
-//   - Chart.DrawTrendLine(name, t1, y1, t2, y2, color): DrawRectangle/DrawText/
-//     DrawIcon are all copied from confirmed, already-working calls in
-//     ICT_EA_1.cs; DrawTrendLine is NOT used anywhere in that file, so its exact
-//     argument order/overload here is inferred by analogy with DrawRectangle,
-//     not confirmed first-hand. If it doesn't compile, check whether it wants a
+//   - Chart.DrawTrendLine(name, t1, y1, t2, y2, color): DrawRectangle/DrawText
+//     are both copied from confirmed, already-working calls in ICT_EA_1.cs;
+//     DrawTrendLine is NOT used anywhere in that file, so its exact argument
+//     order/overload here is inferred by analogy with DrawRectangle, not
+//     confirmed first-hand. If it doesn't compile, check whether it wants a
 //     trailing thickness argument (like DrawRectangle does) or a different
 //     argument order.
+//
+// SWING/MSS MARKER OFFSET FIX: you reported swing arrows and MSS crosses
+// landing on the wrong (usually the next) candle after I switched them from
+// Chart.DrawIcon to Chart.DrawText for size control. The (time, price) data
+// fed to both calls never changed -- DrawIcon apparently centers an icon on
+// its given point, while DrawText's default anchor does not (confirmed: the
+// cAlgo forum shows ChartText exposes a settable .HorizontalAlignment, and an
+// older overload takes VerticalAlignment/HorizontalAlignment as explicit
+// arguments -- i.e. DrawText is NOT centered by default). Fixed by explicitly
+// setting mark.HorizontalAlignment = HorizontalAlignment.Center and
+// mark.VerticalAlignment = VerticalAlignment.Center on every swing/MSS text
+// object below. VerticalAlignment/HorizontalAlignment themselves ARE
+// confirmed to exist in this API (ICT_EA_1.cs's own Chart.DrawStaticText call
+// already uses them), but the specific ".Center" member of each enum is not
+// independently confirmed -- if it doesn't compile, try ".Middle" instead of
+// ".Center" for VerticalAlignment.
 
 using System;
 using System.Collections.Generic;
@@ -106,17 +151,13 @@ namespace cAlgo.Indicators
             Group = "Session hours (US Eastern time -- auto DST, see file header)")]
         public int InpAsianStartHourEst { get; set; }
 
-        [Parameter("London killzone start (hour, 0-23, US Eastern time) -- feeds AH/AL sweep timing only, NOT the Frankfurt/London box below",
+        [Parameter("London killzone start (hour, 0-23, US Eastern time) -- feeds AH/AL AND is the Frankfurt/London box's own killzone start",
             DefaultValue = 2, MinValue = 0, MaxValue = 23, Group = "Session hours (US Eastern time -- auto DST, see file header)")]
         public int InpLondonStartHourEst { get; set; }
 
-        [Parameter("Frankfurt session start (hour, 0-23, US Eastern time) -- real calendar Frankfurt open, independent of the killzone start above",
-            DefaultValue = 2, MinValue = 0, MaxValue = 23, Group = "Session hours (US Eastern time -- auto DST, see file header)")]
-        public int InpFrankfurtStartHourEst { get; set; }
-
-        [Parameter("London session start (hour, 0-23, US Eastern time) -- real calendar London open, independent of the killzone start above",
-            DefaultValue = 3, MinValue = 0, MaxValue = 23, Group = "Session hours (US Eastern time -- auto DST, see file header)")]
-        public int InpLondonSessionStartHourEst { get; set; }
+        [Parameter("London killzone end (hour, 0-23, US Eastern time) -- the Frankfurt/London box's own end (verified: matches IC Markets server 08:00-12:00)",
+            DefaultValue = 5, MinValue = 0, MaxValue = 23, Group = "Session hours (US Eastern time -- auto DST, see file header)")]
+        public int InpLondonKzEndHourEst { get; set; }
 
         [Parameter("Session resolution deadline (hour, 0-23, US Eastern time) -- if a side hasn't fully swept + hit target by this hour, its line freezes here. Defaults to the same EXTENDED_END_H cutoff the backtest uses.",
             DefaultValue = 12, MinValue = 0, MaxValue = 23, Group = "Session hours (US Eastern time -- auto DST, see file header)")]
@@ -138,11 +179,8 @@ namespace cAlgo.Indicators
         [Parameter("Show AH/AL sweep lines", DefaultValue = true, Group = "Display toggles")]
         public bool InpShowAhAl { get; set; }
 
-        [Parameter("Show Frankfurt + London first-hour box", DefaultValue = true, Group = "Display toggles")]
+        [Parameter("Show Frankfurt + London killzone box", DefaultValue = true, Group = "Display toggles")]
         public bool InpShowFrankfurtLondonBox { get; set; }
-
-        [Parameter("Show PDH/PDL", DefaultValue = true, Group = "Display toggles")]
-        public bool InpShowPdhPdl { get; set; }
 
         [Parameter("Show Asian range pips label", DefaultValue = true, Group = "Display toggles")]
         public bool InpShowAsianPips { get; set; }
@@ -177,9 +215,6 @@ namespace cAlgo.Indicators
         [Parameter("Frankfurt + London box fill alpha (0-255, low = poorly/lightly shaded)", DefaultValue = 35, MinValue = 0, MaxValue = 255, Group = "Colors")]
         public int InpFrankLondonBoxAlpha { get; set; }
 
-        [Parameter("PDH/PDL color", DefaultValue = "Red", Group = "Colors")]
-        public Color InpPdhPdlColor { get; set; }
-
         [Parameter("Asian pips label color", DefaultValue = "White", Group = "Colors")]
         public Color InpPipsLabelColor { get; set; }
 
@@ -208,17 +243,15 @@ namespace cAlgo.Indicators
         private DateTime GetTradingDay(DateTime est) => est.Hour >= InpAsianStartHourEst ? est.Date.AddDays(1) : est.Date;
         private DateTime AsianStart(DateTime tradingDay) => tradingDay.AddDays(-1).AddHours(InpAsianStartHourEst);
         private DateTime AsianEnd(DateTime tradingDay) => tradingDay; // midnight EST
-        private DateTime LondonStart(DateTime tradingDay) => tradingDay.AddHours(InpLondonStartHourEst); // killzone start -- AH/AL only
+        private DateTime LondonStart(DateTime tradingDay) => tradingDay.AddHours(InpLondonStartHourEst); // killzone start
+        private DateTime LondonKzEnd(DateTime tradingDay) => tradingDay.AddHours(InpLondonKzEndHourEst); // killzone end
         private DateTime SessionDeadline(DateTime tradingDay) => tradingDay.AddHours(InpSessionDeadlineHourEst);
 
-        // Real calendar Frankfurt/London session hours -- deliberately SEPARATE
-        // parameters from the killzone start above (that was the bug you caught:
-        // the box was riding on the killzone-start parameter, which defaults to
-        // 2:00 EST for AH/AL sweep-timing reasons that have nothing to do with when
-        // Frankfurt/London actually open).
-        private DateTime FrankfurtStart(DateTime tradingDay) => tradingDay.AddHours(InpFrankfurtStartHourEst);
-        private DateTime LondonSessionStart(DateTime tradingDay) => tradingDay.AddHours(InpLondonSessionStartHourEst);
-        private DateTime LondonFirstHourEnd(DateTime tradingDay) => LondonSessionStart(tradingDay).AddHours(1);
+        // Frankfurt = 1 hour before the SAME London killzone used for AH/AL above
+        // (reverted from a previous, mistaken "separate real-calendar session"
+        // redesign -- see the file header's SESSION HOURS note for the verified
+        // math showing this coupling was actually correct all along).
+        private DateTime FrankfurtStart(DateTime tradingDay) => LondonStart(tradingDay).AddHours(-1);
 
         // ============================== SWING/MSS ENGINE STATE ==============================
         private struct SwEv { public int ConfirmIdx; public int Kind; public int SwingIdx; public double Price; } // Kind: 0=high,1=low
@@ -432,6 +465,11 @@ namespace cAlgo.Indicators
                         bool isHigh = e.Kind == 0;
                         var mark = Chart.DrawText($"sw_{i}", isHigh ? "▲" : "▼", t, e.Price, isHigh ? InpSwingHighColor : InpSwingLowColor);
                         mark.FontSize = InpSwingMarkerFontSize;
+                        // Centers the glyph exactly ON (t, e.Price) -- DrawText is NOT
+                        // centered by default (that's the "next candle" offset bug you
+                        // reported); see the file header for what's confirmed vs not.
+                        mark.HorizontalAlignment = HorizontalAlignment.Center;
+                        mark.VerticalAlignment = VerticalAlignment.Center;
                     }
                 }
                 _evDrawn = _ev.Count;
@@ -450,6 +488,8 @@ namespace cAlgo.Indicators
                         var mark = Chart.DrawText($"mss_{i}", "x", t, m.Price, m.Bullish ? InpMssUpColor : InpMssDownColor);
                         mark.FontSize = InpMssMarkerFontSize;
                         mark.IsBold = true;
+                        mark.HorizontalAlignment = HorizontalAlignment.Center;
+                        mark.VerticalAlignment = VerticalAlignment.Center;
                     }
                 }
                 _mssDrawn = _mss.Count;
@@ -469,32 +509,13 @@ namespace cAlgo.Indicators
 
             public double FlHigh = double.NegativeInfinity, FlLow = double.PositiveInfinity;
             public bool FlAnyBar, FlClosed;
-
-            public double? Pdh, Pdl;
-            public bool PdhPdlDestroyed;
         }
         private readonly Dictionary<DateTime, DayState> _days = new Dictionary<DateTime, DayState>();
-        private Bars _dailyBars;
 
         private DayState GetOrCreateDay(DateTime tradingDay)
         {
             if (!_days.TryGetValue(tradingDay, out var d)) { d = new DayState(); _days[tradingDay] = d; }
             return d;
-        }
-
-        // Most recent daily bar that opened strictly before this trading day's own
-        // Asian session start -- i.e. "yesterday's" daily candle, automatically the
-        // last actual TRADING day (forex daily bars don't exist for weekends, so a
-        // Monday's PDH/PDL naturally lands on Friday with no special-case code needed).
-        private (double high, double low)? FindPdhPdl(DateTime tradingDay)
-        {
-            DateTime cutoffUtc = ToUtc(AsianStart(tradingDay));
-            for (int i = _dailyBars.Count - 1; i >= 0; i--)
-            {
-                if (_dailyBars.OpenTimes[i] < cutoffUtc)
-                    return (_dailyBars.HighPrices[i], _dailyBars.LowPrices[i]);
-            }
-            return null;
         }
 
         private void UpdateAsianSession(DayState day, DateTime tradingDay, int i, DateTime est)
@@ -542,35 +563,49 @@ namespace cAlgo.Indicators
         {
             if (!InpShowAhAl || !day.AsianClosed) return;
             DateTime end = AsianEnd(tradingDay), deadline = SessionDeadline(tradingDay);
-            if (est < end || est > deadline) return;
+            if (est < end) return;
+            // FIX: the previous version early-returned on "est > deadline" BEFORE the
+            // freeze-at-deadline draw below could ever run, so a line that never got
+            // swept/impacted just silently stopped growing at whatever the last
+            // pre-deadline bar happened to be (never marked frozen, never redrawn with
+            // its right edge pinned exactly at the deadline) -- part of what you saw
+            // as "random" lines not stopping cleanly. Fixed: we still enter below for
+            // bars past the deadline too, so the frozen-at-deadline draw actually fires.
+            bool pastDeadline = est >= deadline;
 
             if (!day.AhFrozen)
             {
-                if (!day.AhSwept && H(i) > day.AsianHigh) day.AhSwept = true;
-                if (day.AhSwept && !day.AhTargetHit && L(i) <= day.AsianLow) day.AhTargetHit = true;
-
-                bool freezeNow = day.AhTargetHit || est >= deadline;
-                DateTime rightEdge = day.AhTargetHit ? T(i) : (est >= deadline ? ToUtc(deadline) : T(i));
+                if (!pastDeadline)
+                {
+                    if (!day.AhSwept && H(i) > day.AsianHigh) day.AhSwept = true;
+                    if (day.AhSwept && !day.AhTargetHit && L(i) <= day.AsianLow) day.AhTargetHit = true;
+                }
+                bool freezeNow = day.AhTargetHit || pastDeadline;
+                DateTime rightEdge = day.AhTargetHit ? T(i) : (pastDeadline ? ToUtc(deadline) : T(i));
                 Chart.DrawTrendLine($"ah_{tradingDay:yyyyMMdd}", ToUtc(end), day.AsianHigh, rightEdge, day.AsianHigh, InpAsianColor);
                 if (freezeNow) day.AhFrozen = true;
             }
 
             if (!day.AlFrozen)
             {
-                if (!day.AlSwept && L(i) < day.AsianLow) day.AlSwept = true;
-                if (day.AlSwept && !day.AlTargetHit && H(i) >= day.AsianHigh) day.AlTargetHit = true;
-
-                bool freezeNow = day.AlTargetHit || est >= deadline;
-                DateTime rightEdge = day.AlTargetHit ? T(i) : (est >= deadline ? ToUtc(deadline) : T(i));
+                if (!pastDeadline)
+                {
+                    if (!day.AlSwept && L(i) < day.AsianLow) day.AlSwept = true;
+                    if (day.AlSwept && !day.AlTargetHit && H(i) >= day.AsianHigh) day.AlTargetHit = true;
+                }
+                bool freezeNow = day.AlTargetHit || pastDeadline;
+                DateTime rightEdge = day.AlTargetHit ? T(i) : (pastDeadline ? ToUtc(deadline) : T(i));
                 Chart.DrawTrendLine($"al_{tradingDay:yyyyMMdd}", ToUtc(end), day.AsianLow, rightEdge, day.AsianLow, InpAsianColor);
                 if (freezeNow) day.AlFrozen = true;
             }
         }
 
+        // Frankfurt through the London killzone's own end -- default 01:00-05:00 EST
+        // (verified against IC Markets server 08:00-12:00, see file header).
         private void UpdateFrankfurtLondonBox(DayState day, DateTime tradingDay, int i, DateTime est)
         {
             if (!InpShowFrankfurtLondonBox) return;
-            DateTime start = FrankfurtStart(tradingDay), end = LondonFirstHourEnd(tradingDay);
+            DateTime start = FrankfurtStart(tradingDay), end = LondonKzEnd(tradingDay);
             if (est >= start && est < end)
             {
                 day.FlAnyBar = true;
@@ -586,32 +621,6 @@ namespace cAlgo.Indicators
                 var rect = Chart.DrawRectangle($"flbox_{tradingDay:yyyyMMdd}", ToUtc(start), day.FlHigh, ToUtc(end), day.FlLow,
                     Color.FromArgb(InpFrankLondonBoxAlpha, InpFrankLondonColor), 1);
                 rect.IsFilled = true;
-            }
-        }
-
-        private void UpdatePdhPdl(DayState day, DateTime tradingDay, int i, DateTime est)
-        {
-            if (!InpShowPdhPdl) return;
-            if (day.Pdh == null)
-            {
-                var pd = FindPdhPdl(tradingDay);
-                if (pd == null) return; // not enough daily history loaded yet for this day
-                day.Pdh = pd.Value.high; day.Pdl = pd.Value.low;
-            }
-            DateTime start = AsianStart(tradingDay), destroyAt = LondonStart(tradingDay);
-            if (day.PdhPdlDestroyed) return;
-
-            if (est >= destroyAt)
-            {
-                // final draw, frozen exactly at London start, then never touched again
-                Chart.DrawTrendLine($"pdh_{tradingDay:yyyyMMdd}", ToUtc(start), day.Pdh.Value, ToUtc(destroyAt), day.Pdh.Value, InpPdhPdlColor);
-                Chart.DrawTrendLine($"pdl_{tradingDay:yyyyMMdd}", ToUtc(start), day.Pdl.Value, ToUtc(destroyAt), day.Pdl.Value, InpPdhPdlColor);
-                day.PdhPdlDestroyed = true;
-            }
-            else if (est >= start)
-            {
-                Chart.DrawTrendLine($"pdh_{tradingDay:yyyyMMdd}", ToUtc(start), day.Pdh.Value, T(i), day.Pdh.Value, InpPdhPdlColor);
-                Chart.DrawTrendLine($"pdl_{tradingDay:yyyyMMdd}", ToUtc(start), day.Pdl.Value, T(i), day.Pdl.Value, InpPdhPdlColor);
             }
         }
 
@@ -632,7 +641,6 @@ namespace cAlgo.Indicators
             var day = GetOrCreateDay(tradingDay);
 
             UpdateAsianSession(day, tradingDay, i, est);
-            UpdatePdhPdl(day, tradingDay, i, est);
             UpdateAhAlLines(day, tradingDay, i, est);
             UpdateFrankfurtLondonBox(day, tradingDay, i, est);
         }
@@ -640,9 +648,6 @@ namespace cAlgo.Indicators
         // ============================== LIFECYCLE ==============================
         protected override void Initialize()
         {
-            _dailyBars = MarketData.GetBars(TimeFrame.Daily, SymbolName);
-            _dailyBars.LoadMoreHistory();
-
             Bars.BarOpened += OnBarOpened;
 
             // Server.Time is already true UTC here because of [Indicator(TimeZone =
