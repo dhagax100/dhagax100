@@ -531,3 +531,32 @@ exceptions -- consistent with why the 75% limit-entry level outperformed
 shallower levels in the earlier all-setups backtest.
 
 Dashboard: `reclaim_retracement_dashboard.html` (published as an Artifact).
+
+## 1-minute enter/stop/re-enter, restricted to the 558 deep-pullback days
+
+`python3 winning_days_1m_reentry.py` -- restricted to the 558 (date, side)
+setups where the 5-minute pullback reached >=50% of the ladder (previous
+section), drop to the 1-minute chart and run the exact enter/stop/re-enter
+mechanic from `mss_trade_simulation.py` (enter on a 1-minute swing
+exceedance, stop at that leg's own origin swing, re-enter on the next
+exceedance if stopped, repeat until target or window end).
+
+* **Win rate per individual attempt roughly triples**: 25.2% (high side) /
+  26.3% (low side), vs 9.5%/9.6% on the full, unrestricted day set.
+* **Fewer tries needed**: median 3 attempts per day to finally win, vs 5.
+* **Mean total R per day flips positive**: +1.96R (high) / +2.39R (low),
+  vs roughly -2.3R/day unrestricted -- adding up every losing attempt plus
+  the eventual win, the average day nets a profit in this subset.
+* 99.3% of these days (555 of 559) still resolve to an eventual win within
+  the simulation window.
+* Even winning attempts are not a clean ride: of attempts that win, roughly
+  half still retest 50% or more of the way to the stop before turning
+  around -- winning here still usually means enduring a scary-looking move
+  against you first.
+
+**Caveat, stated plainly**: this is still measured only on days already
+known (in hindsight) to reach target. The 50%+ pullback condition itself is
+realistically observable live, but the underlying day-selection is not --
+this is a promising lead, not yet a walk-forward-validated result.
+
+Dashboard: `reentry_558_dashboard.html` (published as an Artifact).
