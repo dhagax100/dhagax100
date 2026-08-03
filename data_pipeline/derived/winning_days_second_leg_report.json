@@ -1,0 +1,44 @@
+{
+  "n_days_leg1_stopped": {},
+  "sides": {
+    "high": {
+      "n_days_leg1_stop_violated": 176,
+      "n_got_second_swing_confirmation": 176,
+      "n_never_got_second_confirmation": 0,
+      "n_second_leg_measurable": 176,
+      "outcome2_counts": {
+        "LOSS": 89,
+        "WIN": 87
+      },
+      "retrace2_bucket": {
+        "<0%": 2,
+        "0-25%": 12,
+        "25-50%": 32,
+        "50-75%": 25,
+        "75-100%": 28,
+        ">100%": 77
+      },
+      "retrace2_median": 100.0
+    },
+    "low": {
+      "n_days_leg1_stop_violated": 180,
+      "n_got_second_swing_confirmation": 180,
+      "n_never_got_second_confirmation": 0,
+      "n_second_leg_measurable": 179,
+      "outcome2_counts": {
+        "WIN": 97,
+        "LOSS": 81,
+        "OPEN": 1
+      },
+      "retrace2_bucket": {
+        "<0%": 2,
+        "0-25%": 17,
+        "25-50%": 34,
+        "50-75%": 22,
+        "75-100%": 28,
+        ">100%": 76
+      },
+      "retrace2_median": 90.3
+    }
+  }
+}

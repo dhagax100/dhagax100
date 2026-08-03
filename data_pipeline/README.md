@@ -560,3 +560,25 @@ realistically observable live, but the underlying day-selection is not --
 this is a promising lead, not yet a walk-forward-validated result.
 
 Dashboard: `reentry_558_dashboard.html` (published as an Artifact).
+
+## Which attempt number actually wins, and the second 5-minute ladder
+
+Two follow-ups on the 558-day deep-pullback subset, `winning_days_second_leg.py`:
+
+**Which attempt (1st, 2nd, 3rd...) finally wins**, on the 1-minute
+enter/stop/re-enter routine: only 21% of days win clean on attempt 1; another
+20% need exactly one stop-out first (win on attempt 2); the rest (59%) need
+three or more tries, with a real tail out past 10 attempts. Full breakdown
+by exact attempt number saved in the dashboard/report.
+
+**The second 5-minute ladder**: of the 735 measured winning-day legs, 356
+had their first ladder's stop actually hit (the ">100%" outcome). Of those
+356, **100%** went on to find a new confirmed swing point and build a second
+ladder before the window ran out -- on these already-known-winning days, a
+broken first leg is never the end of the story. But the second ladder is
+roughly a coin flip on its own (51.8% reach target, the rest get stopped
+too), and when it pulls back, it pulls back just as deep as the first leg
+did (median ~90-100%, ~44% exceed 100% again) -- the same rough pattern
+repeats rather than settling down.
+
+Dashboard (glossary of every term included): `attempts_and_second_leg_dashboard.html`.
