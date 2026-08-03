@@ -1,0 +1,73 @@
+{
+  "n_days_usable": 1266,
+  "n_dropped_no_history": 1,
+  "sides": {
+    "high": {
+      "label": "sell-context (swept Asian high)",
+      "n": 603,
+      "n_won": 350,
+      "n_lost": 253,
+      "baseline_reach_rate_pct": 58.0,
+      "extreme_taken_when": {
+        "london": {
+          "won": 119,
+          "lost": 96,
+          "reach_rate_pct": 55.3
+        },
+        "never": {
+          "won": 231,
+          "lost": 157,
+          "reach_rate_pct": 59.5
+        }
+      },
+      "close_vs_daybefore": {
+        "bearish": {
+          "won": 153,
+          "lost": 118,
+          "reach_rate_pct": 56.5
+        },
+        "bullish": {
+          "won": 196,
+          "lost": 135,
+          "reach_rate_pct": 59.2
+        },
+        "flat": {
+          "won": 1,
+          "lost": 0,
+          "reach_rate_pct": 100.0
+        }
+      }
+    },
+    "low": {
+      "label": "buy-context (swept Asian low)",
+      "n": 663,
+      "n_won": 387,
+      "n_lost": 276,
+      "baseline_reach_rate_pct": 58.4,
+      "extreme_taken_when": {
+        "london": {
+          "won": 120,
+          "lost": 89,
+          "reach_rate_pct": 57.4
+        },
+        "never": {
+          "won": 267,
+          "lost": 187,
+          "reach_rate_pct": 58.8
+        }
+      },
+      "close_vs_daybefore": {
+        "bearish": {
+          "won": 212,
+          "lost": 149,
+          "reach_rate_pct": 58.7
+        },
+        "bullish": {
+          "won": 175,
+          "lost": 127,
+          "reach_rate_pct": 57.9
+        }
+      }
+    }
+  }
+}

@@ -582,3 +582,45 @@ did (median ~90-100%, ~44% exceed 100% again) -- the same rough pattern
 repeats rather than settling down.
 
 Dashboard (glossary of every term included): `attempts_and_second_leg_dashboard.html`.
+
+## Corrections, daily-context filters, Asian range, and the corrected zone simulation
+
+`python3 daily_context_features.py`, `python3 corrected_zone_simulation.py`
+
+**Two honest corrections, disclosed:**
+1. The previous round's 1-minute re-entry simulation (`winning_days_1m_reentry.py`)
+   let entries fire anywhere in the post-sweep window, not only while price was
+   actually inside the 50-100% ladder zone. That inflated attempt counts and
+   results. `corrected_zone_simulation.py` fixes this -- see below.
+2. The Asian-session-to-London-killzone gap (00:00-02:00) was never scanned by
+   the sweep-detection logic. Of 1,303 days, 79 had a sweep-and-reclaim entirely
+   inside that gap, invisible to every stat reported so far; of those, 18 days
+   had the FULL cycle (sweep, reversal, target) complete before 2 AM. These 18
+   days are absent from the 737/530 split entirely -- a real, small (1.4%) blind
+   spot, not previously disclosed.
+
+**Daily-context features (both tested, both null)**: whether yesterday's daily
+high/low was already taken by today (Asian session structurally can't take out
+yesterday's own high/low by definition -- see script docstring; only "taken by
+London time" vs "never" is meaningful, and that difference is not statistically
+significant, p=0.32-0.74), and whether yesterday's close was bullish/bearish
+vs the day before (also not significant, p=0.50-0.84). Neither is used as a
+filter below.
+
+**Asian range pips (real, significant)**: winning days average 18.3 pips
+(median 15.7), losing days average 21.8 pips (median 19.4) -- reach rate falls
+in a clean line from 72.0% (<10p range) to 40-44% (30p+ range).
+
+**Corrected zone simulation, all 737 days, two setups (ladder 1, then ladder 2
+if ladder 1 is violated), 1-minute entries gated to the 50-100% zone only**:
+~50% of days produce no valid entry at all under these exact rules; ~21% see
+both ladders violated (loss); ~23-25% win. Mean R per day across ALL 737 days
+(including zero-attempt days): **+0.04R (short) / +0.27R (long)** -- a real but
+modest result, nowhere near the previous round's uncorrected +1.96R/+2.39R.
+Applying the Asian-range filter to this specific mechanical system REVERSES
+the simple relationship from above: larger ranges (>20p) do better here
+(+0.71R short / +1.05R long) than smaller ones (-0.20R short / +0.20R long),
+likely because a bigger range produces a wider, more noise-resistant ladder --
+so that filter should NOT be applied here even though it helps raw reach rate.
+
+Dashboard (everything above, fully explained in place): `full_report_dashboard.html`.

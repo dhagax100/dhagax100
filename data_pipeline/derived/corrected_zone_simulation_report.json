@@ -1,0 +1,41 @@
+{
+  "high": {
+    "n_days": 350,
+    "final_status_counts": {
+      "ZONE_NEVER_REACHED_OR_NO_VALID_ENTRY": 182,
+      "WIN": 81,
+      "BOTH_LADDERS_VIOLATED": 74,
+      "LADDER1_VIOLATED_NO_SETUP2_CONFIRMATION": 5,
+      "OPEN": 4,
+      "LADDER1_VIOLATED_SETUP2_NO_EXTREME": 2,
+      "LADDER1_TOO_THIN": 1,
+      "LADDER1_VIOLATED_SETUP2_TOO_THIN": 1
+    },
+    "n_attempts": 327,
+    "n_wins": 81,
+    "n_losses": 242,
+    "attempt_win_rate_pct": 24.8,
+    "mean_r_per_day_with_attempts": 0.067,
+    "median_r_per_day_with_attempts": -1.0,
+    "n_days_with_attempts": 222
+  },
+  "low": {
+    "n_days": 387,
+    "final_status_counts": {
+      "ZONE_NEVER_REACHED_OR_NO_VALID_ENTRY": 191,
+      "WIN": 97,
+      "BOTH_LADDERS_VIOLATED": 82,
+      "LADDER1_VIOLATED_NO_SETUP2_CONFIRMATION": 8,
+      "OPEN": 6,
+      "LADDER1_VIOLATED_SETUP2_TOO_THIN": 2,
+      "LADDER1_TOO_THIN": 1
+    },
+    "n_attempts": 370,
+    "n_wins": 97,
+    "n_losses": 267,
+    "attempt_win_rate_pct": 26.2,
+    "mean_r_per_day_with_attempts": 0.431,
+    "median_r_per_day_with_attempts": -1.0,
+    "n_days_with_attempts": 246
+  }
+}
