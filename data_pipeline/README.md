@@ -475,3 +475,33 @@ exploratory grid would be circular. The 0/25/50/75% result is solid because
 those levels were fixed before looking at outcomes; finding the true optimum
 needs the same train-2021-2023/test-2024-2025 discipline as every other round
 here, not a number read off this chart.
+
+## Characterizing the 737 winning days: how far price runs before it turns
+
+`python3 characterize_winning_days.py` -- pure measurement of the 737 days
+where a sweep of one Asian side reached the opposite side (350 swept-high/
+fell-to-target, 387 swept-low/rose-to-target). Answers "how many pips does
+price run past the level before it finally turns."
+
+* **Overshoot beyond the level**: median 9.3 pips (high) / 7.8 pips (low)
+  before the final turn, but with a long tail -- 25% of days turn within
+  4 pips, 10% run past 24-25 pips, worst case 63-78 pips.
+* **Total one-direction swing** (Asian range + overshoot): median ~27 pips
+  both sides, 90th pct ~49-50 pips.
+* **Timing**: the turn itself comes fairly fast (median 28-38 minutes after
+  the sweep), but the run from that turn to target takes much longer (median
+  92-108 minutes) -- most of the trade's duration is the profitable leg, not
+  the overshoot.
+* **Choppiness**: a typical winning day pokes back past the level 3-4 separate
+  times before its final turn; 10% of days do it 10+ times.
+* **100% of winning days, on both sides, close at least one candle back
+  inside the Asian range before running to target** -- reclaiming the range
+  is a near-universal feature of how these days behave, confirming the
+  reclaim-based entry rule used in `final_validation.py` isn't an arbitrary
+  filter.
+* Overshoot size barely correlates with the night's own Asian range size
+  (r=0.15 high, r=0.08 low) -- a big range doesn't predict a big overshoot.
+* Short and long setups are close to mirror images of each other on every
+  metric -- no meaningful asymmetry between the two directions.
+
+Dashboard: `winning_days_dashboard.html` (published as an Artifact).
