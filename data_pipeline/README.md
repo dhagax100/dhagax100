@@ -624,3 +624,57 @@ likely because a bigger range produces a wider, more noise-resistant ladder --
 so that filter should NOT be applied here even though it helps raw reach rate.
 
 Dashboard (everything above, fully explained in place): `full_report_dashboard.html`.
+
+## Does yesterday's/D-2's daily candle predict which Asian side gets swept first?
+
+`python3 daily_relationship_analysis.py` -- tests two brainstormed setups
+(mirrored buy/sell): **setup 1** (timing) -- from today's Asian open (20:00
+EST) through our Frankfurt+London session end (05:00 EST), does price trade
+beyond *yesterday's* full daily high/low; **setup 2** (candle relationship) --
+did yesterday's whole candle body close entirely beyond the day-before-
+yesterday's low/high (stronger than the close-vs-close feature tested above,
+which was null). Both predict today sweeps one Asian side first, then hunts
+the other side plus yesterday's own extreme as an extended target. Unlike
+`asian_london_sessions_*.csv`'s killzone-only sweep column, sweep-side/timing
+here is rescanned across the full 00:00-12:00 EST window, closing the
+disclosed 00:00-02:00 gap blind spot from the previous round. Reported on two
+day universes: all 1,294 usable days, and the pre-existing 737-day
+outcome-selected cohort (kept for reference only -- a rule can't be judged on
+a sample that already excludes every day it would need to reject).
+
+**Setup 1 fires often (~31% of days each side) and calls the correct swept
+side 82.3% of the time** (n=699, all-days universe; baseline is ~50/50, so
+this is real signal, not a base-rate artifact). **Setup 2 is far too rare to
+judge** -- only 6-10 occurrences in 5 years of data (~0.3-0.5% of days); the
+"entire body beyond D-2's extreme" bar is too strict for EUR/USD's typical
+day-to-day range. **9.6% of days (124) are "mixed"** -- setup 1 calls one
+side but price sweeps the other first -- reported separately, not folded into
+either bucket. Sweep timing: 549 of 1,294 days (42%) sweep in the 00:00-01:00
+gap hour alone, more than any single hour inside the session itself (335 at
+01:00, 270 at 02:00, 90 at 03:00, 30 at 04:00) -- confirming the gap is not a
+minor edge case.
+
+**Caveat, stated plainly**: setup 1's window runs through 05:00, the same
+endpoint used to detect the actual sweep, so a chunk of its 82.3% accuracy
+may be the SAME breakout candle clearing both yesterday's high and today's
+Asian high near-simultaneously (a coincident, not a leading, signal) rather
+than true advance warning. Not yet measured here -- a needed follow-up before
+trusting this as an early filter.
+
+**Item 7 -- does it actually help, on the walk-forward-validated trade set
+(`final_validation.py`'s selected config, train 2021-2023 / test 2024-2025)**:
+no. On TRAIN, trades where setup 1 agreed with the side actually taken
+averaged **-0.182R** (n=83) vs **+0.165R** on no-signal trades and +0.092R
+baseline -- agreement correlates with WORSE outcomes, not better. On TEST,
+agreement trades averaged +0.121R, still below the +0.317R baseline; nearly
+all of test's total profit (+15.65R of +25.06R) came from just 4 trades that
+*contradicted* setup 1 (too small a sample to read as a real effect, but the
+direction is the opposite of the hypothesis either way). Setup 2 touches too
+few trades (1-3 per split) to conclude anything. **As currently formulated,
+neither setup should be added as a live filter** -- setup 1 predicts
+direction well but not profitability of the existing entry rule, and setup 2
+needs a looser, more frequent definition before it can be tested at all.
+
+Output: `daily_relationship_features.csv` (per-day features, including the
+Asian range export requested), `daily_relationship_report.json` (both
+universes + item 7 validation).
