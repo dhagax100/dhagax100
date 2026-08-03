@@ -661,20 +661,33 @@ Asian high near-simultaneously (a coincident, not a leading, signal) rather
 than true advance warning. Not yet measured here -- a needed follow-up before
 trusting this as an early filter.
 
-**Item 7 -- does it actually help, on the walk-forward-validated trade set
-(`final_validation.py`'s selected config, train 2021-2023 / test 2024-2025)**:
-no. On TRAIN, trades where setup 1 agreed with the side actually taken
-averaged **-0.182R** (n=83) vs **+0.165R** on no-signal trades and +0.092R
-baseline -- agreement correlates with WORSE outcomes, not better. On TEST,
-agreement trades averaged +0.121R, still below the +0.317R baseline; nearly
-all of test's total profit (+15.65R of +25.06R) came from just 4 trades that
-*contradicted* setup 1 (too small a sample to read as a real effect, but the
-direction is the opposite of the hypothesis either way). Setup 2 touches too
-few trades (1-3 per split) to conclude anything. **As currently formulated,
-neither setup should be added as a live filter** -- setup 1 predicts
-direction well but not profitability of the existing entry rule, and setup 2
-needs a looser, more frequent definition before it can be tested at all.
+**Item 7, deliberately kept free of R-multiples, win rate, or any other P&L
+number** -- those depend on a stop-loss distance, a target, an entry
+mechanic, and a position size, none of which this round of research fixes,
+so "is this profitable" cannot be honestly answered yet (see
+`final_validation.py`'s own config for how many choices that would require).
+Two purely behavioral questions instead, split train (2021-2023) / test
+(2024-2025) the same way as every other round here:
+
+1. **Is 82% accuracy a fluke of one stretch of history, or a repeatable
+   pattern?** Split in half: **82.4% on train (n=425) vs 82.1% on test
+   (n=274)** -- almost identical on data the pattern was never tuned
+   against. This is the strongest evidence yet that setup 1 is a real,
+   stable behavior, not noise from one lucky period.
+2. **On the days setup 1 correctly calls the side, does the move behave
+   differently?** Yes, and not the way you'd hope: the baseline chance
+   that ANY sweep completes the full round trip to the opposite Asian
+   level is ~58% (stable both periods). On days setup 1 correctly agrees,
+   that drops to **~48-49%** -- lower than baseline. On the "mixed" days
+   where setup 1 called the wrong side, whichever side actually did get
+   swept completes the full round trip **~82-88%** of the time -- far
+   higher. Consistent in both train and test. Read plainly: when this
+   timing pattern telegraphs the sweep in advance, the resulting move
+   tends to be the smaller, more hesitant kind; the cleanest, most
+   complete moves tend to show up specifically on the days the pattern
+   got surprised. Not yet a trading rule -- a behavioral clue to build one
+   from.
 
 Output: `daily_relationship_features.csv` (per-day features, including the
 Asian range export requested), `daily_relationship_report.json` (both
-universes + item 7 validation).
+universes + item 7's train/test pattern-stability check).

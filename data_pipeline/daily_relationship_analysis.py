@@ -36,13 +36,17 @@ Two day universes are reported, per instruction:
     actually uses: a rule can't be judged on a sample that has already
     excluded every day it would need to reject.
 
-Item 7 (optimized-rule validation) reuses the walk-forward-chosen trade set
-already on disk (final_train_trades.csv / final_test_trades.csv --
-final_validation.py's selected config, split train 2021-2023 / test
-2024-2025) rather than inventing a new R-multiple definition here: does
-knowing setup 1/2's predicted side, before the fact, associate with a
-better outcome on the trades that config actually took, split honestly by
-train vs test.
+Item 7 (optimized-rule validation) deliberately stays away from R-multiples,
+win rate, or any other P&L metric: those depend on choices -- stop-loss
+distance, target, entry mechanic, position size -- that this round of
+research doesn't fix, so "is this profitable" can't be honestly answered
+yet. Instead it asks two behavioral questions with the same train
+(2021-2023) / test (2024-2025) split used everywhere else in this project:
+(1) does setup 1's ~82% directional accuracy hold up on the later chunk of
+history it never touched, or was it a fluke of one period; (2) on the days
+it correctly calls the side, does the resulting move behave differently --
+more or less likely to run the full distance to the opposite Asian level --
+than an ordinary day.
 """
 import bisect
 import json
@@ -232,46 +236,59 @@ def describe_universe(df):
     return out
 
 
-def trade_stats(df):
-    if len(df) == 0:
-        return {"n": 0}
-    return {
-        "n": int(len(df)),
-        "win_rate_pct": round(float((df["outcome"] == "WIN").mean() * 100), 1),
-        "mean_r": round(float(df["r_multiple"].mean()), 3),
-        "total_r": round(float(df["r_multiple"].sum()), 2),
-    }
+TRAIN_END = pd.Timestamp("2023-12-31").date()
 
 
-def rule_validation(feat):
-    trades = []
-    for path, split in [("final_train_trades.csv", "train"), ("final_test_trades.csv", "test")]:
-        t = pd.read_csv(os.path.join(DERIVED, path), parse_dates=["date"])
-        t["date"] = t["date"].dt.date
-        t["split"] = split
-        trades.append(t)
-    trades = pd.concat(trades, ignore_index=True)
-    trades = trades.merge(
-        feat[["date", "predicted_side_setup1", "predicted_side_setup2", "predicted_side"]],
-        on="date", how="left",
-    )
+def reach_group(df):
+    """Pure behavioral outcome -- did price go on to fully reach the
+    opposite Asian level -- with NO stop-loss, target distance, position
+    size, or R-multiple assumption baked in anywhere. Deliberately kept out
+    of item 7: that P&L framing depends on choices (stop tightness, target,
+    entry mechanic) this round of research doesn't fix, so it can't honestly
+    be measured yet -- see README caveat."""
+    n = len(df)
+    return {"n": int(n), "reach_rate_pct": round(float(df["reached_target"].mean() * 100), 1)} if n else {"n": 0}
 
-    out = {}
+
+def pattern_stability(feat, rb):
+    """Is setup 1's behavior a stable, repeatable pattern, or a fluke of
+    one stretch of history? Split the five years into an earlier chunk
+    (2021-2023, "train") and a later chunk (2024-2025, "test") the same
+    way the rest of this project does, and check whether setup 1's numbers
+    look the same in both -- no rule was tuned on either chunk here, this
+    is purely "does the pattern repeat when you look somewhere else."
+    """
+    feat = feat.copy()
+    feat["split"] = feat["date"].apply(lambda d: "train" if d <= TRAIN_END else "test")
+
+    accuracy_by_split = {}
     for split in ["train", "test"]:
-        s = trades[trades["split"] == split]
-        split_out = {"baseline_all_trades": trade_stats(s)}
-        for label, col in [("setup1_only", "predicted_side_setup1"),
-                            ("setup2_only", "predicted_side_setup2"),
-                            ("combined", "predicted_side")]:
-            agrees = s[col] == s["side"]
-            contradicts = s[col].isin(["high", "low"]) & (s[col] != s["side"])
-            split_out[label] = {
-                "signal_agreed_with_trade_side": trade_stats(s[agrees]),
-                "signal_contradicted_trade_side": trade_stats(s[contradicts]),
-                "no_signal": trade_stats(s[s[col] == "none"]),
-            }
-        out[split] = split_out
-    return out
+        s = feat[feat["split"] == split]
+        accuracy_by_split[split] = {
+            "n_days": int(len(s)),
+            "directional_accuracy_setup1": directional_accuracy(s, "predicted_side_setup1"),
+            "mixed_day_rate_pct": round(float(s["mixed_day"].mean() * 100), 1),
+        }
+
+    # Second, separate question: on the days setup 1 correctly calls the
+    # side, does the resulting move behave any differently -- specifically,
+    # is it MORE or LESS likely to run the full distance to the opposite
+    # Asian level -- than an ordinary day? Still no R-multiple: "reached
+    # target" here just means "touched the opposite Asian level," a fixed
+    # price landmark, not a chosen stop/target.
+    m = rb.merge(feat[["date", "predicted_side_setup1", "mixed_day", "split"]], on="date", how="left")
+    reach_by_signal = {}
+    for split in ["train", "test", "all"]:
+        s = m if split == "all" else m[m["split"] == split]
+        agreed = s[(s["predicted_side_setup1"] == s["side"]) & (s["predicted_side_setup1"].isin(["high", "low"]))]
+        reach_by_signal[split] = {
+            "baseline_all_sweep_days": reach_group(s),
+            "setup1_agreed": reach_group(agreed),
+            "mixed_setup1_wrong": reach_group(s[s["mixed_day"] == True]),
+            "no_signal": reach_group(s[s["predicted_side_setup1"] == "none"]),
+        }
+
+    return {"directional_accuracy_train_vs_test": accuracy_by_split, "reach_rate_by_signal": reach_by_signal}
 
 
 def main():
@@ -285,7 +302,7 @@ def main():
     report = {
         "all_days": describe_universe(feat),
         "winning_737": describe_universe(feat[feat["date"].isin(winning_dates)]),
-        "item7_rule_validation_on_final_validation_trades": rule_validation(feat),
+        "item7_pattern_stability_no_pnl_assumptions": pattern_stability(feat, rb),
     }
 
     report_path = os.path.join(DERIVED, "daily_relationship_report.json")

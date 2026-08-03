@@ -92,140 +92,78 @@
     },
     "reached_yesterday_extreme_rate_pct": 58.8
   },
-  "item7_rule_validation_on_final_validation_trades": {
-    "train": {
-      "baseline_all_trades": {
-        "n": 167,
-        "win_rate_pct": 33.5,
-        "mean_r": 0.092,
-        "total_r": 15.36
+  "item7_pattern_stability_no_pnl_assumptions": {
+    "directional_accuracy_train_vs_test": {
+      "train": {
+        "n_days": 775,
+        "directional_accuracy_setup1": {
+          "n": 425,
+          "accuracy_pct": 82.4
+        },
+        "mixed_day_rate_pct": 9.7
       },
-      "setup1_only": {
-        "signal_agreed_with_trade_side": {
-          "n": 83,
-          "win_rate_pct": 25.3,
-          "mean_r": -0.182,
-          "total_r": -15.12
+      "test": {
+        "n_days": 519,
+        "directional_accuracy_setup1": {
+          "n": 274,
+          "accuracy_pct": 82.1
         },
-        "signal_contradicted_trade_side": {
-          "n": 6,
-          "win_rate_pct": 50.0,
-          "mean_r": 0.49,
-          "total_r": 2.94
-        },
-        "no_signal": {
-          "n": 72,
-          "win_rate_pct": 36.1,
-          "mean_r": 0.165,
-          "total_r": 11.86
-        }
-      },
-      "setup2_only": {
-        "signal_agreed_with_trade_side": {
-          "n": 2,
-          "win_rate_pct": 50.0,
-          "mean_r": 1.975,
-          "total_r": 3.95
-        },
-        "signal_contradicted_trade_side": {
-          "n": 1,
-          "win_rate_pct": 100.0,
-          "mean_r": 1.851,
-          "total_r": 1.85
-        },
-        "no_signal": {
-          "n": 164,
-          "win_rate_pct": 32.9,
-          "mean_r": 0.058,
-          "total_r": 9.56
-        }
-      },
-      "combined": {
-        "signal_agreed_with_trade_side": {
-          "n": 84,
-          "win_rate_pct": 26.2,
-          "mean_r": -0.121,
-          "total_r": -10.17
-        },
-        "signal_contradicted_trade_side": {
-          "n": 6,
-          "win_rate_pct": 50.0,
-          "mean_r": 0.49,
-          "total_r": 2.94
-        },
-        "no_signal": {
-          "n": 71,
-          "win_rate_pct": 35.2,
-          "mean_r": 0.097,
-          "total_r": 6.91
-        }
+        "mixed_day_rate_pct": 9.4
       }
     },
-    "test": {
-      "baseline_all_trades": {
-        "n": 79,
-        "win_rate_pct": 36.7,
-        "mean_r": 0.317,
-        "total_r": 25.06
-      },
-      "setup1_only": {
-        "signal_agreed_with_trade_side": {
-          "n": 44,
-          "win_rate_pct": 34.1,
-          "mean_r": 0.121,
-          "total_r": 5.34
+    "reach_rate_by_signal": {
+      "train": {
+        "baseline_all_sweep_days": {
+          "n": 762,
+          "reach_rate_pct": 58.0
         },
-        "signal_contradicted_trade_side": {
-          "n": 4,
-          "win_rate_pct": 100.0,
-          "mean_r": 3.912,
-          "total_r": 15.65
+        "setup1_agreed": {
+          "n": 357,
+          "reach_rate_pct": 47.9
         },
-        "no_signal": {
-          "n": 30,
-          "win_rate_pct": 30.0,
-          "mean_r": 0.069,
-          "total_r": 2.07
-        }
-      },
-      "setup2_only": {
-        "signal_agreed_with_trade_side": {
-          "n": 2,
-          "win_rate_pct": 50.0,
-          "mean_r": 0.677,
-          "total_r": 1.35
-        },
-        "signal_contradicted_trade_side": {
-          "n": 2,
-          "win_rate_pct": 50.0,
-          "mean_r": 0.455,
-          "total_r": 0.91
-        },
-        "no_signal": {
+        "mixed_setup1_wrong": {
           "n": 75,
-          "win_rate_pct": 36.0,
-          "mean_r": 0.304,
-          "total_r": 22.8
-        }
-      },
-      "combined": {
-        "signal_agreed_with_trade_side": {
-          "n": 43,
-          "win_rate_pct": 32.6,
-          "mean_r": 0.08,
-          "total_r": 3.43
-        },
-        "signal_contradicted_trade_side": {
-          "n": 4,
-          "win_rate_pct": 100.0,
-          "mean_r": 3.912,
-          "total_r": 15.65
+          "reach_rate_pct": 88.0
         },
         "no_signal": {
-          "n": 29,
-          "win_rate_pct": 31.0,
-          "mean_r": 0.106,
-          "total_r": 3.07
+          "n": 309,
+          "reach_rate_pct": 58.3
+        }
+      },
+      "test": {
+        "baseline_all_sweep_days": {
+          "n": 504,
+          "reach_rate_pct": 58.5
+        },
+        "setup1_agreed": {
+          "n": 230,
+          "reach_rate_pct": 49.1
+        },
+        "mixed_setup1_wrong": {
+          "n": 49,
+          "reach_rate_pct": 81.6
+        },
+        "no_signal": {
+          "n": 213,
+          "reach_rate_pct": 59.2
+        }
+      },
+      "all": {
+        "baseline_all_sweep_days": {
+          "n": 1267,
+          "reach_rate_pct": 58.2
+        },
+        "setup1_agreed": {
+          "n": 587,
+          "reach_rate_pct": 48.4
+        },
+        "mixed_setup1_wrong": {
+          "n": 124,
+          "reach_rate_pct": 85.5
+        },
+        "no_signal": {
+          "n": 522,
+          "reach_rate_pct": 58.6
         }
       }
     }
