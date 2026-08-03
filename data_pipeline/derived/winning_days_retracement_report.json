@@ -1,0 +1,112 @@
+{
+  "reclaim_breakdown": {
+    "won_737": {
+      "n": 737,
+      "reclaimed": 737,
+      "not_reclaimed": 0,
+      "reclaim_pct": 100.0,
+      "by_side": {
+        "high": {
+          "n": 350,
+          "reclaimed": 350,
+          "not_reclaimed": 0
+        },
+        "low": {
+          "n": 387,
+          "reclaimed": 387,
+          "not_reclaimed": 0
+        }
+      }
+    },
+    "lost_530": {
+      "n": 530,
+      "reclaimed": 452,
+      "not_reclaimed": 78,
+      "reclaim_pct": 85.3,
+      "by_side": {
+        "high": {
+          "n": 254,
+          "reclaimed": 220,
+          "not_reclaimed": 34
+        },
+        "low": {
+          "n": 276,
+          "reclaimed": 232,
+          "not_reclaimed": 44
+        }
+      }
+    }
+  },
+  "retracement_on_winning_days": {
+    "n_winning_days": 737,
+    "n_with_mss_leg_measured": 735,
+    "high": {
+      "desc": "swept high -> MSS down (0%=fresh low, 100%=prior swing high)",
+      "n": 349,
+      "coverage_pct_of_side_total": 99.7,
+      "stats": {
+        "n": 349,
+        "mean": 85.6,
+        "median": 100.0,
+        "p10": 26.8,
+        "p25": 52.7,
+        "p75": 110.9,
+        "p90": 127.6,
+        "min": -17.0,
+        "max": 300.0
+      },
+      "histogram": {
+        "labels": [
+          "<0% (never pulled back)",
+          "0-25%",
+          "25-50%",
+          "50-75%",
+          "75-100%",
+          ">100% (all the way to stop)"
+        ],
+        "counts": [
+          4,
+          28,
+          50,
+          53,
+          48,
+          166
+        ]
+      }
+    },
+    "low": {
+      "desc": "swept low -> MSS up (0%=fresh high, 100%=prior swing low)",
+      "n": 386,
+      "coverage_pct_of_side_total": 99.7,
+      "stats": {
+        "n": 386,
+        "mean": 85.6,
+        "median": 89.8,
+        "p10": 27.4,
+        "p25": 50.8,
+        "p75": 109.1,
+        "p90": 126.3,
+        "min": -71.1,
+        "max": 509.1
+      },
+      "histogram": {
+        "labels": [
+          "<0% (never pulled back)",
+          "0-25%",
+          "25-50%",
+          "50-75%",
+          "75-100%",
+          ">100% (all the way to stop)"
+        ],
+        "counts": [
+          3,
+          29,
+          63,
+          69,
+          53,
+          169
+        ]
+      }
+    }
+  }
+}

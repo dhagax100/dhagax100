@@ -505,3 +505,29 @@ price run past the level before it finally turns."
   metric -- no meaningful asymmetry between the two directions.
 
 Dashboard: `winning_days_dashboard.html` (published as an Artifact).
+
+## Follow-ups: reclaim on losing days, and pullback depth on winning days
+
+`python3 winning_days_retracement.py`
+
+**Reclaim status on the 530 days that did NOT reach target**: 452 (85.3%)
+still reclaimed the Asian range at some point; 78 (14.7%) never did. So
+reclaiming is common even on losing days -- it rules out the 15% that never
+reclaim (those never won either), but on its own it doesn't separate winners
+from losers, since 85% of losers reclaim too. This matters because the
+reclaim-based entry rule (`final_validation.py`) only filters out that ~15%,
+not the much larger group of losers that also reclaim before failing.
+
+**Retracement depth on the 737 winning days, 5-minute chart, restricted to
+only these days** (735 of 737 had a measurable MSS leg): once the reversal
+confirms (a swing break on the 5m chart) and a fresh extreme prints, price
+pulls back toward the old broken swing point (the leg's 0%-to-100% ladder,
+same construction as `mss_retracement.py`) by a **median of 90-100%** before
+finally continuing to target -- and 44-48% of the time it pulls back even
+**past** the old swing point (>100%). Shallow pullbacks under 25% happen on
+only ~8% of days. So on days that are already known to work, deep,
+uncomfortable-looking pullbacks are the normal behavior, not rare
+exceptions -- consistent with why the 75% limit-entry level outperformed
+shallower levels in the earlier all-setups backtest.
+
+Dashboard: `reclaim_retracement_dashboard.html` (published as an Artifact).
