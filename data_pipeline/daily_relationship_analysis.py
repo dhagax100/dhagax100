@@ -431,12 +431,20 @@ def pattern_stability(feat, rb):
 
 
 def day_partition(feat, rb):
-    """Every one of the 1,294 days, sorted into exactly one bucket -- not a
-    prediction test, a behavioral census. "Yesterday vs candle 2" only ever
-    lands in one of four states for a given day (engulfed / rule 2 /
-    setup 1b / silent), so partitioning on that first and then splitting
-    the "silent" remainder by whether setup 1a fired gives a clean,
-    non-overlapping split of all five years."""
+    """Every one of the 1,294 days, sorted into exactly one of 8 buckets --
+    the three tradeable setups, each split into TRADEABLE (the setup's
+    "daily liquidity grab" -- the candle-1-vs-candle-2 or today-vs-yesterday
+    break -- points the same way as the "session liquidity grab" -- which
+    Asian level actually got swept first) vs PROHIBITED (the two disagree,
+    excluded by design), plus engulfed and the residual where none of the
+    three setups fire at all. "Yesterday vs candle 2" only ever lands in one
+    of three states for a given day (engulfed / rule 2 / setup 1b), so
+    partitioning on that first and then splitting the remainder by whether
+    setup 1a fired gives a clean, non-overlapping split of all five years.
+    Every bucket is reported with what actually happens in it -- none of
+    them, including the residual, is "nothing to see": every day in the
+    dataset has real, describable behavior, just not always one of these
+    three setups' behavior."""
     feat = feat.copy()
     rb2 = rb.copy()
     feat["date"] = feat["date"].astype(str)
@@ -448,29 +456,52 @@ def day_partition(feat, rb):
     oneb = feat["setup1b_sell"] | feat["setup1b_buy"]
     onea = feat["setup1a_sell"] | feat["setup1a_buy"]
     engine_b_silent = ~engulf & ~rule2 & ~oneb
+    onea_only = engine_b_silent & onea
+    none_ = engine_b_silent & ~onea
 
-    buckets = {
-        "engulfed": engulf,
-        "rule2_confirmed_continuation": rule2,
-        "1b_unconfirmed_wick_vs_candle2": oneb,
-        "1a_only_todays_price_vs_yesterday": engine_b_silent & onea,
-        "nothing_fired": engine_b_silent & ~onea,
-    }
-
-    out = {}
-    n = len(feat)
-    for name, mask in buckets.items():
+    def describe(mask, pred_col=None):
         d = m[mask]
         nd = len(d)
         reach = d["reached_target"]
-        out[name] = {
+        out = {
             "n_days": int(nd),
-            "rate_pct": round(nd / n * 100, 1),
             "actual_side_counts": {str(k): int(v) for k, v in d["actual_side"].value_counts(dropna=False).items()},
+            "avg_asian_range_pips": round(float(d["asian_range_pips"].mean()), 1) if nd else None,
             "reach_rate_pct": round(float(reach.mean() * 100), 1) if reach.notna().sum() else None,
             "reach_rate_n": int(reach.notna().sum()),
         }
-    assert sum(b["n_days"] for b in out.values()) == n
+        if pred_col:
+            agrees = d[pred_col] == d["actual_side"]
+            out["daily_grab_matches_session_sweep_n"] = int(agrees.sum())
+            out["daily_grab_conflicts_session_sweep_n"] = int((~agrees).sum())
+        return out
+
+    def split_tradeable(mask, pred_col):
+        agrees = feat[pred_col] == feat["actual_side"]
+        return {
+            "tradeable_bias_matches_sweep": describe(mask & agrees),
+            "prohibited_bias_conflicts_with_sweep": describe(mask & ~agrees),
+        }
+
+    out = {
+        "engulfed": describe(engulf),
+        "rule2_continuation": split_tradeable(rule2, "predicted_side_setup2"),
+        "1b_unconfirmed_wick_vs_candle2": split_tradeable(oneb, "predicted_side_setup1"),
+        "1a_todays_price_vs_yesterday_only": split_tradeable(onea_only, "predicted_side_setup1"),
+        "none_of_the_three_setups": describe(none_),
+    }
+
+    n_check = (
+        out["engulfed"]["n_days"]
+        + out["rule2_continuation"]["tradeable_bias_matches_sweep"]["n_days"]
+        + out["rule2_continuation"]["prohibited_bias_conflicts_with_sweep"]["n_days"]
+        + out["1b_unconfirmed_wick_vs_candle2"]["tradeable_bias_matches_sweep"]["n_days"]
+        + out["1b_unconfirmed_wick_vs_candle2"]["prohibited_bias_conflicts_with_sweep"]["n_days"]
+        + out["1a_todays_price_vs_yesterday_only"]["tradeable_bias_matches_sweep"]["n_days"]
+        + out["1a_todays_price_vs_yesterday_only"]["prohibited_bias_conflicts_with_sweep"]["n_days"]
+        + out["none_of_the_three_setups"]["n_days"]
+    )
+    assert n_check == len(feat), f"{n_check} != {len(feat)}"
     return out
 
 

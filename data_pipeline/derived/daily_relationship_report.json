@@ -272,51 +272,87 @@
   "item9_day_partition": {
     "engulfed": {
       "n_days": 209,
-      "rate_pct": 16.2,
       "actual_side_counts": {
         "low": 113,
         "high": 96
       },
+      "avg_asian_range_pips": 21.1,
       "reach_rate_pct": 62.6,
       "reach_rate_n": 203
     },
-    "rule2_confirmed_continuation": {
-      "n_days": 501,
-      "rate_pct": 38.7,
-      "actual_side_counts": {
-        "low": 260,
-        "high": 241
+    "rule2_continuation": {
+      "tradeable_bias_matches_sweep": {
+        "n_days": 249,
+        "actual_side_counts": {
+          "low": 133,
+          "high": 116
+        },
+        "avg_asian_range_pips": 20.6,
+        "reach_rate_pct": 55.6,
+        "reach_rate_n": 239
       },
-      "reach_rate_pct": 57.4,
-      "reach_rate_n": 484
+      "prohibited_bias_conflicts_with_sweep": {
+        "n_days": 252,
+        "actual_side_counts": {
+          "low": 127,
+          "high": 125
+        },
+        "avg_asian_range_pips": 21.8,
+        "reach_rate_pct": 59.2,
+        "reach_rate_n": 245
+      }
     },
     "1b_unconfirmed_wick_vs_candle2": {
-      "n_days": 339,
-      "rate_pct": 26.2,
-      "actual_side_counts": {
-        "low": 177,
-        "high": 162
+      "tradeable_bias_matches_sweep": {
+        "n_days": 155,
+        "actual_side_counts": {
+          "low": 87,
+          "high": 68
+        },
+        "avg_asian_range_pips": 20.4,
+        "reach_rate_pct": 45.2,
+        "reach_rate_n": 155
       },
-      "reach_rate_pct": 56.7,
-      "reach_rate_n": 337
+      "prohibited_bias_conflicts_with_sweep": {
+        "n_days": 184,
+        "actual_side_counts": {
+          "high": 94,
+          "low": 90
+        },
+        "avg_asian_range_pips": 18.0,
+        "reach_rate_pct": 66.5,
+        "reach_rate_n": 182
+      }
     },
-    "1a_only_todays_price_vs_yesterday": {
-      "n_days": 195,
-      "rate_pct": 15.1,
-      "actual_side_counts": {
-        "low": 104,
-        "high": 91
+    "1a_todays_price_vs_yesterday_only": {
+      "tradeable_bias_matches_sweep": {
+        "n_days": 143,
+        "actual_side_counts": {
+          "high": 73,
+          "low": 70
+        },
+        "avg_asian_range_pips": 19.4,
+        "reach_rate_pct": 44.1,
+        "reach_rate_n": 143
       },
-      "reach_rate_pct": 57.2,
-      "reach_rate_n": 194
+      "prohibited_bias_conflicts_with_sweep": {
+        "n_days": 52,
+        "actual_side_counts": {
+          "low": 34,
+          "high": 18
+        },
+        "avg_asian_range_pips": 17.1,
+        "reach_rate_pct": 94.1,
+        "reach_rate_n": 51
+      }
     },
-    "nothing_fired": {
+    "none_of_the_three_setups": {
       "n_days": 50,
-      "rate_pct": 3.9,
       "actual_side_counts": {
         "high": 26,
         "low": 24
       },
+      "avg_asian_range_pips": 20.0,
       "reach_rate_pct": 62.5,
       "reach_rate_n": 48
     }

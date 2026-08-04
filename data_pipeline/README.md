@@ -772,27 +772,39 @@ setup 1 and setup 2 are close to guaranteed to clash whenever both are
 looking at the same live trend, which is why conflict (238) swamps
 agreement (20).
 
-**Every day, sorted into one bucket, no overlaps** (yesterday-vs-candle-2
-is always exactly one of these four states; the "silent" remainder is then
-split by whether today's own price broke yesterday's high/low):
+**Revised into 8 trading-relevant buckets** (superseding the first cut of
+this census): the three setups actually worth trading, each split into
+TRADEABLE -- the "daily liquidity grab" (the candle-1-vs-candle-2 break for
+setup 2 and 1b, or the today-vs-yesterday break for 1a) points the *same*
+way as the "session liquidity grab" (which Asian level actually swept
+first) -- vs PROHIBITED, where the two disagree and the setup is excluded
+by design. Every day lands in exactly one bucket, no overlaps, all 1,294
+accounted for:
 
-| Bucket | What it means | n | Actual side (AH / AL first) | Reach rate |
-|---|---|---|---|---|
-| Engulfed | Yesterday's wick reached past candle 2 on both sides -- too ambiguous, thrown out | 209 (16.2%) | 96 / 113 | 62.6% |
-| Rule 2 fires | Yesterday passed candle 2's high/low and closed beyond it -- confirmed continuation | 501 (38.7%) | 241 / 260 | 57.4% |
-| Setup 1b fires | Yesterday wicked past candle 2 but closed back -- unconfirmed | 339 (26.2%) | 162 / 177 | 56.7% |
-| Setup 1a only | Today broke yesterday's high/low; nothing notable about yesterday vs candle 2 | 195 (15.1%) | 91 / 104 | 57.2% |
-| Nothing fired | No signal from any of the above | 50 (3.9%) | 26 / 24 | 62.5% |
+| Bucket | What it means | n | Reach rate |
+|---|---|---|---|
+| Engulfed | Yesterday's wick reached past candle 2 on both sides -- too ambiguous, excluded outright | 209 (16.2%) | 62.6% |
+| Rule 2, tradeable | Confirmed candle-1-vs-candle-2 continuation, AND the Asian level that swept first matches the continuation direction | 249 (19.2%) | 55.6% |
+| Rule 2, prohibited | Confirmed continuation, but the *opposite* Asian level swept first -- excluded | 252 (19.5%) | 59.2% |
+| Setup 1b, tradeable | Unconfirmed wick vs candle 2, AND the Asian sweep agrees with the direction it implied | 155 (12.0%) | 45.2% |
+| Setup 1b, prohibited | Unconfirmed wick vs candle 2, but the Asian sweep went the other way -- excluded | 184 (14.2%) | 66.5% |
+| Setup 1a, tradeable | Today broke yesterday's high/low (nothing notable vs candle 2 that day), AND the Asian sweep agrees | 143 (11.1%) | 44.1% |
+| Setup 1a, prohibited | Today broke yesterday's high/low, but the Asian sweep went the other way -- excluded | 52 (4.0%) | 94.1% |
+| None of the three | No signal from any of the three setups | 50 (3.9%) | 62.5% |
 
-**The one thing that stands out:** reach rate isn't about which signal
-fired -- it clusters at 56.7-57.4% across all three "something fired"
-buckets, but jumps to 62.5-62.6% in the two buckets where *nothing usable*
-happened (engulfed, or genuinely silent). Read plainly: the days with no
-clean story going in are, if anything, slightly *more* likely to see the
-full round trip than the days where one of these rules had something to
-say. A small effect on this sample, but the direction is consistent with
-item 7's bigger finding -- confident-looking setups tend to produce the
-more hesitant moves.
+**The pattern holds inside every single one of the three setups, not just
+setup 1 overall (item 7):** in all three, the TRADEABLE bucket (daily grab
+agrees with the session sweep -- the only days these rules actually call
+for a trade) has the *lower* reach rate, and the PROHIBITED bucket (the
+excluded, conflicting days) has the *higher* one -- rule 2: 55.6% vs 59.2%;
+setup 1b: 45.2% vs 66.5%; setup 1a: a stark 44.1% vs 94.1%. Read plainly:
+by construction, "tradeable" here means the daily-timeframe grab and the
+session sweep agree -- and agreement keeps showing up on the smaller,
+weaker moves. The biggest, cleanest round trips in the whole dataset are
+concentrated in exactly the days this trading logic is built to exclude.
+That is the central, uncomfortable finding of this round: the rule for
+deciding what's tradeable is, on this evidence, selecting away from the
+best moves, not toward them.
 
 Output: `daily_relationship_report.json` gained
 `item9_rule1_rule2_conflict_detail` and `item9_day_partition`.
