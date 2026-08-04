@@ -445,7 +445,7 @@ def day_partition(feat, rb):
     them, including the residual, is "nothing to see": every day in the
     dataset has real, describable behavior, just not always one of these
     three setups' behavior."""
-    feat = feat.copy()
+    feat = feat.reset_index(drop=True).copy()
     rb2 = rb.copy()
     feat["date"] = feat["date"].astype(str)
     rb2["date"] = rb2["date"].astype(str)
@@ -502,6 +502,22 @@ def day_partition(feat, rb):
         + out["none_of_the_three_setups"]["n_days"]
     )
     assert n_check == len(feat), f"{n_check} != {len(feat)}"
+    return out
+
+
+def day_partition_train_vs_test(feat, rb):
+    """Same 8-bucket partition, run separately on train (2021-2023) and
+    test (2024-2025), plus "all" for reference -- is the tradeable-vs-
+    prohibited reach-rate gap in every setup a stable, repeatable pattern,
+    or did it only show up in one stretch of history? No bucket boundary
+    was tuned on either half; this is the same rule applied twice."""
+    feat = feat.copy()
+    feat["date"] = feat["date"].astype(str)
+    feat["split"] = feat["date"].apply(lambda d: "train" if pd.Timestamp(d).date() <= TRAIN_END else "test")
+    out = {}
+    for split in ["train", "test", "all"]:
+        s = feat if split == "all" else feat[feat["split"] == split]
+        out[split] = day_partition(s, rb)
     return out
 
 
@@ -583,7 +599,7 @@ def main():
         "item8_setup1_expanded_train_vs_test": setup1_expanded_stability(feat),
         "item8_setup2_train_vs_test": setup2_stability(feat),
         "item9_rule1_rule2_conflict_detail": rule1_rule2_conflict_detail(feat),
-        "item9_day_partition": day_partition(feat, rb),
+        "item10_day_partition_train_vs_test": day_partition_train_vs_test(feat, rb),
     }
 
     report_path = os.path.join(DERIVED, "daily_relationship_report.json")

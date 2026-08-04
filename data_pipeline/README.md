@@ -807,4 +807,46 @@ deciding what's tradeable is, on this evidence, selecting away from the
 best moves, not toward them.
 
 Output: `daily_relationship_report.json` gained
-`item9_rule1_rule2_conflict_detail` and `item9_day_partition`.
+`item9_rule1_rule2_conflict_detail` and (superseded below by item 10)
+`item9_day_partition`.
+
+## Item 10: the tradeable/prohibited pattern, split train vs test
+
+Same 8-bucket partition as item 9, run separately on 2021-2023 and
+2024-2025 -- no bucket boundary was tuned on either half, this is the same
+rule checked twice, the same discipline as every other round here.
+
+| Bucket | Train reach rate (n) | Test reach rate (n) | Verdict |
+|---|---|---|---|
+| Engulfed | 62.1% (137) | 63.4% (72) | Stable, but carries no directional bias either way |
+| Rule 2, tradeable | 54.1% (150) | 58.1% (99) | -- |
+| Rule 2, prohibited | 61.2% (155) | 55.9% (97) | **Reverses in test** -- not a reliable pattern |
+| Setup 1b, tradeable | 49.4% (85) | 40.0% (70) | -- |
+| Setup 1b, prohibited | 63.9% (97) | 69.4% (87) | **Holds and widens** -- the most robust finding of this round |
+| Setup 1a, tradeable | 40.0% (85) | 50.0% (58) | -- |
+| Setup 1a, prohibited | 96.9% (33) | 89.5% (19) | Holds strongly, but the smallest sample in the whole study |
+| None of the three | 57.6% (33) | 73.3% (17) | Too small either half to read anything into |
+
+**Setup 1b is the one pattern here that survives train/test cleanly and
+gets stronger, not weaker:** the tradeable/prohibited gap is 14.5 points in
+train (63.9 - 49.4) and widens to 29.4 points in test (69.4 - 40.0). This is
+now the best-supported behavioral edge in the whole project outside of
+setup 1a's own item-7 accuracy number.
+
+**Setup 1a's 94.1% headline number is directionally real but thin.** Both
+halves land far above their tradeable counterparts (96.9% train, 89.5%
+test) -- the direction is not in doubt -- but the prohibited bucket is only
+33 days in train and 19 in test. Treat the *existence* of the effect as
+established, the *exact size* of it as not yet pinned down.
+
+**Rule 2's tradeable/prohibited gap does not survive the split -- it
+flips.** Train shows the same pattern as the other two setups (prohibited
+higher than tradeable), but test reverses it (tradeable 58.1% > prohibited
+55.9%). Combined with rule 2's already-established ~50% directional
+accuracy (item 8), this is further evidence that rule 2, as defined, isn't
+capturing a real, stable edge -- unlike setup 1a and setup 1b, which both
+hold up.
+
+Output: `daily_relationship_report.json` gained
+`item10_day_partition_train_vs_test` (train/test/all, each holding the
+full item-9 8-bucket partition).
