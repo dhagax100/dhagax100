@@ -691,3 +691,66 @@ Two purely behavioral questions instead, split train (2021-2023) / test
 Output: `daily_relationship_features.csv` (per-day features, including the
 Asian range export requested), `daily_relationship_report.json` (both
 universes + item 7's train/test pattern-stability check).
+
+## Item 8: setup 2 corrected to a real continuation rule, setup 1 expanded, and the conflict scenarios
+
+Setup 2's definition was corrected: candle 1 (yesterday) must *pass* candle 2
+(day before yesterday)'s high/low -- wick beyond it -- **and close with its
+body beyond that same level** (confirmed break), not the old "entire body
+beyond it" test (which only fired 6-10 times in 5 years). Setup 1 was
+expanded to a second source: candle 1 wicking beyond candle 2 *without*
+closing beyond it (unconfirmed) is the same *kind* of signal as the original
+setup 1 (an unconfirmed break predicting reversal), just found a day
+earlier -- folded in as source 1b, alongside the original today-vs-yesterday
+check (source 1a). A day where candle 1's wick reaches beyond candle 2 on
+*both* sides is thrown out of both setups entirely (209 of 1,294 days,
+16.2%) -- too ambiguous to call.
+
+**Setup 2, corrected, does not predict which Asian side sweeps first.**
+501 days across 5 years give a clear call (258 buy-continuation, 243
+sell-continuation) -- a real sample this time -- and it's right about
+**49.2% of the time in 2021-2023, 50.5% in 2024-2025**: indistinguishable
+from a coin flip, stably, in both halves. Two real, same-setup examples with
+opposite outcomes: 2021-03-12 (correct, Asian low swept first as called) and
+2021-01-13 (wrong, Asian high swept first instead) -- otherwise identical
+setups.
+
+**Expanding setup 1 with source 1b made it worse, not better.** Source 1a
+alone: 82.3% accurate (n=699, unchanged from item 7). Source 1b alone:
+**45.7%** (n=339) -- also a coin flip, and stably so (47.8% train / 43.3%
+test). Combined (1a OR 1b): 76.0% (n=728) -- accuracy drops, and the
+train/test stability that made 1a so convincing breaks down too (82.4% /
+82.1% for 1a alone vs **77.6% / 73.4%** combined). Conclusion: keep setup 1
+exactly as originally defined (source 1a only); the expansion was worth
+testing but the numbers say no.
+
+**When setup 1 (expanded) and setup 2 both fire on the same day, they
+disagree about 9 times out of 10** -- 20 agree vs 238 conflict. They are not
+two flavors of the same edge; when both are in play they're usually fighting
+each other.
+
+**The specific conflict scenarios requested, all 5 years:**
+- Setup 2 fires, actual sweep matches it, setup 1 doesn't fire at all: 89 of
+  258 buy-continuation days, 80 of 243 sell-continuation days.
+- Setup 2's call invalidated -- today also breaks candle 1's own high/low
+  (PDH/PDL), not just the Asian extreme: 13 of 258 buy, 17 of 243 sell.
+- Setup 2 flat wrong -- the opposite Asian side sweeps first: 125 of 258 buy
+  (Asian high swept instead), 127 of 243 sell (Asian low swept instead).
+
+**Worked example: was 2024-04-23 (the "mixed" day flagged in item 7)
+actually setup 2 in play?** No -- setup 2 never fires that day; candle 1
+didn't close past candle 2 on either side. What actually happened: source 1a
+fired sell (today traded above yesterday's high, 1.06691) while source 1b
+fired buy (yesterday's low wicked below candle 2's low, 1.06456, but closed
+back above it at 1.06561, unconfirmed) -- a straight conflict between the
+two setup-1 sources, which the corrected system now honestly reports as "no
+call" rather than the single wrong "sell" the original, unexpanded setup 1
+alone would have given.
+
+Output: `daily_relationship_features.csv` gained `setup1a_sell/buy`,
+`setup1b_sell/buy`, `setup1_expanded_sell/buy`,
+`predicted_side_setup1_expanded`, and `yday_engulfs_d2` columns (setup2's
+own `setup2_sell/buy` columns keep their names but now hold the corrected
+definition). `daily_relationship_report.json` gained
+`item8_rule2_corrected_and_conflict_scenarios`,
+`item8_setup1_expanded_train_vs_test`, and `item8_setup2_train_vs_test`.

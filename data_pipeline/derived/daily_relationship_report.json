@@ -3,13 +3,13 @@
     "n_days": 1294,
     "setup1_sell_rate_pct": 30.5,
     "setup1_buy_rate_pct": 31.4,
-    "setup2_sell_rate_pct": 0.5,
-    "setup2_buy_rate_pct": 0.3,
+    "setup2_sell_rate_pct": 18.8,
+    "setup2_buy_rate_pct": 19.9,
     "predicted_side_counts": {
-      "none": 541,
-      "low": 355,
-      "high": 344,
-      "conflict": 54
+      "low": 362,
+      "high": 332,
+      "none": 311,
+      "conflict": 289
     },
     "actual_side_counts": {
       "low": 678,
@@ -21,17 +21,17 @@
       "accuracy_pct": 82.3
     },
     "directional_accuracy_setup2_only": {
-      "n": 10,
-      "accuracy_pct": 60.0
+      "n": 501,
+      "accuracy_pct": 49.7
     },
     "directional_accuracy_combined": {
-      "n": 699,
-      "accuracy_pct": 82.3
+      "n": 694,
+      "accuracy_pct": 81.1
     },
-    "mixed_day_n": 124,
-    "mixed_day_rate_pct": 9.6,
-    "agree_day_n": 575,
-    "agree_day_rate_pct": 44.4,
+    "mixed_day_n": 131,
+    "mixed_day_rate_pct": 10.1,
+    "agree_day_n": 563,
+    "agree_day_rate_pct": 43.5,
     "sweep_timing": {
       "in_session": 725,
       "before_session": 549,
@@ -50,13 +50,13 @@
     "n_days": 737,
     "setup1_sell_rate_pct": 32.4,
     "setup1_buy_rate_pct": 32.3,
-    "setup2_sell_rate_pct": 0.3,
-    "setup2_buy_rate_pct": 0.5,
+    "setup2_sell_rate_pct": 17.4,
+    "setup2_buy_rate_pct": 20.4,
     "predicted_side_counts": {
-      "none": 305,
-      "low": 193,
-      "high": 191,
-      "conflict": 48
+      "conflict": 195,
+      "none": 191,
+      "low": 188,
+      "high": 163
     },
     "actual_side_counts": {
       "low": 388,
@@ -68,17 +68,17 @@
       "accuracy_pct": 72.5
     },
     "directional_accuracy_setup2_only": {
-      "n": 6,
-      "accuracy_pct": 50.0
+      "n": 278,
+      "accuracy_pct": 47.8
     },
     "directional_accuracy_combined": {
-      "n": 384,
-      "accuracy_pct": 72.4
+      "n": 351,
+      "accuracy_pct": 72.6
     },
-    "mixed_day_n": 106,
-    "mixed_day_rate_pct": 14.4,
-    "agree_day_n": 278,
-    "agree_day_rate_pct": 37.7,
+    "mixed_day_n": 96,
+    "mixed_day_rate_pct": 13.0,
+    "agree_day_n": 255,
+    "agree_day_rate_pct": 34.6,
     "sweep_timing": {
       "in_session": 418,
       "before_session": 319
@@ -165,6 +165,95 @@
           "n": 522,
           "reach_rate_pct": 58.6
         }
+      }
+    }
+  },
+  "item8_rule2_corrected_and_conflict_scenarios": {
+    "yday_engulfs_d2_excluded": {
+      "n": 209,
+      "rate_pct": 16.2
+    },
+    "rule2_clean_no_rule1_in_play": {
+      "buy_continuation": {
+        "n": 89,
+        "of_rule2_buy_days": 258
+      },
+      "sell_continuation": {
+        "n": 80,
+        "of_rule2_sell_days": 243
+      }
+    },
+    "rule2_continuation_invalidated_by_pdl_pdh_break": {
+      "buy_continuation": {
+        "n": 13,
+        "of_rule2_buy_days": 258
+      },
+      "sell_continuation": {
+        "n": 17,
+        "of_rule2_sell_days": 243
+      }
+    },
+    "rule2_wrong_side_swept_first": {
+      "buy_continuation_but_AH_first": {
+        "n": 125,
+        "of_rule2_buy_days": 258
+      },
+      "sell_continuation_but_AL_first": {
+        "n": 127,
+        "of_rule2_sell_days": 243
+      }
+    },
+    "rule1_accuracy_by_source": {
+      "1a_today_live_break": {
+        "n": 699,
+        "accuracy_pct": 82.3
+      },
+      "1b_yesterday_wick_vs_candle2_only": {
+        "n": 339,
+        "accuracy_pct": 45.7
+      },
+      "1_expanded_combined": {
+        "n": 728,
+        "accuracy_pct": 76.0
+      }
+    },
+    "rule1_rule2_overlap": {
+      "both_fire_agree": 20,
+      "both_fire_conflict": 238,
+      "only_rule1_fires": 470,
+      "only_rule2_fires": 243,
+      "neither_fires": 323
+    }
+  },
+  "item8_setup1_expanded_train_vs_test": {
+    "train": {
+      "n_days": 775,
+      "directional_accuracy_setup1_expanded": {
+        "n": 438,
+        "accuracy_pct": 77.6
+      }
+    },
+    "test": {
+      "n_days": 519,
+      "directional_accuracy_setup1_expanded": {
+        "n": 290,
+        "accuracy_pct": 73.4
+      }
+    }
+  },
+  "item8_setup2_train_vs_test": {
+    "train": {
+      "n_days": 775,
+      "directional_accuracy_setup2": {
+        "n": 305,
+        "accuracy_pct": 49.2
+      }
+    },
+    "test": {
+      "n_days": 519,
+      "directional_accuracy_setup2": {
+        "n": 196,
+        "accuracy_pct": 50.5
       }
     }
   }

@@ -1,25 +1,45 @@
 """Does yesterday's / day-before-yesterday's daily-candle relationship predict
 which Asian side gets swept first today -- sell day vs buy day?
 
-Brainstormed setups (sell is the base case, buy is the exact mirror):
+Three candles: candle 2 = day before yesterday (closed, fixed), candle 1 =
+yesterday (also closed), candle 0 = today (live, what we trade).
 
-  Setup 1 (timing): from today's Asian-session open (20:00 EST prior day)
-    through the end of our Frankfurt+London trading session (05:00 EST),
-    does price trade beyond YESTERDAY's full daily high (sell) / low (buy)?
-    A fixed window, not sweep-time-bounded, so the signal is knowable
-    without already having seen where today's sweep ended up landing.
+  Setup 1 (reversal), EXPANDED -- fires from EITHER of two sources, both the
+    same *kind* of signal (an unconfirmed break predicting a reversal),
+    just found a day apart:
+      1a. today's live price trades beyond candle 1's (yesterday's) full
+          daily high (sell) / low (buy) -- the original definition.
+      1b. candle 1 only WICKED beyond candle 2's high/low without closing
+          beyond it (unconfirmed) -- known before today even opens.
+    Predicts: the Asian high sweeps first (sell) or Asian low sweeps first
+    (buy), then price hunts the opposite Asian level.
 
-  Setup 2 (candle relationship): did YESTERDAY's full candle body (both
-    open and close) sit entirely below (sell) / above (buy) the day-before-
-    yesterday's daily low / high -- a stronger continuation signal than
-    just "yesterday's close was lower/higher than D-2's close", which
-    `daily_context_features.py` already tested and found not significant.
+  Setup 2 (continuation): candle 1 traded beyond candle 2's high/low AND
+    CLOSED with its body beyond that same level (confirmed, not just a
+    wick). Predicts a "keep going" day: sweep the opposite Asian level
+    first as a shakeout (Asian low for a buy-continuation, Asian high for
+    a sell-continuation), then continue toward the same-direction Asian
+    level and candle 1's own high/low (PDH/PDL). If today also closes with
+    body beyond candle 1's high/low, the same call repeats tomorrow using
+    today as the new candle 1 -- a chain that only breaks the day a candle
+    wicks through without closing beyond (at which point it becomes a
+    setup-1b reversal signal instead).
+
+  A day where candle 1's wick reaches beyond candle 2 on BOTH sides (high
+  AND low) is thrown out of both setups entirely -- too ambiguous to call.
 
 Either setup predicts today opens, sweeps the Asian high first (sell) or
 low first (buy), then hunts the opposite Asian level plus yesterday's own
 extreme as an extended target. "Mixed" days -- where a setup predicts one
 side but price actually sweeps the other side first -- are reported as
 their own category, not folded into agree/disagree, per instruction.
+
+`rule2_scenarios()` reports the specific edge cases requested: days where
+setup 2 is clean with no setup-1 signal in play at all; days where setup 2's
+continuation story is invalidated because today broke both the Asian low
+and candle 1's own low (or the mirror); the both-sides-engulfed exclusion
+count; setup 1's accuracy broken down by source (1a vs 1b); and setup 2's
+wrong-side-swept-first rate.
 
 Sweep-side/timing detection here scans the FULL window from Asian close
 (00:00, the earliest an Asian extreme could possibly be swept) through the
@@ -127,12 +147,38 @@ def build_features():
         ext_end_ts = pd.Timestamp(day).replace(hour=EXTENDED_END_H)
 
         window = raw.loc[asian_open_ts:kz_end_ts - pd.Timedelta(seconds=1)]
-        setup1_sell = bool(len(window) and (window["high"] > y["high"]).any())
-        setup1_buy = bool(len(window) and (window["low"] < y["low"]).any())
+        setup1a_sell = bool(len(window) and (window["high"] > y["high"]).any())
+        setup1a_buy = bool(len(window) and (window["low"] < y["low"]).any())
 
-        y_body_lo, y_body_hi = min(y["open"], y["close"]), max(y["open"], y["close"])
-        setup2_sell = bool(y_body_hi < d2["low"])
-        setup2_buy = bool(y_body_lo > d2["high"])
+        # Candle 1 (yesterday) vs candle 2 (day before yesterday): did
+        # candle 1 wick beyond candle 2's high/low, and did it CLOSE beyond
+        # that same level (confirmed) or only wick through it (unconfirmed)?
+        yday_wick_above_d2 = bool(y["high"] > d2["high"])
+        yday_wick_below_d2 = bool(y["low"] < d2["low"])
+        yday_engulfs_d2 = yday_wick_above_d2 and yday_wick_below_d2
+        yday_closes_above_d2 = bool(y["close"] > d2["high"])
+        yday_closes_below_d2 = bool(y["close"] < d2["low"])
+
+        # Setup 2 (continuation): confirmed break -- body closed beyond it.
+        setup2_buy = bool(yday_wick_above_d2 and yday_closes_above_d2 and not yday_engulfs_d2)
+        setup2_sell = bool(yday_wick_below_d2 and yday_closes_below_d2 and not yday_engulfs_d2)
+
+        # Setup 1b: unconfirmed break -- wicked beyond candle 2 but closed
+        # back on the near side. Same kind of signal as 1a, folded into
+        # setup 1 below.
+        setup1b_sell = bool(yday_wick_above_d2 and not yday_closes_above_d2 and not yday_engulfs_d2)
+        setup1b_buy = bool(yday_wick_below_d2 and not yday_closes_below_d2 and not yday_engulfs_d2)
+
+        # setup1_sell/buy stays the ORIGINAL, 1a-only definition -- item 7's
+        # already-validated 82.3% accuracy and its train/test stability are
+        # about THIS. setup1_expanded_* (1a OR 1b) is a separate, diagnostic
+        # column: item 8 tests whether folding 1b in helps or hurts, and the
+        # answer (README, item 8) is that it hurts -- so it's kept as an
+        # alternative to compare against, not adopted as the real Rule 1.
+        setup1_sell = setup1a_sell
+        setup1_buy = setup1a_buy
+        setup1_expanded_sell = setup1a_sell or setup1b_sell
+        setup1_expanded_buy = setup1a_buy or setup1b_buy
 
         asian_high, asian_low = r["asian_high"], r["asian_low"]
         post = raw.loc[asian_close_ts:ext_end_ts - pd.Timedelta(seconds=1)]
@@ -155,6 +201,7 @@ def build_features():
             reached_yday_extreme = bool((post.loc[actual_time:]["high"] >= y["high"]).any())
 
         predicted_setup1 = combine_side(setup1_sell, setup1_buy)
+        predicted_setup1_expanded = combine_side(setup1_expanded_sell, setup1_expanded_buy)
         predicted_setup2 = combine_side(setup2_sell, setup2_buy)
         predicted_combined = combine_side(setup1_sell or setup2_sell, setup1_buy or setup2_buy)
 
@@ -171,8 +218,13 @@ def build_features():
             "yday_high": y["high"], "yday_low": y["low"], "yday_open": y["open"], "yday_close": y["close"],
             "dby_high": d2["high"], "dby_low": d2["low"],
             "setup1_sell": setup1_sell, "setup1_buy": setup1_buy,
+            "setup1a_sell": setup1a_sell, "setup1a_buy": setup1a_buy,
+            "setup1b_sell": setup1b_sell, "setup1b_buy": setup1b_buy,
+            "setup1_expanded_sell": setup1_expanded_sell, "setup1_expanded_buy": setup1_expanded_buy,
             "setup2_sell": setup2_sell, "setup2_buy": setup2_buy,
+            "yday_engulfs_d2": yday_engulfs_d2,
             "predicted_side_setup1": predicted_setup1,
+            "predicted_side_setup1_expanded": predicted_setup1_expanded,
             "predicted_side_setup2": predicted_setup2,
             "predicted_side": predicted_combined,
             "actual_side": actual_side,
@@ -236,6 +288,87 @@ def describe_universe(df):
     return out
 
 
+def rule2_scenarios(feat):
+    """The specific edge-case scenarios requested: where setup 1 (expanded)
+    and setup 2 (continuation) can point at different things, and the cases
+    that make one or the other inapplicable for a given day. Reported as
+    plain 5-year counts, not train/test -- these are diagnostics on the
+    rule definitions themselves, not a claim about profitability."""
+    n = len(feat)
+
+    def rate(mask):
+        return round(float(mask.sum() / n * 100), 1) if n else None
+
+    out = {}
+
+    out["yday_engulfs_d2_excluded"] = {
+        "n": int(feat["yday_engulfs_d2"].sum()), "rate_pct": rate(feat["yday_engulfs_d2"]),
+    }
+
+    r2_buy = feat[feat["setup2_buy"]]
+    r2_sell = feat[feat["setup2_sell"]]
+
+    # Scenario 1: setup 2 fires, today's actual sweep matches it cleanly
+    # (AL first for buy-continuation, AH first for sell-continuation), and
+    # setup 1 doesn't fire at all that day -- no conflict, no room for it.
+    clean_buy = r2_buy[(r2_buy["actual_side"] == "low") & (~r2_buy["setup1_expanded_sell"]) & (~r2_buy["setup1_expanded_buy"])]
+    clean_sell = r2_sell[(r2_sell["actual_side"] == "high") & (~r2_sell["setup1_expanded_sell"]) & (~r2_sell["setup1_expanded_buy"])]
+    out["rule2_clean_no_rule1_in_play"] = {
+        "buy_continuation": {"n": int(len(clean_buy)), "of_rule2_buy_days": int(len(r2_buy))},
+        "sell_continuation": {"n": int(len(clean_sell)), "of_rule2_sell_days": int(len(r2_sell))},
+    }
+
+    # Scenario 2: setup 2 (continuation) was the call, but today's price
+    # broke BOTH the Asian low/high AND candle 1's own low/high (PDL/PDH)
+    # -- not just the shakeout setup 2 expects. setup1a_buy/sell already IS
+    # "today traded beyond PDL/PDH."
+    invalidated_buy = r2_buy[r2_buy["setup1a_buy"]]
+    invalidated_sell = r2_sell[r2_sell["setup1a_sell"]]
+    out["rule2_continuation_invalidated_by_pdl_pdh_break"] = {
+        "buy_continuation": {"n": int(len(invalidated_buy)), "of_rule2_buy_days": int(len(r2_buy))},
+        "sell_continuation": {"n": int(len(invalidated_sell)), "of_rule2_sell_days": int(len(r2_sell))},
+    }
+
+    # Scenario 5: setup 2 was the call, but the actual first sweep was the
+    # opposite side entirely -- a flat-wrong call for setup 2.
+    wrong_buy = r2_buy[r2_buy["actual_side"] == "high"]
+    wrong_sell = r2_sell[r2_sell["actual_side"] == "low"]
+    out["rule2_wrong_side_swept_first"] = {
+        "buy_continuation_but_AH_first": {"n": int(len(wrong_buy)), "of_rule2_buy_days": int(len(r2_buy))},
+        "sell_continuation_but_AL_first": {"n": int(len(wrong_sell)), "of_rule2_sell_days": int(len(r2_sell))},
+    }
+
+    # Scenario 4: setup 1 (expanded) accuracy broken down by which source
+    # fired -- today's live PDH/PDL break (1a, the original) vs yesterday's
+    # unconfirmed wick against candle 2 (1b, the new source) -- to see
+    # whether the expansion is pulling its weight or diluting the signal.
+    def source_accuracy(sell_col, buy_col):
+        d = feat[feat[sell_col] | feat[buy_col]].copy()
+        d["_side"] = [combine_side(s, b) for s, b in zip(d[sell_col], d[buy_col])]
+        return directional_accuracy(d, "_side")
+
+    out["rule1_accuracy_by_source"] = {
+        "1a_today_live_break": source_accuracy("setup1a_sell", "setup1a_buy"),
+        "1b_yesterday_wick_vs_candle2_only": source_accuracy("setup1b_sell", "setup1b_buy"),
+        "1_expanded_combined": directional_accuracy(feat, "predicted_side_setup1_expanded"),
+    }
+
+    # How often do setup 1 (expanded) and setup 2 (continuation) even
+    # overlap on the same day, and when they do, do they agree or conflict?
+    has1 = feat["predicted_side_setup1_expanded"].isin(["high", "low"])
+    has2 = feat["predicted_side_setup2"].isin(["high", "low"])
+    same = feat["predicted_side_setup1_expanded"] == feat["predicted_side_setup2"]
+    out["rule1_rule2_overlap"] = {
+        "both_fire_agree": int((has1 & has2 & same).sum()),
+        "both_fire_conflict": int((has1 & has2 & ~same).sum()),
+        "only_rule1_fires": int((has1 & ~has2).sum()),
+        "only_rule2_fires": int((~has1 & has2).sum()),
+        "neither_fires": int((~has1 & ~has2).sum()),
+    }
+
+    return out
+
+
 TRAIN_END = pd.Timestamp("2023-12-31").date()
 
 
@@ -258,8 +391,14 @@ def pattern_stability(feat, rb):
     look the same in both -- no rule was tuned on either chunk here, this
     is purely "does the pattern repeat when you look somewhere else."
     """
+    # setup 1's own mixed/agree, computed fresh here rather than reusing the
+    # feat-level "mixed_day"/"agree_day" columns -- those are about the
+    # setup1-OR-setup2 FUSED prediction, so now that setup 2 fires on ~40%
+    # of days instead of ~1%, they no longer mean "setup 1 was mixed."
     feat = feat.copy()
     feat["split"] = feat["date"].apply(lambda d: "train" if d <= TRAIN_END else "test")
+    feat["setup1_has_signal"] = feat["predicted_side_setup1"].isin(["high", "low"])
+    feat["setup1_mixed"] = feat["setup1_has_signal"] & (feat["predicted_side_setup1"] != feat["actual_side"])
 
     accuracy_by_split = {}
     for split in ["train", "test"]:
@@ -267,7 +406,7 @@ def pattern_stability(feat, rb):
         accuracy_by_split[split] = {
             "n_days": int(len(s)),
             "directional_accuracy_setup1": directional_accuracy(s, "predicted_side_setup1"),
-            "mixed_day_rate_pct": round(float(s["mixed_day"].mean() * 100), 1),
+            "mixed_day_rate_pct": round(float(s["setup1_mixed"].mean() * 100), 1),
         }
 
     # Second, separate question: on the days setup 1 correctly calls the
@@ -276,7 +415,7 @@ def pattern_stability(feat, rb):
     # Asian level -- than an ordinary day? Still no R-multiple: "reached
     # target" here just means "touched the opposite Asian level," a fixed
     # price landmark, not a chosen stop/target.
-    m = rb.merge(feat[["date", "predicted_side_setup1", "mixed_day", "split"]], on="date", how="left")
+    m = rb.merge(feat[["date", "predicted_side_setup1", "setup1_mixed", "split"]], on="date", how="left")
     reach_by_signal = {}
     for split in ["train", "test", "all"]:
         s = m if split == "all" else m[m["split"] == split]
@@ -284,11 +423,44 @@ def pattern_stability(feat, rb):
         reach_by_signal[split] = {
             "baseline_all_sweep_days": reach_group(s),
             "setup1_agreed": reach_group(agreed),
-            "mixed_setup1_wrong": reach_group(s[s["mixed_day"] == True]),
+            "mixed_setup1_wrong": reach_group(s[s["setup1_mixed"] == True]),
             "no_signal": reach_group(s[s["predicted_side_setup1"] == "none"]),
         }
 
     return {"directional_accuracy_train_vs_test": accuracy_by_split, "reach_rate_by_signal": reach_by_signal}
+
+
+def setup1_expanded_stability(feat):
+    """Same train/test check as item 7, run on setup1_expanded (1a OR 1b)
+    instead of the original 1a-only setup 1 -- does folding in source 1b
+    hold up across both halves of history the way 1a alone does, or does it
+    break the stability that made 1a convincing?"""
+    feat = feat.copy()
+    feat["split"] = feat["date"].apply(lambda d: "train" if d <= TRAIN_END else "test")
+    out = {}
+    for split in ["train", "test"]:
+        s = feat[feat["split"] == split]
+        out[split] = {
+            "n_days": int(len(s)),
+            "directional_accuracy_setup1_expanded": directional_accuracy(s, "predicted_side_setup1_expanded"),
+        }
+    return out
+
+
+def setup2_stability(feat):
+    """Same train/test check as setup 1, now run on the corrected setup 2
+    (continuation) definition -- is its accuracy real, or a fluke of one
+    stretch of history?"""
+    feat = feat.copy()
+    feat["split"] = feat["date"].apply(lambda d: "train" if d <= TRAIN_END else "test")
+    out = {}
+    for split in ["train", "test"]:
+        s = feat[feat["split"] == split]
+        out[split] = {
+            "n_days": int(len(s)),
+            "directional_accuracy_setup2": directional_accuracy(s, "predicted_side_setup2"),
+        }
+    return out
 
 
 def main():
@@ -303,6 +475,9 @@ def main():
         "all_days": describe_universe(feat),
         "winning_737": describe_universe(feat[feat["date"].isin(winning_dates)]),
         "item7_pattern_stability_no_pnl_assumptions": pattern_stability(feat, rb),
+        "item8_rule2_corrected_and_conflict_scenarios": rule2_scenarios(feat),
+        "item8_setup1_expanded_train_vs_test": setup1_expanded_stability(feat),
+        "item8_setup2_train_vs_test": setup2_stability(feat),
     }
 
     report_path = os.path.join(DERIVED, "daily_relationship_report.json")
