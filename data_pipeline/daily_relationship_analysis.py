@@ -430,6 +430,79 @@ def pattern_stability(feat, rb):
     return {"directional_accuracy_train_vs_test": accuracy_by_split, "reach_rate_by_signal": reach_by_signal}
 
 
+def day_partition(feat, rb):
+    """Every one of the 1,294 days, sorted into exactly one bucket -- not a
+    prediction test, a behavioral census. "Yesterday vs candle 2" only ever
+    lands in one of four states for a given day (engulfed / rule 2 /
+    setup 1b / silent), so partitioning on that first and then splitting
+    the "silent" remainder by whether setup 1a fired gives a clean,
+    non-overlapping split of all five years."""
+    feat = feat.copy()
+    rb2 = rb.copy()
+    feat["date"] = feat["date"].astype(str)
+    rb2["date"] = rb2["date"].astype(str)
+    m = feat.merge(rb2[["date", "reached_target"]], on="date", how="left")
+
+    engulf = feat["yday_engulfs_d2"]
+    rule2 = feat["setup2_sell"] | feat["setup2_buy"]
+    oneb = feat["setup1b_sell"] | feat["setup1b_buy"]
+    onea = feat["setup1a_sell"] | feat["setup1a_buy"]
+    engine_b_silent = ~engulf & ~rule2 & ~oneb
+
+    buckets = {
+        "engulfed": engulf,
+        "rule2_confirmed_continuation": rule2,
+        "1b_unconfirmed_wick_vs_candle2": oneb,
+        "1a_only_todays_price_vs_yesterday": engine_b_silent & onea,
+        "nothing_fired": engine_b_silent & ~onea,
+    }
+
+    out = {}
+    n = len(feat)
+    for name, mask in buckets.items():
+        d = m[mask]
+        nd = len(d)
+        reach = d["reached_target"]
+        out[name] = {
+            "n_days": int(nd),
+            "rate_pct": round(nd / n * 100, 1),
+            "actual_side_counts": {str(k): int(v) for k, v in d["actual_side"].value_counts(dropna=False).items()},
+            "reach_rate_pct": round(float(reach.mean() * 100), 1) if reach.notna().sum() else None,
+            "reach_rate_n": int(reach.notna().sum()),
+        }
+    assert sum(b["n_days"] for b in out.values()) == n
+    return out
+
+
+def rule1_rule2_conflict_detail(feat):
+    """Elaborates the agree/conflict stat: on days where setup 1 (expanded)
+    AND setup 2 both give a clean single-side call, which source inside
+    setup 1 (1a or 1b) is actually driving it, and what direction pairing
+    shows up."""
+    has1 = feat["predicted_side_setup1"].isin(["high", "low"])
+    has2 = feat["predicted_side_setup2"].isin(["high", "low"])
+    both = feat[has1 & has2]
+
+    def source(row):
+        a = bool(row["setup1a_sell"] or row["setup1a_buy"])
+        b = bool(row["setup1b_sell"] or row["setup1b_buy"])
+        if a and b:
+            return "both_1a_and_1b"
+        if a:
+            return "1a"
+        if b:
+            return "1b"
+        return "neither"  # shouldn't happen given has1 is true
+
+    src = both.apply(source, axis=1)
+    pairs = both.groupby([both["predicted_side_setup1"], both["predicted_side_setup2"]]).size()
+    return {
+        "n_both_fire": int(len(both)),
+        "source_of_setup1_side": {str(k): int(v) for k, v in src.value_counts().items()},
+        "direction_pairs": {f"{a}_{b}": int(v) for (a, b), v in pairs.items()},
+    }
+
+
 def setup1_expanded_stability(feat):
     """Same train/test check as item 7, run on setup1_expanded (1a OR 1b)
     instead of the original 1a-only setup 1 -- does folding in source 1b
@@ -478,6 +551,8 @@ def main():
         "item8_rule2_corrected_and_conflict_scenarios": rule2_scenarios(feat),
         "item8_setup1_expanded_train_vs_test": setup1_expanded_stability(feat),
         "item8_setup2_train_vs_test": setup2_stability(feat),
+        "item9_rule1_rule2_conflict_detail": rule1_rule2_conflict_detail(feat),
+        "item9_day_partition": day_partition(feat, rb),
     }
 
     report_path = os.path.join(DERIVED, "daily_relationship_report.json")

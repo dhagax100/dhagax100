@@ -754,3 +754,45 @@ own `setup2_sell/buy` columns keep their names but now hold the corrected
 definition). `daily_relationship_report.json` gained
 `item8_rule2_corrected_and_conflict_scenarios`,
 `item8_setup1_expanded_train_vs_test`, and `item8_setup2_train_vs_test`.
+
+## Item 9: why setup 1 and setup 2 conflict so often, and a full census of all 1,294 days
+
+**Why the 238-vs-20 conflict rate isn't incidental -- it's structural.**
+Every one of the 258 days where setup 1 (expanded) and setup 2 both give a
+clean call is driven by source 1a, never 1b (`rule1_rule2_conflict_detail`
+in the report -- 1b and setup 2 literally cannot co-occur, they're two
+outcomes of the same yesterday-vs-candle-2 check, so this checks whether 1a
+independently piles on). The two rules disagree because they read the same
+event -- price trading above a prior high -- as opposite things: setup 1's
+1a treats *any* break of yesterday's high as reversal bait; setup 2 treats a
+*confirmed* break of candle 2's high (yesterday's close held above it) as a
+trend that's still running. In a genuine uptrend, today extending past
+yesterday's high is exactly what a real continuation looks like -- so
+setup 1 and setup 2 are close to guaranteed to clash whenever both are
+looking at the same live trend, which is why conflict (238) swamps
+agreement (20).
+
+**Every day, sorted into one bucket, no overlaps** (yesterday-vs-candle-2
+is always exactly one of these four states; the "silent" remainder is then
+split by whether today's own price broke yesterday's high/low):
+
+| Bucket | What it means | n | Actual side (AH / AL first) | Reach rate |
+|---|---|---|---|---|
+| Engulfed | Yesterday's wick reached past candle 2 on both sides -- too ambiguous, thrown out | 209 (16.2%) | 96 / 113 | 62.6% |
+| Rule 2 fires | Yesterday passed candle 2's high/low and closed beyond it -- confirmed continuation | 501 (38.7%) | 241 / 260 | 57.4% |
+| Setup 1b fires | Yesterday wicked past candle 2 but closed back -- unconfirmed | 339 (26.2%) | 162 / 177 | 56.7% |
+| Setup 1a only | Today broke yesterday's high/low; nothing notable about yesterday vs candle 2 | 195 (15.1%) | 91 / 104 | 57.2% |
+| Nothing fired | No signal from any of the above | 50 (3.9%) | 26 / 24 | 62.5% |
+
+**The one thing that stands out:** reach rate isn't about which signal
+fired -- it clusters at 56.7-57.4% across all three "something fired"
+buckets, but jumps to 62.5-62.6% in the two buckets where *nothing usable*
+happened (engulfed, or genuinely silent). Read plainly: the days with no
+clean story going in are, if anything, slightly *more* likely to see the
+full round trip than the days where one of these rules had something to
+say. A small effect on this sample, but the direction is consistent with
+item 7's bigger finding -- confident-looking setups tend to produce the
+more hesitant moves.
+
+Output: `daily_relationship_report.json` gained
+`item9_rule1_rule2_conflict_detail` and `item9_day_partition`.

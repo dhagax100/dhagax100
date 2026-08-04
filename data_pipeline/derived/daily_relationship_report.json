@@ -256,5 +256,69 @@
         "accuracy_pct": 50.5
       }
     }
+  },
+  "item9_rule1_rule2_conflict_detail": {
+    "n_both_fire": 258,
+    "source_of_setup1_side": {
+      "1a": 258
+    },
+    "direction_pairs": {
+      "high_high": 11,
+      "high_low": 124,
+      "low_high": 114,
+      "low_low": 9
+    }
+  },
+  "item9_day_partition": {
+    "engulfed": {
+      "n_days": 209,
+      "rate_pct": 16.2,
+      "actual_side_counts": {
+        "low": 113,
+        "high": 96
+      },
+      "reach_rate_pct": 62.6,
+      "reach_rate_n": 203
+    },
+    "rule2_confirmed_continuation": {
+      "n_days": 501,
+      "rate_pct": 38.7,
+      "actual_side_counts": {
+        "low": 260,
+        "high": 241
+      },
+      "reach_rate_pct": 57.4,
+      "reach_rate_n": 484
+    },
+    "1b_unconfirmed_wick_vs_candle2": {
+      "n_days": 339,
+      "rate_pct": 26.2,
+      "actual_side_counts": {
+        "low": 177,
+        "high": 162
+      },
+      "reach_rate_pct": 56.7,
+      "reach_rate_n": 337
+    },
+    "1a_only_todays_price_vs_yesterday": {
+      "n_days": 195,
+      "rate_pct": 15.1,
+      "actual_side_counts": {
+        "low": 104,
+        "high": 91
+      },
+      "reach_rate_pct": 57.2,
+      "reach_rate_n": 194
+    },
+    "nothing_fired": {
+      "n_days": 50,
+      "rate_pct": 3.9,
+      "actual_side_counts": {
+        "high": 26,
+        "low": 24
+      },
+      "reach_rate_pct": 62.5,
+      "reach_rate_n": 48
+    }
   }
 }
