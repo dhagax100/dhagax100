@@ -38,7 +38,7 @@
 // ctrader/SessionSweepIndicator.cs's StepBar() (itself a trim of
 // ctrader/ICT_EA_1.cs's OBEngine.Refresh()), reused verbatim here as a
 // small reusable class, run as two independent instances -- one on 5m
-// bars, one on 1m bars -- via MarketData.GetBars(TimeFrame.Minute5/Minute1).
+// bars, one on 1m bars -- via MarketData.GetBars(TimeFrame.Minute5/Minute).
 //
 // Session/timezone handling: identical DST-aware US-Eastern conversion and
 // hour-of-day session convention as SessionSweepIndicator.cs (ASIAN_START_H
@@ -597,7 +597,7 @@ namespace cAlgo.Robots
         protected override void OnStart()
         {
             _bars5m = GetEngineBars(TimeFrame.Minute5);
-            _bars1m = GetEngineBars(TimeFrame.Minute1);
+            _bars1m = GetEngineBars(TimeFrame.Minute); // cAlgo's 1-minute enum member is "Minute", not "Minute1"
             _eng5m = new SwingMssEngine(_bars5m);
             _eng1m = new SwingMssEngine(_bars1m);
 
