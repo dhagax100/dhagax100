@@ -50,10 +50,24 @@ type ObZone
     int   state
     int   origState
     int   preSpentState
+    int   lastDrawnState  // state at the last box redraw, -1 = never drawn;
+                           // lets the draw loop stop touching a zone's box
+                           // once it's no longer changing (see DRAW section)
     box   zoneBox
 
 // ============================== STATE ==============================
-var array<ObZone> obList = array.new<ObZone>()
+var array<ObZone> obList  = array.new<ObZone>()
+// Indices into obList that still need per-bar attention (eligibility,
+// lifecycle/stranding, touch, redraw). Every zone starts here at creation;
+// pruned once SPENT(3) -- the only truly terminal state (OOB zones stay in
+// this list forever since they can still get touched and flip to SPENT
+// later, per the spec). Without this, the STEP2/STEP3/DRAW loops below
+// would rescan the FULL history of every zone ever created on every single
+// bar, which is what actually blew Pine's 500ms-per-bar budget on a 1H
+// chart loaded with a lot of history (RE10022) -- unrelated to AIFOB,
+// this would have hit the same wall with AIFOB still in place too, just
+// at a larger history size.
+var array<int>     liveIdx = array.new_int()
 
 // swing-detection running trackers (mirror MQL5's peakIdx/troughIdx, with
 // their price shadowed alongside so H[peakIdx]/L[troughIdx] never need a
@@ -116,9 +130,12 @@ f_addOB(candleIdx, zb, zt, bullish, triggerK, st) =>
     int elig = (st == 1) ? triggerK : -1
     int cTime = time[bar_index - candleIdx]
     z = ObZone.new(candleIdx = candleIdx, candleTime = cTime, zb = zb, zt = zt, bullish = bullish, triggerK = triggerK,
-                   eligibleK = elig, stopK = -1, stopTime = na, state = st, origState = st, preSpentState = st, zoneBox = na)
+                   eligibleK = elig, stopK = -1, stopTime = na, state = st, origState = st, preSpentState = st,
+                   lastDrawnState = -1, zoneBox = na)
     array.push(obList, z)
-    array.size(obList) - 1
+    newIdx = array.size(obList) - 1
+    array.push(liveIdx, newIdx)
+    newIdx
 
 // AOB hunts -- must run regardless of the confirming candle's own body
 // direction (both are called from all four MID-ARM sites below).
@@ -391,9 +408,9 @@ if evCountAfter > evCountBefore
                 swhPrice := pr
                 swhIdx := sIdx
             lastSWHidx := sIdx
-            if array.size(obList) > 0
-                for z = 0 to array.size(obList) - 1
-                    zone = array.get(obList, z)
+            if array.size(liveIdx) > 0
+                for li = 0 to array.size(liveIdx) - 1
+                    zone = array.get(obList, array.get(liveIdx, li))
                     if zone.bullish and zone.state == 0 and zone.eligibleK == -1 and bar_index > zone.triggerK
                         zone.eligibleK := bar_index
         else
@@ -402,16 +419,16 @@ if evCountAfter > evCountBefore
                 swlPrice := pr
                 swlIdx := sIdx
             lastSWLidx := sIdx
-            if array.size(obList) > 0
-                for z = 0 to array.size(obList) - 1
-                    zone = array.get(obList, z)
+            if array.size(liveIdx) > 0
+                for li = 0 to array.size(liveIdx) - 1
+                    zone = array.get(obList, array.get(liveIdx, li))
                     if (not zone.bullish) and zone.state == 0 and zone.eligibleK == -1 and bar_index > zone.triggerK
                         zone.eligibleK := bar_index
 
 // STEP 3: OB lifecycle at this bar
-if array.size(obList) > 0
-    for z = 0 to array.size(obList) - 1
-        zone = array.get(obList, z)
+if array.size(liveIdx) > 0
+    for li = 0 to array.size(liveIdx) - 1
+        zone = array.get(obList, array.get(liveIdx, li))
         if zone.state != 3
             zb = zone.zb
             zt = zone.zt
@@ -448,10 +465,16 @@ if array.size(obList) > 0
                                 zone.state := 2
 
 // ============================== DRAW / UPDATE OB BOXES ==============================
-if array.size(obList) > 0
-    for z = 0 to array.size(obList) - 1
-        zone = array.get(obList, z)
-        if zone.candleTime >= displayFromInput
+if array.size(liveIdx) > 0
+    for li = 0 to array.size(liveIdx) - 1
+        zone = array.get(obList, array.get(liveIdx, li))
+        // Once a zone stops changing (no longer IFOB/AOB) its box only needs
+        // ONE more redraw to catch that final state -- not one every bar
+        // forever. lastDrawnState != zone.state catches exactly that one
+        // transition (e.g. -> OOB, or -> SPENT the same bar it's pruned
+        // from liveIdx below), then skips it on every bar after.
+        bool stillLive = zone.state == 0 or zone.state == 1
+        if zone.candleTime >= displayFromInput and (stillLive or zone.lastDrawnState != zone.state)
             int drawState = zone.state == 3 ? zone.preSpentState : zone.state
             color col = zone.bullish ? colIFOBBull : colIFOBBear
             if drawState == 1
@@ -471,3 +494,14 @@ if array.size(obList) > 0
             else
                 box.set_right(zone.zoneBox, rightEdgeTime)
                 box.set_border_color(zone.zoneBox, col)
+            zone.lastDrawnState := zone.state
+
+// Prune SPENT(3) zones out of liveIdx now that they've had their final
+// redraw above -- they need no further eligibility/lifecycle/touch/draw
+// attention ever again. Walked backward so removal never shifts an
+// index still to be visited. OOB(2) zones deliberately stay in liveIdx:
+// per the spec they can still be touched and flip to SPENT later.
+if array.size(liveIdx) > 0
+    for li = array.size(liveIdx) - 1 to 0
+        if array.get(obList, array.get(liveIdx, li)).state == 3
+            array.remove(liveIdx, li)
