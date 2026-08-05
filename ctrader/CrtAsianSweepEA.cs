@@ -422,9 +422,12 @@ namespace cAlgo.Robots
             }
 
             // -- Window-end: no new setups/entries once the trading window is over.
+            // Gated on _asianClosed so this never fires DURING the Asian session
+            // itself (hour >= InpAsianStartHourEst is never < InpWindowEndHourEst,
+            // which would otherwise mark every day "Done" before AH/AL even forms).
             bool activeState = _state == DayState.WaitingAhAl || _state == DayState.WaitingSweep15m
                 || _state == DayState.Hunting || _state == DayState.RearmWaitSwing || _state == DayState.RearmWaitSweep;
-            if (activeState && !InAhAlWindow(est))
+            if (activeState && _asianClosed && !InAhAlWindow(est))
             {
                 _state = DayState.Done;
                 Print($"[DAY] {Server.Time:u} trading window closed with no resolved trade for {_tradingDay:yyyy-MM-dd}.");
