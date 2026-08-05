@@ -268,9 +268,9 @@ if evCountAfter > evCountBefore
         pr    = array.get(evPrice, idx)
         if barTimeAt(sIdx) >= displayFromInput
             if kind == 0
-                label.new(x = sIdx, y = pr, style = label.style_triangleup, color = colHighSwing, size = size.tiny)
+                label.new(x = sIdx, y = pr, style = label.style_circle, color = colHighSwing, size = size.tiny)
             else
-                label.new(x = sIdx, y = pr, style = label.style_triangledown, color = colLowSwing, size = size.tiny)
+                label.new(x = sIdx, y = pr, style = label.style_circle, color = colLowSwing, size = size.tiny)
 
 // ============================== REGIME / OB ENGINE (this bar) ==============================
 // STEP 0: peek-ahead -- update lastSWHidx/lastSWLidx from events confirmed
