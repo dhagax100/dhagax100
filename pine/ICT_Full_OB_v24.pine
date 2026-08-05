@@ -29,6 +29,7 @@ colIFOBBull      = input.color(color.blue,   title = "IFOB Bullish Color")
 colIFOBBear      = input.color(color.black,  title = "IFOB Bearish Color")
 colAOB           = input.color(color.green,  title = "AOB Color")
 colOOB           = input.color(color.red,    title = "OOB Color")
+oobHtfOnly       = input.bool(true, title = "Show OOB only on Daily/Weekly/Monthly (hide on intraday)")
 
 // ============================== TYPES ==============================
 // state: 0=IFOB, 1=AOB, 2=OOB, 3=SPENT (AIFOB/state 4 removed -- see
@@ -444,20 +445,33 @@ if array.size(obList) > 0
                                 zone.state := 2
 
 // ============================== DRAW / UPDATE OB BOXES ==============================
+// OOB visibility gate: OOB (stranded) zones are only drawn on Daily/Weekly/
+// Monthly charts when oobHtfOnly is on -- hidden on 1H/4H/5M/any other
+// intraday timeframe. IFOB/AOB/SPENT are unaffected on every timeframe.
+bool showOOB = not oobHtfOnly or timeframe.isdaily or timeframe.isweekly or timeframe.ismonthly
+
 if array.size(obList) > 0
     for z = 0 to array.size(obList) - 1
         zone = array.get(obList, z)
         if zone.candleTime >= displayFromInput
             int drawState = zone.state == 3 ? zone.preSpentState : zone.state
-            color col = zone.bullish ? colIFOBBull : colIFOBBear
-            if drawState == 1
-                col := colAOB
-            else if drawState == 2
-                col := colOOB
-            int rightEdge = zone.stopK != -1 ? zone.stopK : bar_index
-            if na(zone.zoneBox)
-                zone.zoneBox := box.new(left = zone.candleIdx, top = zone.zt, bottom = zone.zb, right = rightEdge,
-                                         border_color = col, bgcolor = na, border_width = 1)
+            if drawState == 2 and not showOOB
+                // OOB suppressed on this timeframe: hide any box already
+                // drawn (from when the zone was still IFOB/AOB) and skip
+                // creating a new one.
+                if not na(zone.zoneBox)
+                    box.delete(zone.zoneBox)
+                    zone.zoneBox := na
             else
-                box.set_right(zone.zoneBox, rightEdge)
-                box.set_border_color(zone.zoneBox, col)
+                color col = zone.bullish ? colIFOBBull : colIFOBBear
+                if drawState == 1
+                    col := colAOB
+                else if drawState == 2
+                    col := colOOB
+                int rightEdge = zone.stopK != -1 ? zone.stopK : bar_index
+                if na(zone.zoneBox)
+                    zone.zoneBox := box.new(left = zone.candleIdx, top = zone.zt, bottom = zone.zb, right = rightEdge,
+                                             border_color = col, bgcolor = na, border_width = 1)
+                else
+                    box.set_right(zone.zoneBox, rightEdge)
+                    box.set_border_color(zone.zoneBox, col)
