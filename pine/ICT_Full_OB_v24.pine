@@ -44,6 +44,9 @@ type ObZone
     int   triggerK
     int   eligibleK
     int   stopK
+    int   stopTime  // time of stopK's bar, captured at the moment it's set
+                     // (offset 0, always safe) so the draw loop's box
+                     // right-edge never needs a large-offset [] lookup either
     int   state
     int   origState
     int   preSpentState
@@ -113,7 +116,7 @@ f_addOB(candleIdx, zb, zt, bullish, triggerK, st) =>
     int elig = (st == 1) ? triggerK : -1
     int cTime = time[bar_index - candleIdx]
     z = ObZone.new(candleIdx = candleIdx, candleTime = cTime, zb = zb, zt = zt, bullish = bullish, triggerK = triggerK,
-                   eligibleK = elig, stopK = -1, state = st, origState = st, preSpentState = st, zoneBox = na)
+                   eligibleK = elig, stopK = -1, stopTime = na, state = st, origState = st, preSpentState = st, zoneBox = na)
     array.push(obList, z)
     array.size(obList) - 1
 
@@ -421,6 +424,7 @@ if array.size(obList) > 0
                     zone.preSpentState := zone.state
                     zone.state := 3
                     zone.stopK := bar_index
+                    zone.stopTime := time
                     impacted := true
 
             // STRANDING -> OLD: which swing proves it depends on which leg the
@@ -454,10 +458,16 @@ if array.size(obList) > 0
                 col := colAOB
             else if drawState == 2
                 col := colOOB
-            int rightEdge = zone.stopK != -1 ? zone.stopK : bar_index
+            // Time-based addressing (xloc.bar_time), not bar-index: a zone's
+            // origin candle can end up far enough in the past (e.g. picked
+            // from a long-armed swing's full range once it finally resolves)
+            // that box.new()'s bar-index `left` argument errors out ("too
+            // far from the current bar index") on intraday charts with a
+            // lot of loaded history. Time values have no such distance cap.
+            int rightEdgeTime = not na(zone.stopTime) ? zone.stopTime : time
             if na(zone.zoneBox)
-                zone.zoneBox := box.new(left = zone.candleIdx, top = zone.zt, bottom = zone.zb, right = rightEdge,
-                                         border_color = col, bgcolor = na, border_width = 1)
+                zone.zoneBox := box.new(left = zone.candleTime, top = zone.zt, bottom = zone.zb, right = rightEdgeTime,
+                                         xloc = xloc.bar_time, border_color = col, bgcolor = na, border_width = 1)
             else
-                box.set_right(zone.zoneBox, rightEdge)
+                box.set_right(zone.zoneBox, rightEdgeTime)
                 box.set_border_color(zone.zoneBox, col)
