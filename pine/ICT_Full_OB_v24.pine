@@ -268,9 +268,9 @@ if evCountAfter > evCountBefore
         pr    = array.get(evPrice, idx)
         if barTimeAt(sIdx) >= displayFromInput
             if kind == 0
-                label.new(x = sIdx, y = pr, style = label.style_circle, color = colHighSwing, size = size.tiny)
+                label.new(x = sIdx, y = pr, style = label.style_arrowup, color = colHighSwing, size = size.tiny)
             else
-                label.new(x = sIdx, y = pr, style = label.style_circle, color = colLowSwing, size = size.tiny)
+                label.new(x = sIdx, y = pr, style = label.style_arrowdown, color = colLowSwing, size = size.tiny)
 
 // ============================== REGIME / OB ENGINE (this bar) ==============================
 // STEP 0: peek-ahead -- update lastSWHidx/lastSWLidx from events confirmed
@@ -298,7 +298,7 @@ if not kBullish
         else if regime == 2
             regime := 1
             if barTimeAt(swhIdx) >= displayFromInput
-                label.new(x = swhIdx, y = swhPrice, style = label.style_cross, color = colMSSUp, size = size.tiny)
+                label.new(x = swhIdx, y = swhPrice, style = label.style_flag, color = colMSSUp, size = size.tiny)
         if lastSWLidx >= 0
             lo = math.min(math.min(lastSWLidx, bar_index), swhIdx)
             hi = math.max(math.max(lastSWLidx, bar_index), swhIdx)
@@ -332,7 +332,7 @@ if not kBullish
         else if regime == 1
             regime := 2
             if barTimeAt(swlIdx) >= displayFromInput
-                label.new(x = swlIdx, y = swlPrice, style = label.style_cross, color = colMSSDown, size = size.tiny)
+                label.new(x = swlIdx, y = swlPrice, style = label.style_flag, color = colMSSDown, size = size.tiny)
         if lastSWHidx >= 0
             lo = math.min(math.min(lastSWHidx, bar_index), swlIdx)
             hi = math.max(math.max(lastSWHidx, bar_index), swlIdx)
@@ -350,7 +350,7 @@ else
         else if regime == 1
             regime := 2
             if barTimeAt(swlIdx) >= displayFromInput
-                label.new(x = swlIdx, y = swlPrice, style = label.style_cross, color = colMSSDown, size = size.tiny)
+                label.new(x = swlIdx, y = swlPrice, style = label.style_flag, color = colMSSDown, size = size.tiny)
         if lastSWHidx >= 0
             lo = math.min(math.min(lastSWHidx, bar_index), swlIdx)
             hi = math.max(math.max(lastSWHidx, bar_index), swlIdx)
@@ -384,7 +384,7 @@ else
         else if regime == 2
             regime := 1
             if barTimeAt(swhIdx) >= displayFromInput
-                label.new(x = swhIdx, y = swhPrice, style = label.style_cross, color = colMSSUp, size = size.tiny)
+                label.new(x = swhIdx, y = swhPrice, style = label.style_flag, color = colMSSUp, size = size.tiny)
         if lastSWLidx >= 0
             lo = math.min(math.min(lastSWLidx, bar_index), swhIdx)
             hi = math.max(math.max(lastSWLidx, bar_index), swhIdx)
