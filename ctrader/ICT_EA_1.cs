@@ -13,13 +13,16 @@
 // Structure engine (unchanged from the .mq5, plus FVG added as a second POI
 // flavor in the same unified list): three independent instances of the same
 // swing/MSS/OB+FVG engine (dual-candle swing detection, alternation rule,
-// MSS, IFOB/AOB/AIFOB/OOB/SPENT -- and the FVG equivalents IFVG/AFVG/AIFVG/
-// OFVG/spent, all sharing the identical lifecycle since a POI is a POI
-// regardless of whether it came from a single-candle body pick (OB) or a
-// 3-candle gap (FVG, and unlike OB, EVERY qualifying gap in a leg is marked,
-// not just the best one), body-superiority ranking, AOB/AFVG range widening
-// and straddle guard, mirrored stranding direction) -- one on Daily, one on
+// MSS, IFOB/AOB/OOB/SPENT -- and the FVG equivalents IFVG/AFVG/OFVG/spent,
+// all sharing the identical lifecycle since a POI is a POI regardless of
+// whether it came from a single-candle body pick (OB) or a 3-candle gap
+// (FVG, and unlike OB, EVERY qualifying gap in a leg is marked, not just
+// the best one), body-superiority ranking, AOB/AFVG range widening and
+// straddle guard, mirrored stranding direction) -- one on Daily, one on
 // H4, one on H1. All three are drawn; 4H is visualization only now.
+// (AIFOB/AIFVG -- the early-creation "state 4" variant -- has been removed;
+// see the REMOVED FEATURE block above OBEngine.Refresh() for the reference
+// writeup if it needs to come back.)
 //
 // Trading logic (this is a from-scratch entry design, not the old
 // daily-bias/4H-hunt/1H-escalation cascade): triggered purely by a live daily
@@ -91,7 +94,8 @@ namespace cAlgo.Robots
             public double Price;
         }
 
-        // state: 0=IFOB, 1=AOB, 2=OOB, 3=SPENT, 4=AIFOB
+        // state: 0=IFOB, 1=AOB, 2=OOB, 3=SPENT (AIFOB/state 4 removed -- see
+        // REMOVED FEATURE block above OBEngine.Refresh())
         private class ObZone
         {
             public int Candle;      // index at creation time (internal engine use only)
@@ -102,9 +106,9 @@ namespace cAlgo.Robots
             public int EligibleK;   // -1 = not yet eligible
             public int TouchK;      // -1 = not yet touched; else the candle index of first Impact
             public int State;
-            public int OrigState;   // classification for stranding direction (0/4 = IFOB-style, 1 = AOB-style)
+            public int OrigState;   // classification for stranding direction (0 = IFOB-style, 1 = AOB-style)
             public int PreSpentState = -1; // state right before transitioning to SPENT(3) -- lets callers
-                                            // tell a genuine live touch (was 0/1/4) apart from a touch that
+                                            // tell a genuine live touch (was 0/1) apart from a touch that
                                             // only happened AFTER the zone was already stranded (was 2/OOB)
             public bool IsFvg = false;      // display-only: OB (single-candle body pick) vs FVG (3-candle
                                             // gap). Every lifecycle rule (eligibility, touch, stranding,
@@ -139,7 +143,6 @@ namespace cAlgo.Robots
             public bool HaveSWL; public double SwlPrice; public int SwlIdx;
             public int Regime;        // 0 warmup, 1 up, 2 down
             public int LastSWHidx = -1, LastSWLidx = -1;
-            public int PendingBullAifobIdx = -1, PendingBearAifobIdx = -1;
 
             public int N; // bars processed on the last Refresh()
 
@@ -166,7 +169,7 @@ namespace cAlgo.Robots
                     Zt = zt,
                     Bullish = bull,
                     TriggerK = triggerK,
-                    EligibleK = (state == 1 || state == 4) ? triggerK : -1,
+                    EligibleK = (state == 1) ? triggerK : -1,
                     TouchK = -1,
                     State = state,
                     OrigState = state
@@ -184,7 +187,7 @@ namespace cAlgo.Robots
             // Scans (lo..hi) for every qualifying 3-candle gap in the given direction and
             // creates one FVG zone per gap found -- "mark all of them", unlike OB's
             // single-best-candle pick. straddlePrice mirrors the OB straddle guard (only
-            // applied where the corresponding OB call applies it: AOB, not IFOB/AIFOB).
+            // applied where the corresponding OB call applies it: AOB, not IFOB).
             public void ScanFvgs(int lo, int hi, bool bullish, int triggerK, int state, double? straddlePrice = null)
             {
                 lo = Math.Max(lo, 0);
@@ -249,27 +252,44 @@ namespace cAlgo.Robots
                 return AddOB(best, Math.Min(O(best), C(best)), Math.Max(O(best), C(best)), false, k, 1);
             }
 
-            public int TryBullishAIFOB(int prevRegime, bool haveSWH_, int swhIdx_, int lastSWLidx_, int newSwlIdx, int k)
-            {
-                if (prevRegime != 1 || !haveSWH_ || swhIdx_ < 0 || lastSWLidx_ < 0) return -1;
-                int lo = Math.Max(0, Math.Min(Math.Min(lastSWLidx_, newSwlIdx), swhIdx_ - 1));
-                int hi = Math.Max(Math.Max(lastSWLidx_, newSwlIdx), swhIdx_ - 1);
-                ScanFvgs(lo, hi, true, k, 4);
-                int best = PickLowestBearish(lo, hi);
-                if (best == -1) return -1;
-                return AddOB(best, Math.Min(O(best), C(best)), Math.Max(O(best), C(best)), true, k, 4);
-            }
-
-            public int TryBearishAIFOB(int prevRegime, bool haveSWL_, int swlIdx_, int lastSWHidx_, int newSwhIdx, int k)
-            {
-                if (prevRegime != 2 || !haveSWL_ || swlIdx_ < 0 || lastSWHidx_ < 0) return -1;
-                int lo = Math.Max(0, Math.Min(Math.Min(lastSWHidx_, newSwhIdx), swlIdx_ - 1));
-                int hi = Math.Max(Math.Max(lastSWHidx_, newSwhIdx), swlIdx_ - 1);
-                ScanFvgs(lo, hi, false, k, 4);
-                int best = PickHighestBullish(lo, hi);
-                if (best == -1) return -1;
-                return AddOB(best, Math.Min(O(best), C(best)), Math.Max(O(best), C(best)), false, k, 4);
-            }
+            //+--------------------------------------------------------------+
+            //| REMOVED FEATURE -- AIFOB/AIFVG (state 4), removed at the      |
+            //| user's request. Kept here as a reference writeup, not code,   |
+            //| in case this needs reimplementing later.                     |
+            //|                                                               |
+            //| Concept (see trading_logic.md section 3, "AIFOB"): an IFOB    |
+            //| created EARLY -- before the swing it depends on has actually  |
+            //| been exceeded -- because the opposite (retracement) swing     |
+            //| already confirmed while the engine was still waiting for that |
+            //| exceedance. AIFVG was the FVG-flavored twin of the same       |
+            //| mechanism (same state, created by the same call below).       |
+            //|                                                               |
+            //| Creation rule (former TryBullishAIFOB/TryBearishAIFOB, called |
+            //| from the swing-confirm branch alongside TryBullish/BearishAOB |
+            //| whenever the AOB path did NOT already fire): same range/pick  |
+            //| rule as a real IFOB (strongest opposite-color body in the     |
+            //| range), where the range was                                  |
+            //|   [min(lastOppositeSwingIdx, newRetracementSwingIdx) ..       |
+            //|    armedSwingIdx - 1]                                         |
+            //| gated on: previous regime already established in the target   |
+            //| direction, the armed swing (haveSWH_/haveSWL_) actually       |
+            //| existing, and lastSWLidx_/lastSWHidx_ >= 0. ScanFvgs was      |
+            //| called over the same range with state=4 for the AIFVG side.   |
+            //|                                                               |
+            //| Promotion rule (former PendingBullAifobIdx/PendingBearAifobIdx|
+            //| bookkeeping in Refresh()): when the armed swing DID later get |
+            //| exceeded (the normal IFOB-creation branch), if a pending      |
+            //| AIFOB/AIFVG index was recorded, that zone's State/OrigState   |
+            //| were flipped from 4 to 0 in place (promoted to a real IFOB,   |
+            //| not duplicated) instead of running the normal candle-pick     |
+            //| logic again.                                                  |
+            //|                                                               |
+            //| Supersession rule: each time a FRESH swing of either kind     |
+            //| confirmed before that promotion happened, the pending index   |
+            //| for the opposite AIFOB slot was cleared (set to -1) -- i.e. a |
+            //| fresher swing invalidates a stale pending AIFOB and the zone  |
+            //| just continues on as a normal (unpromoted) AIFOB from then on.|
+            //+--------------------------------------------------------------+
 
             public bool Refresh()
             {
@@ -282,7 +302,6 @@ namespace cAlgo.Robots
                 HaveSWH = false; SwhPrice = 0; SwhIdx = 0;
                 HaveSWL = false; SwlPrice = 0; SwlIdx = 0;
                 Regime = 0; LastSWHidx = -1; LastSWLidx = -1;
-                PendingBullAifobIdx = -1; PendingBearAifobIdx = -1;
 
                 //--- swing detection (dual-candle aware, alternation-blocked) ---
                 int peakIdx = 0, troughIdx = 0;
@@ -365,9 +384,7 @@ namespace cAlgo.Robots
                         if (HaveSWH && H(k) > SwhPrice)
                         {
                             if (Regime == 0) Regime = 1; else if (Regime == 2) Regime = 1;
-                            if (PendingBullAifobIdx != -1)
-                            { Ob[PendingBullAifobIdx].State = 0; Ob[PendingBullAifobIdx].OrigState = 0; PendingBullAifobIdx = -1; }
-                            else if (LastSWLidx >= 0)
+                            if (LastSWLidx >= 0)
                             {
                                 int lo = Math.Min(Math.Min(LastSWLidx, k), SwhIdx);
                                 int hi = Math.Max(Math.Max(LastSWLidx, k), SwhIdx);
@@ -384,24 +401,12 @@ namespace cAlgo.Robots
                                 if (Ev[peek2].Kind == 0)
                                 {
                                     HaveSWH = true; SwhPrice = Ev[peek2].Price; SwhIdx = Ev[peek2].SwingIdx;
-                                    PendingBullAifobIdx = -1;
                                     TryBearishAOB(prevRegime, aobSWLidx, Ev[peek2].SwingIdx, Ev[peek2].Price, k);
-                                    if (PendingBearAifobIdx == -1)
-                                    {
-                                        int idx2 = TryBearishAIFOB(prevRegime, HaveSWL, aobSWLidx, LastSWHidx, Ev[peek2].SwingIdx, k);
-                                        if (idx2 != -1) PendingBearAifobIdx = idx2;
-                                    }
                                 }
                                 else
                                 {
                                     HaveSWL = true; SwlPrice = Ev[peek2].Price; SwlIdx = Ev[peek2].SwingIdx;
-                                    PendingBearAifobIdx = -1;
                                     TryBullishAOB(prevRegime, aobSWHidx, Ev[peek2].SwingIdx, Ev[peek2].Price, k);
-                                    if (PendingBullAifobIdx == -1)
-                                    {
-                                        int idx2 = TryBullishAIFOB(prevRegime, HaveSWH, aobSWHidx, LastSWLidx, Ev[peek2].SwingIdx, k);
-                                        if (idx2 != -1) PendingBullAifobIdx = idx2;
-                                    }
                                 }
                                 peek2++;
                             }
@@ -409,9 +414,7 @@ namespace cAlgo.Robots
                         if (HaveSWL && L(k) < SwlPrice)
                         {
                             if (Regime == 0) Regime = 2; else if (Regime == 1) Regime = 2;
-                            if (PendingBearAifobIdx != -1)
-                            { Ob[PendingBearAifobIdx].State = 0; Ob[PendingBearAifobIdx].OrigState = 0; PendingBearAifobIdx = -1; }
-                            else if (LastSWHidx >= 0)
+                            if (LastSWHidx >= 0)
                             {
                                 int lo = Math.Min(Math.Min(LastSWHidx, k), SwlIdx);
                                 int hi = Math.Max(Math.Max(LastSWHidx, k), SwlIdx);
@@ -427,9 +430,7 @@ namespace cAlgo.Robots
                         if (HaveSWL && L(k) < SwlPrice)
                         {
                             if (Regime == 0) Regime = 2; else if (Regime == 1) Regime = 2;
-                            if (PendingBearAifobIdx != -1)
-                            { Ob[PendingBearAifobIdx].State = 0; Ob[PendingBearAifobIdx].OrigState = 0; PendingBearAifobIdx = -1; }
-                            else if (LastSWHidx >= 0)
+                            if (LastSWHidx >= 0)
                             {
                                 int lo = Math.Min(Math.Min(LastSWHidx, k), SwlIdx);
                                 int hi = Math.Max(Math.Max(LastSWHidx, k), SwlIdx);
@@ -446,24 +447,12 @@ namespace cAlgo.Robots
                                 if (Ev[peek2].Kind == 0)
                                 {
                                     HaveSWH = true; SwhPrice = Ev[peek2].Price; SwhIdx = Ev[peek2].SwingIdx;
-                                    PendingBullAifobIdx = -1;
                                     TryBearishAOB(prevRegime, aobSWLidx, Ev[peek2].SwingIdx, Ev[peek2].Price, k);
-                                    if (PendingBearAifobIdx == -1)
-                                    {
-                                        int idx2 = TryBearishAIFOB(prevRegime, HaveSWL, aobSWLidx, LastSWHidx, Ev[peek2].SwingIdx, k);
-                                        if (idx2 != -1) PendingBearAifobIdx = idx2;
-                                    }
                                 }
                                 else
                                 {
                                     HaveSWL = true; SwlPrice = Ev[peek2].Price; SwlIdx = Ev[peek2].SwingIdx;
-                                    PendingBearAifobIdx = -1;
                                     TryBullishAOB(prevRegime, aobSWHidx, Ev[peek2].SwingIdx, Ev[peek2].Price, k);
-                                    if (PendingBullAifobIdx == -1)
-                                    {
-                                        int idx2 = TryBullishAIFOB(prevRegime, HaveSWH, aobSWHidx, LastSWLidx, Ev[peek2].SwingIdx, k);
-                                        if (idx2 != -1) PendingBullAifobIdx = idx2;
-                                    }
                                 }
                                 peek2++;
                             }
@@ -471,9 +460,7 @@ namespace cAlgo.Robots
                         if (HaveSWH && H(k) > SwhPrice)
                         {
                             if (Regime == 0) Regime = 1; else if (Regime == 2) Regime = 1;
-                            if (PendingBullAifobIdx != -1)
-                            { Ob[PendingBullAifobIdx].State = 0; Ob[PendingBullAifobIdx].OrigState = 0; PendingBullAifobIdx = -1; }
-                            else if (LastSWLidx >= 0)
+                            if (LastSWLidx >= 0)
                             {
                                 int lo = Math.Min(Math.Min(LastSWLidx, k), SwhIdx);
                                 int hi = Math.Max(Math.Max(LastSWLidx, k), SwhIdx);
@@ -525,7 +512,7 @@ namespace cAlgo.Robots
                                 Ob[z].State = 3; Ob[z].TouchK = k; impacted = true;
                             }
                         }
-                        if (!impacted && (Ob[z].State == 0 || Ob[z].State == 1 || Ob[z].State == 4) && Ob[z].EligibleK != -1)
+                        if (!impacted && (Ob[z].State == 0 || Ob[z].State == 1) && Ob[z].EligibleK != -1)
                         {
                             bool isIFOB = (Ob[z].OrigState != 1);
                             for (int e2 = 0; e2 < Ev.Count; e2++)
@@ -559,7 +546,7 @@ namespace cAlgo.Robots
         // Tracks what's already been drawn for one engine so Refresh() -> Draw() doesn't
         // redraw the whole history every bar: swings and MSS marks are append-only (drawn
         // once, never change); OB zones keep redrawing (extending their right edge to "now")
-        // only while still live (IFOB/AOB/AIFOB) -- once a zone resolves (OOB or SPENT) it's
+        // only while still live (IFOB/AOB) -- once a zone resolves (OOB or SPENT) it's
         // drawn once more at its final color/edge and then left alone.
         private class DrawCache
         {
@@ -1034,7 +1021,7 @@ namespace cAlgo.Robots
             for (int z = 0; z < _daily.Ob.Count; z++)
             {
                 var ob = _daily.Ob[z];
-                if (ob.State != 0) continue;              // only a still-live IFOB (covers a promoted AIFOB too)
+                if (ob.State != 0) continue;              // only a still-live IFOB
                 if (ob.EligibleK == -1) continue;          // not yet armed
                 if (_dailyTriggeredObIdx.Contains(z)) continue;
                 if (curH >= ob.Zb && curL <= ob.Zt)
@@ -1067,7 +1054,7 @@ namespace cAlgo.Robots
             {
                 var ob = _daily.Ob[z];
                 if (ob.TouchK != lc) continue;
-                if (ob.PreSpentState != 0) continue; // only IFOB -- not AOB/AIFOB/already-stranded
+                if (ob.PreSpentState != 0) continue; // only IFOB -- not AOB/already-stranded
                 if (_dailyTriggeredObIdx.Contains(z)) continue;
                 StartCascadeFromDailyIfob(z, ob.Bullish, _daily.T(lc), _daily.H(lc), _daily.L(lc));
             }
@@ -1076,7 +1063,7 @@ namespace cAlgo.Robots
         //+------------------------------------------------------------------+
         //| Chart drawing: swing highs/lows, MSS marks, and OB zones (colored |
         //| and labeled by exact type) for one engine. Daily draws all five   |
-        //| states (IFOB/AOB/AIFOB/OOB/SPENT); 4H and 1H only ever ACT on     |
+        //| states (IFOB/AOB/OOB/SPENT); 4H and 1H only ever ACT on           |
         //| IFOB/AOB, but OOB zones are still drawn there too (gray) purely   |
         //| for transparency -- so you can see a zone existed and why it was  |
         //| never traded, not just that nothing happened.                     |
@@ -1088,9 +1075,8 @@ namespace cAlgo.Robots
                 // OB palette: green/blue family
                 if (state == 2) return Color.Gray;                                   // OOB -- dead
                 if (state == 3)                                                       // SPENT -- shade by original type
-                    return origState == 1 ? Color.RoyalBlue : origState == 4 ? Color.Teal : Color.SeaGreen;
+                    return origState == 1 ? Color.RoyalBlue : Color.SeaGreen;
                 if (origState == 1) return Color.DeepSkyBlue;   // AOB, live
-                if (origState == 4) return Color.Turquoise;     // AIFOB, live
                 return Color.LimeGreen;                          // IFOB, live
             }
             else
@@ -1098,9 +1084,8 @@ namespace cAlgo.Robots
                 // FVG palette: gold/orange/purple family -- never confusable with OB
                 if (state == 2) return Color.DimGray;                                 // OFVG -- dead (Daily only)
                 if (state == 3)                                                       // spent/invalidated -- shade by original type
-                    return origState == 1 ? Color.MediumPurple : origState == 4 ? Color.Indigo : Color.Purple;
+                    return origState == 1 ? Color.MediumPurple : Color.Purple;
                 if (origState == 1) return Color.Orange;         // AFVG, live
-                if (origState == 4) return Color.DarkOrange;     // AIFVG, live
                 return Color.Gold;                                // IFVG, live
             }
         }
@@ -1108,8 +1093,8 @@ namespace cAlgo.Robots
         private string ObLabel(int state, int origState, bool isFvg)
         {
             string baseLabel = !isFvg
-                ? (origState == 1 ? "AOB" : origState == 4 ? "AIFOB" : "IFOB")
-                : (origState == 1 ? "AFVG" : origState == 4 ? "AIFVG" : "IFVG");
+                ? (origState == 1 ? "AOB" : "IFOB")
+                : (origState == 1 ? "AFVG" : "IFVG");
             if (state == 2) return isFvg ? "OFVG" : "OOB";
             if (state == 3) return baseLabel + " (spent)";
             return baseLabel;
@@ -1142,7 +1127,7 @@ namespace cAlgo.Robots
             for (int i = 0; i < eng.Ob.Count; i++)
             {
                 var ob = eng.Ob[i];
-                bool stillLive = (ob.State == 0 || ob.State == 1 || ob.State == 4);
+                bool stillLive = (ob.State == 0 || ob.State == 1);
                 int lastState = i < cache.ObState.Count ? cache.ObState[i] : -1;
                 if (!stillLive && lastState == ob.State) continue; // already drawn at its final state
 
