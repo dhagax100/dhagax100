@@ -1,8 +1,13 @@
 // ICT_IFVG_Diagnostic — Pine Script v5
-// Stripped-down copy of ICT_Full_OB_v24 for verifying IFVG behavior only.
-// Order Block logic (IFOB/AOB/AIFOB/OOB) is entirely removed. Swing/MSS
-// detection and the IFVG creation/eligibility/lifecycle/drawing logic are
-// UNCHANGED from ICT_Full_OB_v24.pine.
+// Stripped-down copy of ICT_Full_OB_v24 for verifying IFVG/AFVG behavior
+// only. Order Block logic (IFOB/AOB/AIFOB/OOB creation, best-candle
+// picking) is entirely removed -- swing/MSS detection and the IFVG/AFVG
+// creation/eligibility/lifecycle/drawing logic are UNCHANGED from
+// ICT_Full_OB_v24.pine. AFVG still needs the AOB hunt's range + reference-
+// validity gate (tryBullAFVG/tryBearAFVG below), since that's the range it
+// scans and the guard that decides whether it's allowed to fire at all --
+// this is the one piece of "AOB-adjacent" logic kept, stripped down to
+// just that gate, with the OB-specific candle-picking removed.
 //
 // Why this file exists: on Daily, the full script's OB-picking loops
 // (best-candle scan per leg, AOB reference-validity scan) run once per
@@ -48,10 +53,17 @@ type FvgZone
     float zb
     float zt
     bool  bullish
-    int   triggerK       // the leg's breakout candle
-    int   eligibleK      // -1 = not yet eligible (delayed, mirrors IFOB)
+    int   triggerK       // the leg's breakout candle (IFVG) or AOB-hunt
+                          // trigger candle (AFVG)
+    int   eligibleK      // -1 = not yet eligible. Delayed for IFVG (mirrors
+                          // IFOB); immediate (= triggerK) for AFVG (mirrors AOB)
     int   stopK          // -1 = extending
-    int   state          // 0=IFVG, 2=OFVG, 3=SPENT
+    int   state          // 0=IFVG, 1=AFVG, 2=OFVG, 3=SPENT
+    int   origin         // permanent creation-type marker, never changes
+                          // after creation (mirrors ObZone.origState):
+                          // 0=IFVG-style (far-side stranding), 1=AFVG-style
+                          // (near-side stranding) -- decides which stranding
+                          // rule applies even after state moves on to 2/3
     int   preSpentState
 
 // ===================== PERSISTENT STATE =====================
@@ -126,9 +138,12 @@ addEv(int cIdx, int kind, int sIdx, float pr) =>
 addMss(int aIdx, int bIdx, float pr, bool up) =>
     array.push(msses, MssEv.new(aIdx, bIdx, pr, up))
 
-addFVG(int leftIdx, float zb, float zt, bool bull, int tK) =>
-    // Delayed eligibility (-1), mirroring IFOB.
-    array.push(fvgs, FvgZone.new(leftIdx, zb, zt, bull, tK, -1, -1, 0, 0))
+addFVG(int leftIdx, float zb, float zt, bool bull, int tK, int st) =>
+    // st: 0=IFVG (delayed eligibility, far-side stranding later), 1=AFVG
+    // (immediate eligibility, near-side stranding later) -- mirrors
+    // addOB's st param one-for-one; origin is stamped once, forever.
+    eK = (st == 1) ? tK : -1
+    array.push(fvgs, FvgZone.new(leftIdx, zb, zt, bull, tK, eK, -1, st, st, st))
 
 // Scans [lo,hi] for EVERY qualifying 3-candle gap (not just one best
 // candle). Called at each break-check site, using the same lo/hi/
@@ -141,12 +156,66 @@ tryCreateIFVGs(int lo, int hi, bool bullish, int triggerK) =>
                 h1 = array.get(H_, c1)
                 l3 = array.get(L_, c3)
                 if h1 < l3
-                    addFVG(c1, h1, l3, true, triggerK)
+                    addFVG(c1, h1, l3, true, triggerK, 0)
             else
                 l1 = array.get(L_, c1)
                 h3 = array.get(H_, c3)
                 if l1 > h3
-                    addFVG(c1, h3, l1, false, triggerK)
+                    addFVG(c1, h3, l1, false, triggerK, 0)
+
+// Scans [lo,hi] -- the SAME range an AOB is picked from -- for EVERY
+// qualifying 3-candle gap, mirroring tryCreateIFVGs, plus a per-gap
+// version of AOB's near-side straddle guard: a gap is dropped if EITHER
+// boundary candle's wick already reaches guardPrice (the price of the
+// swing that triggered this hunt), since either edge could be the candle
+// straddling the pivot -- AOB only has one picked candle to check, a gap
+// has two edges that both need to clear it.
+tryCreateAFVGs(int lo, int hi, bool bullish, int triggerK, float guardPrice) =>
+    if hi >= lo + 2
+        for c3 = lo + 2 to hi
+            c1 = c3 - 2
+            if bullish
+                h1 = array.get(H_, c1)
+                l3 = array.get(L_, c3)
+                if h1 < l3
+                    l1 = array.get(L_, c1)
+                    if l1 > guardPrice and l3 > guardPrice
+                        addFVG(c1, h1, l3, true, triggerK, 1)
+            else
+                l1 = array.get(L_, c1)
+                h3 = array.get(H_, c3)
+                if l1 > h3
+                    h1 = array.get(H_, c1)
+                    if h1 < guardPrice and h3 < guardPrice
+                        addFVG(c1, h3, l1, false, triggerK, 1)
+
+// --- AFVG HUNT: Bullish -- mirrors tryBullAOB's range + reference-
+// validity gate one-for-one (the OB candle-picking parts aren't needed
+// here, this diagnostic has no OB) ---
+tryBullAFVG(int pReg, int aobSWHi, int newSwlI, float newSwlP, int k) =>
+    if pReg == 1 and aobSWHi >= 0
+        armedSwhPrice = array.get(H_, aobSWHi)
+        refViolated = false
+        for v = aobSWHi + 1 to newSwlI
+            if array.get(H_, v) >= armedSwhPrice
+                refViolated := true
+        if not refViolated
+            lo2 = math.max(0, math.min(aobSWHi - 1, newSwlI))
+            hi2 = math.max(aobSWHi - 1, newSwlI)
+            tryCreateAFVGs(lo2, hi2, true, k, newSwlP)
+
+// --- AFVG HUNT: Bearish -- mirrors tryBearAOB ---
+tryBearAFVG(int pReg, int aobSWLi, int newSwhI, float newSwhP, int k) =>
+    if pReg == 2 and aobSWLi >= 0
+        armedSwlPrice = array.get(L_, aobSWLi)
+        refViolated = false
+        for v = aobSWLi + 1 to newSwhI
+            if array.get(L_, v) <= armedSwlPrice
+                refViolated := true
+        if not refViolated
+            lo2 = math.max(0, math.min(aobSWLi - 1, newSwhI))
+            hi2 = math.max(aobSWLi - 1, newSwhI)
+            tryCreateAFVGs(lo2, hi2, false, k, newSwhP)
 
 // ===================== MAIN PROCESSING =====================
 // Process each bar exactly once
@@ -236,10 +305,13 @@ if not skipBar and bar_index != lastProcessedBI
                 lastSWLidx := pEv.swingIdx
             peek0 += 1
 
+        prevReg = regime
         swhCons = false
         swlCons = false
+        aobSWHi = swhIdx
+        aobSWLi = swlIdx
 
-        // STEP 1 + MID-ARM: break checks, MSS, IFVG
+        // STEP 1 + MID-ARM: break checks, MSS, IFVG, AFVG
         kBull = array.get(C_, k) >= array.get(O_, k)
 
         if not kBull
@@ -268,10 +340,12 @@ if not skipBar and bar_index != lastProcessedBI
                     haveSWH  := true
                     swhPrice := pEv2.price
                     swhIdx   := pEv2.swingIdx
+                    tryBearAFVG(prevReg, aobSWLi, pEv2.swingIdx, pEv2.price, k)
                 else
                     haveSWL  := true
                     swlPrice := pEv2.price
                     swlIdx   := pEv2.swingIdx
+                    tryBullAFVG(prevReg, aobSWHi, pEv2.swingIdx, pEv2.price, k)
                 peek2 += 1
 
             // Second break: SWL
@@ -315,10 +389,12 @@ if not skipBar and bar_index != lastProcessedBI
                     haveSWH  := true
                     swhPrice := pEv3.price
                     swhIdx   := pEv3.swingIdx
+                    tryBearAFVG(prevReg, aobSWLi, pEv3.swingIdx, pEv3.price, k)
                 else
                     haveSWL  := true
                     swlPrice := pEv3.price
                     swlIdx   := pEv3.swingIdx
+                    tryBullAFVG(prevReg, aobSWHi, pEv3.swingIdx, pEv3.price, k)
                 peek3 += 1
 
             // Second break: SWH
@@ -343,13 +419,13 @@ if not skipBar and bar_index != lastProcessedBI
             h1c = array.get(H_, k - 2)
             l3c = array.get(L_, k)
             if h1c < l3c
-                addFVG(k - 2, h1c, l3c, true, k)
+                addFVG(k - 2, h1c, l3c, true, k, 0)
             fvgBullScanUpto := k
         if regime == 2 and k >= 2 and k > fvgBearScanUpto
             l1c = array.get(L_, k - 2)
             h3c = array.get(H_, k)
             if l1c > h3c
-                addFVG(k - 2, h3c, l1c, false, k)
+                addFVG(k - 2, h3c, l1c, false, k, 0)
             fvgBearScanUpto := k
 
         // STEP 2: arm swings (consumed check) + IFVG eligibility
@@ -387,7 +463,7 @@ if not skipBar and bar_index != lastProcessedBI
                         array.set(fvgs, zf2, fvgZ2)
             ei += 1
 
-        // STEP 3: IFVG lifecycle at this candle
+        // STEP 3: IFVG/AFVG lifecycle at this candle
         hK = array.get(H_, k)
         lK = array.get(L_, k)
         fvgTotal = array.size(fvgs)
@@ -411,8 +487,9 @@ if not skipBar and bar_index != lastProcessedBI
                     array.set(fvgs, zf3, fvgZ3)
                     continue
 
-            // CLOSE-THROUGH INVALIDATION
-            if fvgZ3.state == 0 and fvgZ3.eligibleK != -1 and k >= fvgZ3.eligibleK
+            // CLOSE-THROUGH INVALIDATION -- applies to any live zone (IFVG
+            // or AFVG), not just IFVG.
+            if (fvgZ3.state == 0 or fvgZ3.state == 1) and fvgZ3.eligibleK != -1 and k >= fvgZ3.eligibleK
                 cK = array.get(C_, k)
                 closedThrough = bullf ? cK < zbf : cK > ztf
                 if closedThrough
@@ -422,8 +499,13 @@ if not skipBar and bar_index != lastProcessedBI
                     array.set(fvgs, zf3, fvgZ3)
                     continue
 
-            // STRANDING -> OFVG
-            if fvgZ3.state == 0 and fvgZ3.eligibleK != -1
+            // STRANDING -> OFVG: origin decides the rule -- IFVG-style
+            // (origin 0) strands on the FAR side, mirroring IFOB; AFVG-style
+            // (origin 1) strands on the NEAR side, mirroring AOB. Origin
+            // never changes after creation, so this stays correct even
+            // though state itself (0 or 1) is what's being checked here.
+            if (fvgZ3.state == 0 or fvgZ3.state == 1) and fvgZ3.eligibleK != -1
+                isIfvgLike = fvgZ3.origin != 1
                 for e2 = evBeforeSwing to evTotal - 1
                     if e2 < 0 or e2 >= evTotal
                         continue
@@ -431,10 +513,16 @@ if not skipBar and bar_index != lastProcessedBI
                     if stEv.confirmIdx != k
                         continue
                     strandedF = false
-                    if bullf and stEv.kind == 1 and stEv.price > ztf
-                        strandedF := true
-                    if not bullf and stEv.kind == 0 and stEv.price < zbf
-                        strandedF := true
+                    if isIfvgLike
+                        if bullf and stEv.kind == 1 and stEv.price > ztf
+                            strandedF := true
+                        if not bullf and stEv.kind == 0 and stEv.price < zbf
+                            strandedF := true
+                    else
+                        if bullf and stEv.kind == 0 and stEv.price < zbf
+                            strandedF := true
+                        if not bullf and stEv.kind == 1 and stEv.price > ztf
+                            strandedF := true
                     if strandedF
                         fvgZ3.state := 2
                         array.set(fvgs, zf3, fvgZ3)
@@ -525,7 +613,12 @@ if barstate.islast
 
     extT = time + 50 * timeframe.in_seconds() * 1000
 
-    // --- IFVG zones: filled box (solid border) + gray dotted 50% midline ---
+    // --- IFVG/AFVG zones: filled box (solid border) + gray dotted 50%
+    // midline. Live IFVG: blue/black by direction. Live AFVG: green,
+    // matching AOB. OFVG (either origin, once stranded): red, same as OOB
+    // -- but keeps its shading + dotted midline, unlike a hollow OOB box.
+    // SPENT zones are colored by preSpentState (dStF), same as everything
+    // else here -- shown as whatever they were right before getting hit.
     fvgSzD = array.size(fvgs)
     fvgStart = math.max(0, fvgSzD - InpMaxFvgPerCategory)
     for zf = fvgStart to fvgSzD - 1
@@ -549,7 +642,7 @@ if barstate.islast
         if fvD.stopK != -1 and fvD.stopK < nArr
             rightTF := array.get(BT, fvD.stopK)
 
-        colF = dStF == 2 ? color.red : (fvD.bullish ? color.blue : color.black)
+        colF = dStF == 2 ? color.red : dStF == 1 ? color.green : (fvD.bullish ? color.blue : color.black)
 
         bxF = box.new(leftTF, fvD.zt, rightTF, fvD.zb, border_color=colF, border_width=1,
                       bgcolor=color.new(colF, InpFvgFillTransparency), xloc=xloc.bar_time)
