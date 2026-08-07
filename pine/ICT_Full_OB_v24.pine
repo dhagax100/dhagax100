@@ -1,514 +1,716 @@
-//@version=6
-// Port of ICT_Full_OB_v24.mq5 to Pine Script for TradingView.
-// Ported by hand from the MQL5 state machine; not compiled/tested in the
-// Pine Editor -- treat as a first draft and expect a small fix-up pass.
-//
-// Differences from the MQL5 version, by design:
-// - Pine executes one bar at a time (oldest to newest), so the two-pass
-//   MQL5 design (swing detection pass, then a second OB-engine pass with a
-//   "peek-ahead" step) collapses into ONE per-bar pass here: swing
-//   detection runs first, then immediately the OB engine consumes
-//   whatever it just confirmed on the SAME bar. This is equivalent, not
-//   an approximation.
-// - Verbose PrintFormat/"HUNT"/"AUDIT" diagnostics from the MQL5 build
-//   were debugging aids for that conversation and are omitted here.
-// - Pine hard-caps boxes/labels/lines at 500 each. This script only
-//   draws objects for OBs/swings/MSS whose own bar is at or after
-//   displayFromInput, so keep that input reasonably close-in if your
-//   history is long, or you may hit the cap on very old charts.
+// ICT_Full_OB_v24 — Pine Script v5
+// Faithful port of ICT_Full_OB_v24 MQL5 indicator.
+// Draws swing highs, swing lows, MSS flips, and Order Block zones
+// (IFOB, AOB, AIFOB, OOB, SPENT) with identical logic.
+// Diagnostic PrintFormat calls omitted (no console in Pine Script).
+//@version=5
+indicator("ICT Full OB v24", overlay=true, max_labels_count=500, max_boxes_count=500, max_bars_back=5000)
 
-indicator("ICT Full OB v24 (Port)", overlay = true, max_boxes_count = 500, max_labels_count = 500, max_lines_count = 500, max_bars_back = 5000)
+// ===================== INPUTS =====================
+InpMonthsBack  = input.int(6, "Months to display")
+InpDisplayFrom = input.time(timestamp("2025-07-25"), "Display from date")
+useDisplayFrom = input.bool(true, "Use exact display-from date (else use months)")
+InpReplayUpTo  = input.time(0, "Replay up to date (0=show all)")
+useReplay      = input.bool(false, "Enable replay mode")
+InpFocusOB     = input.int(0, "Focus OB (0=show all in window, N=Nth from end)")
 
-// ============================== INPUTS ==============================
-displayFromInput = input.time(timestamp("2025-07-25 00:00 +0000"), title = "Display From")
-colHighSwing     = input.color(color.blue,   title = "Swing High Color")
-colLowSwing      = input.color(color.black,  title = "Swing Low Color")
-colMSSUp         = input.color(color.blue,   title = "MSS Up Color")
-colMSSDown       = input.color(color.black,  title = "MSS Down Color")
-colIFOBBull      = input.color(color.blue,   title = "IFOB Bullish Color")
-colIFOBBear      = input.color(color.black,  title = "IFOB Bearish Color")
-colAOB           = input.color(color.green,  title = "AOB Color")
-colOOB           = input.color(color.red,    title = "OOB Color")
+// ===================== TYPE DEFINITIONS =====================
+type SwEv
+    int   confirmIdx
+    int   kind         // 0=high, 1=low
+    int   swingIdx
+    float price
 
-// ============================== TYPES ==============================
-// state: 0=IFOB, 1=AOB, 2=OOB, 3=SPENT (AIFOB/state 4 removed -- see
-// REMOVED FEATURE comment below the AOB hunts)
+type MssEv
+    int   atIdx
+    int   brokenIdx
+    float price
+    bool  toUp
+
 type ObZone
-    int   candleIdx
-    int   candleTime  // time of candleIdx's bar, captured at creation (when
-                       // the historical offset is still small/safe) so the
-                       // draw loop never needs a large-offset [] lookup later
+    int   candle
     float zb
     float zt
     bool  bullish
     int   triggerK
-    int   eligibleK
-    int   stopK
-    int   stopTime  // time of stopK's bar, captured at the moment it's set
-                     // (offset 0, always safe) so the draw loop's box
-                     // right-edge never needs a large-offset [] lookup either
-    int   state
+    int   eligibleK     // -1 = not yet eligible
+    int   stopK         // -1 = extending
+    int   state         // 0=IFOB, 1=AOB, 2=OOB, 3=SPENT, 4=AIFOB
     int   origState
     int   preSpentState
-    int   lastDrawnState  // state at the last box redraw, -1 = never drawn;
-                           // lets the draw loop stop touching a zone's box
-                           // once it's no longer changing (see DRAW section)
-    box   zoneBox
 
-// ============================== STATE ==============================
-var array<ObZone> obList  = array.new<ObZone>()
-// Indices into obList that still need per-bar attention (eligibility,
-// lifecycle/stranding, touch, redraw). Every zone starts here at creation;
-// pruned once SPENT(3) -- the only truly terminal state (OOB zones stay in
-// this list forever since they can still get touched and flip to SPENT
-// later, per the spec). Without this, the STEP2/STEP3/DRAW loops below
-// would rescan the FULL history of every zone ever created on every single
-// bar, which is what actually blew Pine's 500ms-per-bar budget on a 1H
-// chart loaded with a lot of history (RE10022) -- unrelated to AIFOB,
-// this would have hit the same wall with AIFOB still in place too, just
-// at a larger history size.
-var array<int>     liveIdx = array.new_int()
+// ===================== PERSISTENT STATE =====================
+var events     = array.new<SwEv>()
+var msses      = array.new<MssEv>()
+var obs        = array.new<ObZone>()
+var swHighs    = array.new<int>()
+var swLows     = array.new<int>()
 
-// swing-detection running trackers (mirror MQL5's peakIdx/troughIdx, with
-// their price shadowed alongside so H[peakIdx]/L[troughIdx] never need a
-// separate historical lookup)
-var int   peakIdx   = 0
-var float peakH     = na
-var int   troughIdx = 0
-var float troughL   = na
+// OHLC + time storage (absolute indexing, oldest=0)
+var O_ = array.new<float>()
+var H_ = array.new<float>()
+var L_ = array.new<float>()
+var C_ = array.new<float>()
+var BI = array.new<int>()      // bar_index of each bar
+var BT = array.new<int>()      // bar time (ms) of each bar
 
-// confirmed-event log (mirrors g_ev[]: kind 0=high, 1=low)
-var array<int>   evConfirmIdx = array.new_int()
-var array<int>   evKind       = array.new_int()
-var array<int>   evSwingIdx   = array.new_int()
-var array<float> evPrice      = array.new_float()
+// Swing detection trackers
+var int peakIdx_   = 0
+var int troughIdx_ = 0
 
-// regime / OB engine trackers
-var bool  haveSWH    = false
-var float swhPrice   = na
-var int   swhIdx     = 0
-var bool  haveSWL    = false
-var float swlPrice   = na
-var int   swlIdx     = 0
-var int   regime     = 0     // 0 warmup, 1 up, 2 down
+// Regime / MSS / OB trackers
+var bool  haveSWH   = false
+var float swhPrice  = 0.0
+var int   swhIdx    = 0
+var bool  haveSWL   = false
+var float swlPrice  = 0.0
+var int   swlIdx    = 0
+var int   regime    = 0      // 0=warmup, 1=up, 2=down
+var int   ei        = 0      // event pointer
 var int   lastSWHidx = -1
 var int   lastSWLidx = -1
+var int   pendBullAifob = -1
+var int   pendBearAifob = -1
 
-// ============================== HELPERS ==============================
-barTimeAt(idx) => time[bar_index - idx]
+// Guard: process each bar exactly once
+var int lastProcessedBI = -1
 
-f_addEv(confirmIdx, kind, swingIdx, price) =>
-    array.push(evConfirmIdx, confirmIdx)
-    array.push(evKind, kind)
-    array.push(evSwingIdx, swingIdx)
-    array.push(evPrice, price)
+// Drawing object arrays (for cleanup on redraw)
+var drawnLabels = array.new<label>()
+var drawnBoxes  = array.new<box>()
 
-// rank by body extremity (close), not wick -- zones are drawn open-to-close
-f_pickLowestBearish(lo, hi) =>
-    int best = -1
-    float bestClose = na
-    if hi >= lo
+// Replay gate
+replayActive = useReplay and InpReplayUpTo > 0
+skipBar = replayActive and time > InpReplayUpTo
+
+// ===================== HELPER FUNCTIONS =====================
+addSH(int idx) =>
+    sz = array.size(swHighs)
+    doPush = sz == 0
+    if not doPush
+        doPush := array.get(swHighs, sz - 1) != idx
+    if doPush
+        array.push(swHighs, idx)
+
+addSL(int idx) =>
+    sz = array.size(swLows)
+    doPush = sz == 0
+    if not doPush
+        doPush := array.get(swLows, sz - 1) != idx
+    if doPush
+        array.push(swLows, idx)
+
+addEv(int cIdx, int kind, int sIdx, float pr) =>
+    array.push(events, SwEv.new(cIdx, kind, sIdx, pr))
+
+addMss(int aIdx, int bIdx, float pr, bool up) =>
+    array.push(msses, MssEv.new(aIdx, bIdx, pr, up))
+
+addOB(int cand, float zb, float zt, bool bull, int tK, int st) =>
+    eK = (st == 1 or st == 4) ? tK : -1
+    array.push(obs, ObZone.new(cand, zb, zt, bull, tK, eK, -1, st, st, st))
+
+// --- AOB HUNT: Bullish ---
+tryBullAOB(int pReg, int aobSWHi, int newSwlI, float newSwlP, int k) =>
+    if pReg == 1 and aobSWHi >= 0
+        lo2 = math.max(0, math.min(aobSWHi - 1, newSwlI))
+        hi2 = math.max(aobSWHi - 1, newSwlI)
+        best2 = -1
+        for x = lo2 to hi2
+            if x < 0
+                continue
+            cX = array.get(C_, x)
+            oX = array.get(O_, x)
+            okB2 = false
+            if cX > oX
+                if best2 == -1
+                    okB2 := true
+                else
+                    okB2 := cX > array.get(C_, best2)
+            if okB2
+                best2 := x
+        if best2 != -1
+            if array.get(L_, best2) > newSwlP
+                oB = array.get(O_, best2)
+                cB = array.get(C_, best2)
+                addOB(best2, math.min(oB, cB), math.max(oB, cB), true, k, 1)
+
+// --- AOB HUNT: Bearish ---
+tryBearAOB(int pReg, int aobSWLi, int newSwhI, float newSwhP, int k) =>
+    if pReg == 2 and aobSWLi >= 0
+        lo2 = math.max(0, math.min(aobSWLi - 1, newSwhI))
+        hi2 = math.max(aobSWLi - 1, newSwhI)
+        best2 = -1
+        for x = lo2 to hi2
+            if x < 0
+                continue
+            cX = array.get(C_, x)
+            oX = array.get(O_, x)
+            okB2 = false
+            if cX < oX
+                if best2 == -1
+                    okB2 := true
+                else
+                    okB2 := cX < array.get(C_, best2)
+            if okB2
+                best2 := x
+        if best2 != -1
+            if array.get(H_, best2) < newSwhP
+                oB = array.get(O_, best2)
+                cB = array.get(C_, best2)
+                addOB(best2, math.min(oB, cB), math.max(oB, cB), false, k, 1)
+
+// --- AIFOB HUNT: Bullish (returns obs[] index or -1) ---
+tryBullAIFOB(int pReg, bool pHaveSWH, int pSwhI, int pLastSWLi, int newSwlI, int k) =>
+    result = -1
+    if pReg == 1 and pHaveSWH and pSwhI >= 0 and pLastSWLi >= 0
+        lo = math.max(0, math.min(math.min(pLastSWLi, newSwlI), pSwhI - 1))
+        hi = math.max(math.max(pLastSWLi, newSwlI), pSwhI - 1)
+        best = -1
         for x = lo to hi
-            offs = bar_index - x
-            if close[offs] < open[offs] and (best == -1 or close[offs] < bestClose)
+            if x < 0
+                continue
+            cX = array.get(C_, x)
+            oX = array.get(O_, x)
+            okB = false
+            if cX < oX
+                if best == -1
+                    okB := true
+                else
+                    okB := cX < array.get(C_, best)
+            if okB
                 best := x
-                bestClose := close[offs]
-    best
-
-f_pickHighestBullish(lo, hi) =>
-    int best = -1
-    float bestClose = na
-    if hi >= lo
-        for x = lo to hi
-            offs = bar_index - x
-            if close[offs] > open[offs] and (best == -1 or close[offs] > bestClose)
-                best := x
-                bestClose := close[offs]
-    best
-
-f_addOB(candleIdx, zb, zt, bullish, triggerK, st) =>
-    int elig = (st == 1) ? triggerK : -1
-    int cTime = time[bar_index - candleIdx]
-    z = ObZone.new(candleIdx = candleIdx, candleTime = cTime, zb = zb, zt = zt, bullish = bullish, triggerK = triggerK,
-                   eligibleK = elig, stopK = -1, stopTime = na, state = st, origState = st, preSpentState = st,
-                   lastDrawnState = -1, zoneBox = na)
-    array.push(obList, z)
-    newIdx = array.size(obList) - 1
-    array.push(liveIdx, newIdx)
-    newIdx
-
-// AOB hunts -- must run regardless of the confirming candle's own body
-// direction (both are called from all four MID-ARM sites below).
-f_tryBullishAOB(prevRegime, aobSWHidx, newSwlIdx, newSwlPrice) =>
-    int result = -1
-    if prevRegime == 1 and aobSWHidx >= 0
-        lo = math.max(0, math.min(aobSWHidx - 1, newSwlIdx))
-        hi = math.max(aobSWHidx - 1, newSwlIdx)
-        best = f_pickHighestBullish(lo, hi)
         if best != -1
-            offs = bar_index - best
-            if low[offs] > newSwlPrice
-                result := f_addOB(best, math.min(open[offs], close[offs]), math.max(open[offs], close[offs]), true, bar_index, 1)
+            oB = array.get(O_, best)
+            cB = array.get(C_, best)
+            addOB(best, math.min(oB, cB), math.max(oB, cB), true, k, 4)
+            result := array.size(obs) - 1
     result
 
-f_tryBearishAOB(prevRegime, aobSWLidx, newSwhIdx, newSwhPrice) =>
-    int result = -1
-    if prevRegime == 2 and aobSWLidx >= 0
-        lo = math.max(0, math.min(aobSWLidx - 1, newSwhIdx))
-        hi = math.max(aobSWLidx - 1, newSwhIdx)
-        best = f_pickLowestBearish(lo, hi)
+// --- AIFOB HUNT: Bearish (returns obs[] index or -1) ---
+tryBearAIFOB(int pReg, bool pHaveSWL, int pSwlI, int pLastSWHi, int newSwhI, int k) =>
+    result = -1
+    if pReg == 2 and pHaveSWL and pSwlI >= 0 and pLastSWHi >= 0
+        lo = math.max(0, math.min(math.min(pLastSWHi, newSwhI), pSwlI - 1))
+        hi = math.max(math.max(pLastSWHi, newSwhI), pSwlI - 1)
+        best = -1
+        for x = lo to hi
+            if x < 0
+                continue
+            cX = array.get(C_, x)
+            oX = array.get(O_, x)
+            okB = false
+            if cX > oX
+                if best == -1
+                    okB := true
+                else
+                    okB := cX > array.get(C_, best)
+            if okB
+                best := x
         if best != -1
-            offs = bar_index - best
-            if high[offs] < newSwhPrice
-                result := f_addOB(best, math.min(open[offs], close[offs]), math.max(open[offs], close[offs]), false, bar_index, 1)
+            oB = array.get(O_, best)
+            cB = array.get(C_, best)
+            addOB(best, math.min(oB, cB), math.max(oB, cB), false, k, 4)
+            result := array.size(obs) - 1
     result
 
-// ============================================================================
-// REMOVED FEATURE -- AIFOB (state 4), removed at the user's request. Kept
-// here as a reference writeup, not code, in case this needs reimplementing.
-//
-// Concept: an IFOB created EARLY -- before the swing it depends on has
-// actually been exceeded -- because the opposite (retracement) swing
-// already confirmed while the engine was still waiting for that exceedance.
-//
-// Creation rule (former f_tryBullishAIFOB/f_tryBearishAIFOB, called from
-// the swing-confirm MID-ARM branch alongside f_tryBullish/BearishAOB
-// whenever the AOB path did NOT already fire): same range/pick rule as a
-// real IFOB (strongest opposite-color body in the range), where the range
-// was [min(lastOppositeSwingIdx, newRetracementSwingIdx) .. armedSwingIdx - 1],
-// gated on: previous regime already established in the target direction,
-// the armed swing (haveSWH_/haveSWL_) actually existing, and
-// lastSWLidx_/lastSWHidx_ >= 0.
-//
-// Promotion rule (former pendingBullAifobIdx/pendingBearAifobIdx trackers):
-// when the armed swing DID later get exceeded (the normal IFOB-creation
-// branch), if a pending AIFOB index was recorded, that zone's state/
-// origState were flipped from 4 to 0 in place (promoted to a real IFOB,
-// not duplicated) instead of running the normal candle-pick logic again.
-//
-// Supersession rule: each time a FRESH swing of either kind confirmed
-// before that promotion happened, the pending index for the opposite AIFOB
-// slot was cleared (set to -1) -- i.e. a fresher swing invalidates a stale
-// pending AIFOB and the zone just continues on as a normal (unpromoted)
-// AIFOB from then on.
-// ============================================================================
+// ===================== MAIN PROCESSING =====================
+// Process each bar exactly once (matches MQL5 lastN guard)
+if not skipBar and bar_index != lastProcessedBI
+    lastProcessedBI := bar_index
 
-// ============================== SWING DETECTION (this bar) ==============================
-evCountBefore = array.size(evKind)
+    // Push current bar data
+    array.push(O_, open)
+    array.push(H_, high)
+    array.push(L_, low)
+    array.push(C_, close)
+    array.push(BI, bar_index)
+    array.push(BT, int(time))
 
-if bar_index == 0
-    peakIdx := 0
-    peakH := high
-    troughIdx := 0
-    troughL := low
-else
-    bool bullishBar     = close >= open
-    bool breaksPrevHigh = high > high[1]
-    bool breaksPrevLow  = low  < low[1]
-    bool dualAction     = breaksPrevHigh and breaksPrevLow
+    n = array.size(O_)
+    if n >= 2
+        i = n - 1    // current bar index in our arrays
 
-    bool prevDual = false
-    if array.size(evKind) >= 2
-        n1 = array.size(evKind) - 1
-        n2 = array.size(evKind) - 2
-        bool diffKinds     = array.get(evKind, n1) != array.get(evKind, n2)
-        bool sameConfirm   = array.get(evConfirmIdx, n1) == array.get(evConfirmIdx, n2)
-        bool wasLastCandle = array.get(evConfirmIdx, n1) == bar_index - 1
-        prevDual := diffKinds and sameConfirm and wasLastCandle
-    bool blockPostDual = prevDual and not dualAction
+        // ========== SWING DETECTION ==========
+        isBull   = array.get(C_, i) >= array.get(O_, i)
+        brkH     = array.get(H_, i) > array.get(H_, i - 1)
+        brkL     = array.get(L_, i) < array.get(L_, i - 1)
+        dualAct  = brkH and brkL
 
-    if not bullishBar
-        // BEARISH: high reached first, then low
-        if high > peakH
-            peakIdx := bar_index
-            peakH := high
-        if breaksPrevHigh
-            bool lastWasLow = array.size(evKind) > 0 and array.get(evKind, array.size(evKind) - 1) == 1
-            if not lastWasLow and not blockPostDual
-                f_addEv(bar_index, 1, troughIdx, troughL)
-                peakIdx := bar_index
-                peakH := high
-        if low < troughL
-            troughIdx := bar_index
-            troughL := low
-        if breaksPrevLow
-            bool lastWasHigh = array.size(evKind) > 0 and array.get(evKind, array.size(evKind) - 1) == 0
-            if not lastWasHigh and not blockPostDual
-                f_addEv(bar_index, 0, peakIdx, peakH)
-                troughIdx := bar_index
-                troughL := low
-    else
-        // BULLISH: low reached first, then high
-        if low < troughL
-            troughIdx := bar_index
-            troughL := low
-        if breaksPrevLow
-            bool lastWasHigh = array.size(evKind) > 0 and array.get(evKind, array.size(evKind) - 1) == 0
-            if not lastWasHigh and not blockPostDual
-                f_addEv(bar_index, 0, peakIdx, peakH)
-                troughIdx := bar_index
-                troughL := low
-        if high > peakH
-            peakIdx := bar_index
-            peakH := high
-        if breaksPrevHigh
-            bool lastWasLow = array.size(evKind) > 0 and array.get(evKind, array.size(evKind) - 1) == 1
-            if not lastWasLow and not blockPostDual
-                f_addEv(bar_index, 1, troughIdx, troughL)
-                peakIdx := bar_index
-                peakH := high
+        // detect previous dual-action
+        prevDual = false
+        eCnt = array.size(events)
+        if eCnt >= 2
+            ev1 = array.get(events, eCnt - 1)
+            ev2 = array.get(events, eCnt - 2)
+            prevDual := (ev1.kind != ev2.kind) and (ev1.confirmIdx == ev2.confirmIdx) and (ev1.confirmIdx == i - 1)
 
-evCountAfter = array.size(evKind)
+        blockPD = prevDual and not dualAct
 
-// draw newly confirmed swing points
-if evCountAfter > evCountBefore
-    for idx = evCountBefore to evCountAfter - 1
-        kind  = array.get(evKind, idx)
-        sIdx  = array.get(evSwingIdx, idx)
-        pr    = array.get(evPrice, idx)
-        if barTimeAt(sIdx) >= displayFromInput
-            if kind == 0
-                label.new(x = sIdx, y = pr, style = label.style_arrowup, color = colHighSwing, size = size.tiny)
-            else
-                label.new(x = sIdx, y = pr, style = label.style_arrowdown, color = colLowSwing, size = size.tiny)
+        evBeforeSwing = array.size(events)  // save for STEP 3
 
-// ============================== REGIME / OB ENGINE (this bar) ==============================
-// STEP 0: peek-ahead -- update lastSWHidx/lastSWLidx from events confirmed
-// THIS bar, before break checks run.
-if evCountAfter > evCountBefore
-    for idx = evCountBefore to evCountAfter - 1
-        if array.get(evKind, idx) == 0
-            lastSWHidx := array.get(evSwingIdx, idx)
+        if not isBull
+            // BEARISH: High first, then Low
+            if array.get(H_, i) > array.get(H_, peakIdx_)
+                peakIdx_ := i
+            if brkH
+                lk = array.size(events) > 0 ? array.get(events, array.size(events) - 1).kind : -1
+                if lk != 1 and not blockPD
+                    addSL(troughIdx_)
+                    addEv(i, 1, troughIdx_, array.get(L_, troughIdx_))
+                    peakIdx_ := i
+            if array.get(L_, i) < array.get(L_, troughIdx_)
+                troughIdx_ := i
+            if brkL
+                lk2 = array.size(events) > 0 ? array.get(events, array.size(events) - 1).kind : -1
+                if lk2 != 0 and not blockPD
+                    addSH(peakIdx_)
+                    addEv(i, 0, peakIdx_, array.get(H_, peakIdx_))
+                    troughIdx_ := i
         else
-            lastSWLidx := array.get(evSwingIdx, idx)
+            // BULLISH: Low first, then High
+            if array.get(L_, i) < array.get(L_, troughIdx_)
+                troughIdx_ := i
+            if brkL
+                lk3 = array.size(events) > 0 ? array.get(events, array.size(events) - 1).kind : -1
+                if lk3 != 0 and not blockPD
+                    addSH(peakIdx_)
+                    addEv(i, 0, peakIdx_, array.get(H_, peakIdx_))
+                    troughIdx_ := i
+            if array.get(H_, i) > array.get(H_, peakIdx_)
+                peakIdx_ := i
+            if brkH
+                lk4 = array.size(events) > 0 ? array.get(events, array.size(events) - 1).kind : -1
+                if lk4 != 1 and not blockPD
+                    addSL(troughIdx_)
+                    addEv(i, 1, troughIdx_, array.get(L_, troughIdx_))
+                    peakIdx_ := i
 
-prevRegime = regime
-bool swhConsumed = false
-bool swlConsumed = false
-aobSWHidx = swhIdx   // save armed indices before this bar's changes
-aobSWLidx = swlIdx
+        // ========== REGIME / MSS / OB ENGINE ==========
+        k = i
+        evTotal = array.size(events)
 
-bool kBullish = close >= open
-
-if not kBullish
-    // bearish: high happened first -> check the armed SWH break first
-    if haveSWH and high > swhPrice
-        if regime == 0
-            regime := 1
-        else if regime == 2
-            regime := 1
-            if barTimeAt(swhIdx) >= displayFromInput
-                label.new(x = swhIdx, y = swhPrice, style = label.style_xcross, color = colMSSUp, size = size.tiny)
-        if lastSWLidx >= 0
-            lo = math.min(math.min(lastSWLidx, bar_index), swhIdx)
-            hi = math.max(math.max(lastSWLidx, bar_index), swhIdx)
-            best = f_pickLowestBearish(lo, hi)
-            if best != -1
-                offs = bar_index - best
-                f_addOB(best, math.min(open[offs], close[offs]), math.max(open[offs], close[offs]), true, bar_index, 0)
-        haveSWH := false
-        swhConsumed := true
-
-    // MID-ARM: process this bar's new events, create AOBs
-    if evCountAfter > evCountBefore
-        for idx = evCountBefore to evCountAfter - 1
-            kind = array.get(evKind, idx)
-            sIdx = array.get(evSwingIdx, idx)
-            pr   = array.get(evPrice, idx)
-            if kind == 0
-                haveSWH := true
-                swhPrice := pr
-                swhIdx := sIdx
-                f_tryBearishAOB(prevRegime, aobSWLidx, sIdx, pr)
+        // STEP 0: peek-ahead — update lastSWHidx/lastSWLidx
+        peek0 = ei
+        while peek0 < evTotal
+            pEv = array.get(events, peek0)
+            if pEv.confirmIdx != k
+                break
+            if pEv.kind == 0
+                lastSWHidx := pEv.swingIdx
             else
-                haveSWL := true
-                swlPrice := pr
-                swlIdx := sIdx
-                f_tryBullishAOB(prevRegime, aobSWHidx, sIdx, pr)
+                lastSWLidx := pEv.swingIdx
+            peek0 += 1
 
-    if haveSWL and low < swlPrice
-        if regime == 0
-            regime := 2
-        else if regime == 1
-            regime := 2
-            if barTimeAt(swlIdx) >= displayFromInput
-                label.new(x = swlIdx, y = swlPrice, style = label.style_xcross, color = colMSSDown, size = size.tiny)
-        if lastSWHidx >= 0
-            lo = math.min(math.min(lastSWHidx, bar_index), swlIdx)
-            hi = math.max(math.max(lastSWHidx, bar_index), swlIdx)
-            best = f_pickHighestBullish(lo, hi)
-            if best != -1
-                offs = bar_index - best
-                f_addOB(best, math.min(open[offs], close[offs]), math.max(open[offs], close[offs]), false, bar_index, 0)
-        haveSWL := false
-        swlConsumed := true
-else
-    // bullish: low happened first -> check the armed SWL break first
-    if haveSWL and low < swlPrice
-        if regime == 0
-            regime := 2
-        else if regime == 1
-            regime := 2
-            if barTimeAt(swlIdx) >= displayFromInput
-                label.new(x = swlIdx, y = swlPrice, style = label.style_xcross, color = colMSSDown, size = size.tiny)
-        if lastSWHidx >= 0
-            lo = math.min(math.min(lastSWHidx, bar_index), swlIdx)
-            hi = math.max(math.max(lastSWHidx, bar_index), swlIdx)
-            best = f_pickHighestBullish(lo, hi)
-            if best != -1
-                offs = bar_index - best
-                f_addOB(best, math.min(open[offs], close[offs]), math.max(open[offs], close[offs]), false, bar_index, 0)
-        haveSWL := false
-        swlConsumed := true
+        prevReg = regime
+        swhCons = false
+        swlCons = false
+        aobSWHi = swhIdx
+        aobSWLi = swlIdx
 
-    // MID-ARM: process this bar's new events, create AOBs
-    if evCountAfter > evCountBefore
-        for idx = evCountBefore to evCountAfter - 1
-            kind = array.get(evKind, idx)
-            sIdx = array.get(evSwingIdx, idx)
-            pr   = array.get(evPrice, idx)
-            if kind == 0
-                haveSWH := true
-                swhPrice := pr
-                swhIdx := sIdx
-                f_tryBearishAOB(prevRegime, aobSWLidx, sIdx, pr)
-            else
-                haveSWL := true
-                swlPrice := pr
-                swlIdx := sIdx
-                f_tryBullishAOB(prevRegime, aobSWHidx, sIdx, pr)
+        // STEP 1 + MID-ARM: break checks, MSS, IFOB, AOB, AIFOB
+        kBull = array.get(C_, k) >= array.get(O_, k)
 
-    if haveSWH and high > swhPrice
-        if regime == 0
-            regime := 1
-        else if regime == 2
-            regime := 1
-            if barTimeAt(swhIdx) >= displayFromInput
-                label.new(x = swhIdx, y = swhPrice, style = label.style_xcross, color = colMSSUp, size = size.tiny)
-        if lastSWLidx >= 0
-            lo = math.min(math.min(lastSWLidx, bar_index), swhIdx)
-            hi = math.max(math.max(lastSWLidx, bar_index), swhIdx)
-            best = f_pickLowestBearish(lo, hi)
-            if best != -1
-                offs = bar_index - best
-                f_addOB(best, math.min(open[offs], close[offs]), math.max(open[offs], close[offs]), true, bar_index, 0)
-        haveSWH := false
-        swhConsumed := true
+        if not kBull
+            // --- BEARISH bar: high first -> SWH break first ---
+            if haveSWH and array.get(H_, k) > swhPrice
+                if regime == 0
+                    regime := 1
+                else if regime == 2
+                    regime := 1
+                    addMss(k, swhIdx, swhPrice, true)
+                // IFOB or promote AIFOB
+                if pendBullAifob != -1
+                    obRef = array.get(obs, pendBullAifob)
+                    obRef.state     := 0
+                    obRef.origState := 0
+                    array.set(obs, pendBullAifob, obRef)
+                    pendBullAifob := -1
+                else if lastSWLidx >= 0
+                    lo = math.min(math.min(lastSWLidx, k), swhIdx)
+                    hi = math.max(math.max(lastSWLidx, k), swhIdx)
+                    best = -1
+                    for x = lo to hi
+                        cX = array.get(C_, x)
+                        oX = array.get(O_, x)
+                        okB = false
+                        if cX < oX
+                            if best == -1
+                                okB := true
+                            else
+                                okB := cX < array.get(C_, best)
+                        if okB
+                            best := x
+                    if best != -1
+                        oB = array.get(O_, best)
+                        cB = array.get(C_, best)
+                        addOB(best, math.min(oB, cB), math.max(oB, cB), true, k, 0)
+                haveSWH := false
+                swhCons := true
 
-// STEP 2: arm swings (redundant with MID-ARM except for the *Consumed guard
-// and eligibility-granting) + IFOB eligibility
-if evCountAfter > evCountBefore
-    for idx = evCountBefore to evCountAfter - 1
-        kind = array.get(evKind, idx)
-        sIdx = array.get(evSwingIdx, idx)
-        pr   = array.get(evPrice, idx)
-        if kind == 0
-            if not swhConsumed
-                haveSWH := true
-                swhPrice := pr
-                swhIdx := sIdx
-            lastSWHidx := sIdx
-            if array.size(liveIdx) > 0
-                for li = 0 to array.size(liveIdx) - 1
-                    zone = array.get(obList, array.get(liveIdx, li))
-                    if zone.bullish and zone.state == 0 and zone.eligibleK == -1 and bar_index > zone.triggerK
-                        zone.eligibleK := bar_index
+            // MID-ARM
+            peek2 = ei
+            while peek2 < evTotal
+                pEv2 = array.get(events, peek2)
+                if pEv2.confirmIdx != k
+                    break
+                if pEv2.kind == 0
+                    haveSWH  := true
+                    swhPrice := pEv2.price
+                    swhIdx   := pEv2.swingIdx
+                    pendBullAifob := -1
+                    tryBearAOB(prevReg, aobSWLi, pEv2.swingIdx, pEv2.price, k)
+                    if pendBearAifob == -1
+                        r2 = tryBearAIFOB(prevReg, haveSWL, aobSWLi, lastSWHidx, pEv2.swingIdx, k)
+                        if r2 != -1
+                            pendBearAifob := r2
+                else
+                    haveSWL  := true
+                    swlPrice := pEv2.price
+                    swlIdx   := pEv2.swingIdx
+                    pendBearAifob := -1
+                    tryBullAOB(prevReg, aobSWHi, pEv2.swingIdx, pEv2.price, k)
+                    if pendBullAifob == -1
+                        r3 = tryBullAIFOB(prevReg, haveSWH, aobSWHi, lastSWLidx, pEv2.swingIdx, k)
+                        if r3 != -1
+                            pendBullAifob := r3
+                peek2 += 1
+
+            // Second break: SWL
+            if haveSWL and array.get(L_, k) < swlPrice
+                if regime == 0
+                    regime := 2
+                else if regime == 1
+                    regime := 2
+                    addMss(k, swlIdx, swlPrice, false)
+                if pendBearAifob != -1
+                    obRef2 = array.get(obs, pendBearAifob)
+                    obRef2.state     := 0
+                    obRef2.origState := 0
+                    array.set(obs, pendBearAifob, obRef2)
+                    pendBearAifob := -1
+                else if lastSWHidx >= 0
+                    lo2 = math.min(math.min(lastSWHidx, k), swlIdx)
+                    hi2 = math.max(math.max(lastSWHidx, k), swlIdx)
+                    best2 = -1
+                    for x = lo2 to hi2
+                        cX = array.get(C_, x)
+                        oX = array.get(O_, x)
+                        okB2 = false
+                        if cX > oX
+                            if best2 == -1
+                                okB2 := true
+                            else
+                                okB2 := cX > array.get(C_, best2)
+                        if okB2
+                            best2 := x
+                    if best2 != -1
+                        oB = array.get(O_, best2)
+                        cB = array.get(C_, best2)
+                        addOB(best2, math.min(oB, cB), math.max(oB, cB), false, k, 0)
+                haveSWL := false
+                swlCons := true
+
         else
-            if not swlConsumed
-                haveSWL := true
-                swlPrice := pr
-                swlIdx := sIdx
-            lastSWLidx := sIdx
-            if array.size(liveIdx) > 0
-                for li = 0 to array.size(liveIdx) - 1
-                    zone = array.get(obList, array.get(liveIdx, li))
-                    if (not zone.bullish) and zone.state == 0 and zone.eligibleK == -1 and bar_index > zone.triggerK
-                        zone.eligibleK := bar_index
+            // --- BULLISH bar: low first -> SWL break first ---
+            if haveSWL and array.get(L_, k) < swlPrice
+                if regime == 0
+                    regime := 2
+                else if regime == 1
+                    regime := 2
+                    addMss(k, swlIdx, swlPrice, false)
+                if pendBearAifob != -1
+                    obRef3 = array.get(obs, pendBearAifob)
+                    obRef3.state     := 0
+                    obRef3.origState := 0
+                    array.set(obs, pendBearAifob, obRef3)
+                    pendBearAifob := -1
+                else if lastSWHidx >= 0
+                    lo3 = math.min(math.min(lastSWHidx, k), swlIdx)
+                    hi3 = math.max(math.max(lastSWHidx, k), swlIdx)
+                    best3 = -1
+                    for x = lo3 to hi3
+                        cX = array.get(C_, x)
+                        oX = array.get(O_, x)
+                        okB3 = false
+                        if cX > oX
+                            if best3 == -1
+                                okB3 := true
+                            else
+                                okB3 := cX > array.get(C_, best3)
+                        if okB3
+                            best3 := x
+                    if best3 != -1
+                        oB = array.get(O_, best3)
+                        cB = array.get(C_, best3)
+                        addOB(best3, math.min(oB, cB), math.max(oB, cB), false, k, 0)
+                haveSWL := false
+                swlCons := true
 
-// STEP 3: OB lifecycle at this bar
-if array.size(liveIdx) > 0
-    for li = 0 to array.size(liveIdx) - 1
-        zone = array.get(obList, array.get(liveIdx, li))
-        if zone.state != 3
-            zb = zone.zb
-            zt = zone.zt
-            bull = zone.bullish
-            bool impacted = false
+            // MID-ARM
+            peek3 = ei
+            while peek3 < evTotal
+                pEv3 = array.get(events, peek3)
+                if pEv3.confirmIdx != k
+                    break
+                if pEv3.kind == 0
+                    haveSWH  := true
+                    swhPrice := pEv3.price
+                    swhIdx   := pEv3.swingIdx
+                    pendBullAifob := -1
+                    tryBearAOB(prevReg, aobSWLi, pEv3.swingIdx, pEv3.price, k)
+                    if pendBearAifob == -1
+                        r4 = tryBearAIFOB(prevReg, haveSWL, aobSWLi, lastSWHidx, pEv3.swingIdx, k)
+                        if r4 != -1
+                            pendBearAifob := r4
+                else
+                    haveSWL  := true
+                    swlPrice := pEv3.price
+                    swlIdx   := pEv3.swingIdx
+                    pendBearAifob := -1
+                    tryBullAOB(prevReg, aobSWHi, pEv3.swingIdx, pEv3.price, k)
+                    if pendBullAifob == -1
+                        r5 = tryBullAIFOB(prevReg, haveSWH, aobSWHi, lastSWLidx, pEv3.swingIdx, k)
+                        if r5 != -1
+                            pendBullAifob := r5
+                peek3 += 1
 
-            // IMPACT: first touch after eligible -> SPENT
-            if zone.eligibleK != -1 and bar_index >= zone.eligibleK
-                if high >= zb and low <= zt
-                    zone.preSpentState := zone.state
-                    zone.state := 3
-                    zone.stopK := bar_index
-                    zone.stopTime := time
-                    impacted := true
+            // Second break: SWH
+            if haveSWH and array.get(H_, k) > swhPrice
+                if regime == 0
+                    regime := 1
+                else if regime == 2
+                    regime := 1
+                    addMss(k, swhIdx, swhPrice, true)
+                if pendBullAifob != -1
+                    obRef4 = array.get(obs, pendBullAifob)
+                    obRef4.state     := 0
+                    obRef4.origState := 0
+                    array.set(obs, pendBullAifob, obRef4)
+                    pendBullAifob := -1
+                else if lastSWLidx >= 0
+                    lo4 = math.min(math.min(lastSWLidx, k), swhIdx)
+                    hi4 = math.max(math.max(lastSWLidx, k), swhIdx)
+                    best4 = -1
+                    for x = lo4 to hi4
+                        cX = array.get(C_, x)
+                        oX = array.get(O_, x)
+                        okB4 = false
+                        if cX < oX
+                            if best4 == -1
+                                okB4 := true
+                            else
+                                okB4 := cX < array.get(C_, best4)
+                        if okB4
+                            best4 := x
+                    if best4 != -1
+                        oB = array.get(O_, best4)
+                        cB = array.get(C_, best4)
+                        addOB(best4, math.min(oB, cB), math.max(oB, cB), true, k, 0)
+                haveSWH := false
+                swhCons := true
 
-            // STRANDING -> OLD: which swing proves it depends on which leg the
-            // zone was built from (IFOB = breakout leg, mirrored direction;
-            // AOB = retracement leg, opposite mirrored direction).
-            if (not impacted) and (zone.state == 0 or zone.state == 1) and zone.eligibleK != -1
-                bool isIFOB = zone.origState != 1
-                if evCountAfter > evCountBefore
-                    for idx = evCountBefore to evCountAfter - 1
-                        kind = array.get(evKind, idx)
-                        pr   = array.get(evPrice, idx)
-                        if isIFOB
-                            if bull and kind == 1 and pr > zt
-                                zone.state := 2
-                            if (not bull) and kind == 0 and pr < zb
-                                zone.state := 2
-                        else
-                            if bull and kind == 0 and pr < zb
-                                zone.state := 2
-                            if (not bull) and kind == 1 and pr > zt
-                                zone.state := 2
-
-// ============================== DRAW / UPDATE OB BOXES ==============================
-if array.size(liveIdx) > 0
-    for li = 0 to array.size(liveIdx) - 1
-        zone = array.get(obList, array.get(liveIdx, li))
-        // Once a zone stops changing (no longer IFOB/AOB/OOB -- i.e. it's
-        // SPENT) its box only needs ONE more redraw to catch that final
-        // state -- not one every bar forever. lastDrawnState != zone.state
-        // catches exactly that one transition, then skips it on every bar
-        // after. OOB(2) must stay in "still live" here too: an unimpacted
-        // OOB zone stays in liveIdx precisely because it can still be
-        // touched and flip to SPENT later (see the liveIdx comment above),
-        // so its box needs to keep extending to the current bar every bar
-        // until that happens -- excluding it here was the bug (it made
-        // OOB boxes freeze at the exact bar they turned OOB instead of
-        // extending, since lastDrawnState == state on every bar after that
-        // single post-transition redraw).
-        bool stillLive = zone.state == 0 or zone.state == 1 or zone.state == 2
-        if zone.candleTime >= displayFromInput and (stillLive or zone.lastDrawnState != zone.state)
-            int drawState = zone.state == 3 ? zone.preSpentState : zone.state
-            color col = zone.bullish ? colIFOBBull : colIFOBBear
-            if drawState == 1
-                col := colAOB
-            else if drawState == 2
-                col := colOOB
-            // Time-based addressing (xloc.bar_time), not bar-index: a zone's
-            // origin candle can end up far enough in the past (e.g. picked
-            // from a long-armed swing's full range once it finally resolves)
-            // that box.new()'s bar-index `left` argument errors out ("too
-            // far from the current bar index") on intraday charts with a
-            // lot of loaded history. Time values have no such distance cap.
-            int rightEdgeTime = not na(zone.stopTime) ? zone.stopTime : time
-            if na(zone.zoneBox)
-                zone.zoneBox := box.new(left = zone.candleTime, top = zone.zt, bottom = zone.zb, right = rightEdgeTime,
-                                         xloc = xloc.bar_time, border_color = col, bgcolor = na, border_width = 1)
+        // STEP 2: arm swings (consumed check) + IFOB eligibility
+        while ei < evTotal
+            sEv = array.get(events, ei)
+            if sEv.confirmIdx != k
+                break
+            if sEv.kind == 0
+                if not swhCons
+                    haveSWH  := true
+                    swhPrice := sEv.price
+                    swhIdx   := sEv.swingIdx
+                lastSWHidx := sEv.swingIdx
+                obSz = array.size(obs)
+                for z = 0 to obSz - 1
+                    if z < 0 or z >= obSz
+                        continue
+                    obZ = array.get(obs, z)
+                    if obZ.bullish and obZ.state == 0 and obZ.eligibleK == -1 and k > obZ.triggerK
+                        obZ.eligibleK := k
+                        array.set(obs, z, obZ)
             else
-                box.set_right(zone.zoneBox, rightEdgeTime)
-                box.set_border_color(zone.zoneBox, col)
-            zone.lastDrawnState := zone.state
+                if not swlCons
+                    haveSWL  := true
+                    swlPrice := sEv.price
+                    swlIdx   := sEv.swingIdx
+                lastSWLidx := sEv.swingIdx
+                obSz2 = array.size(obs)
+                for z = 0 to obSz2 - 1
+                    if z < 0 or z >= obSz2
+                        continue
+                    obZ2 = array.get(obs, z)
+                    if not obZ2.bullish and obZ2.state == 0 and obZ2.eligibleK == -1 and k > obZ2.triggerK
+                        obZ2.eligibleK := k
+                        array.set(obs, z, obZ2)
+            ei += 1
 
-// Prune SPENT(3) zones out of liveIdx now that they've had their final
-// redraw above -- they need no further eligibility/lifecycle/touch/draw
-// attention ever again. Walked backward so removal never shifts an
-// index still to be visited. OOB(2) zones deliberately stay in liveIdx:
-// per the spec they can still be touched and flip to SPENT later.
-if array.size(liveIdx) > 0
-    for li = array.size(liveIdx) - 1 to 0
-        if array.get(obList, array.get(liveIdx, li)).state == 3
-            array.remove(liveIdx, li)
+        // STEP 3: OB lifecycle at this candle
+        obTotal = array.size(obs)
+        hK = array.get(H_, k)
+        lK = array.get(L_, k)
+        for z = 0 to obTotal - 1
+            if z < 0 or z >= obTotal
+                continue
+            obZ3 = array.get(obs, z)
+            if obZ3.state == 3
+                continue
+
+            zb = obZ3.zb
+            zt = obZ3.zt
+            bull = obZ3.bullish
+
+            // IMPACT
+            if obZ3.eligibleK != -1 and k >= obZ3.eligibleK
+                if hK >= zb and lK <= zt
+                    obZ3.preSpentState := obZ3.state
+                    obZ3.state := 3
+                    obZ3.stopK := k
+                    array.set(obs, z, obZ3)
+                    continue
+
+            // STRANDING -> OOB
+            if (obZ3.state == 0 or obZ3.state == 1 or obZ3.state == 4) and obZ3.eligibleK != -1
+                isIFOB = obZ3.origState != 1
+                // scan only events confirmed at THIS bar (they start at evBeforeSwing in worst case,
+                // but are contiguous at end of events array for this bar)
+                for e2 = evBeforeSwing to evTotal - 1
+                    if e2 < 0 or e2 >= evTotal
+                        continue
+                    stEv = array.get(events, e2)
+                    if stEv.confirmIdx != k
+                        continue
+                    stranded = false
+                    if isIFOB
+                        if bull and stEv.kind == 1 and stEv.price > zt
+                            stranded := true
+                        if not bull and stEv.kind == 0 and stEv.price < zb
+                            stranded := true
+                    else
+                        if bull and stEv.kind == 0 and stEv.price < zb
+                            stranded := true
+                        if not bull and stEv.kind == 1 and stEv.price > zt
+                            stranded := true
+                    if stranded
+                        obZ3.state := 2
+                        array.set(obs, z, obZ3)
+                        break
+
+// ===================== DRAWING (last bar only) =====================
+if barstate.islast
+    // Delete previous drawings
+    lblSzD = array.size(drawnLabels)
+    for lb = 0 to lblSzD - 1
+        if lb < 0 or lb >= lblSzD
+            continue
+        label.delete(array.get(drawnLabels, lb))
+    array.clear(drawnLabels)
+    boxSzD = array.size(drawnBoxes)
+    for bx = 0 to boxSzD - 1
+        if bx < 0 or bx >= boxSzD
+            continue
+        box.delete(array.get(drawnBoxes, bx))
+    array.clear(drawnBoxes)
+
+    nArr = array.size(O_)
+    if nArr < 2
+        runtime.error("Insufficient data")
+
+    // Compute display-from time threshold (milliseconds)
+    dispFrom = useDisplayFrom ? InpDisplayFrom : (time - InpMonthsBack * 30 * 24 * 60 * 60 * 1000)
+
+    // --- Swing HIGHS: blue up arrow ---
+    shSz = array.size(swHighs)
+    for s = 0 to shSz - 1
+        if s < 0 or s >= shSz
+            continue
+        idx = array.get(swHighs, s)
+        if idx < 0 or idx >= nArr
+            continue
+        bt = array.get(BT, idx)
+        if bt < dispFrom
+            continue
+        bi = array.get(BI, idx)
+        yP = array.get(H_, idx)
+        lbl = label.new(bi, yP, "▲", xloc=xloc.bar_index, yloc=yloc.price, style=label.style_none, textcolor=color.blue, size=size.small)
+        array.push(drawnLabels, lbl)
+
+    // --- Swing LOWS: black down arrow ---
+    slSz = array.size(swLows)
+    for s = 0 to slSz - 1
+        if s < 0 or s >= slSz
+            continue
+        idx = array.get(swLows, s)
+        if idx < 0 or idx >= nArr
+            continue
+        bt = array.get(BT, idx)
+        if bt < dispFrom
+            continue
+        bi = array.get(BI, idx)
+        yP = array.get(L_, idx)
+        lbl = label.new(bi, yP, "▼", xloc=xloc.bar_index, yloc=yloc.price, style=label.style_none, textcolor=color.black, size=size.small)
+        array.push(drawnLabels, lbl)
+
+    // --- MSS flips: cross mark at broken swing's location ---
+    mssSz = array.size(msses)
+    for m = 0 to mssSz - 1
+        if m < 0 or m >= mssSz
+            continue
+        mEv = array.get(msses, m)
+        bIdx = mEv.brokenIdx
+        if bIdx < 0 or bIdx >= nArr
+            continue
+        bt = array.get(BT, bIdx)
+        if bt < dispFrom
+            continue
+        bi = array.get(BI, bIdx)
+        isUp = mEv.toUp
+        yP = isUp ? array.get(H_, bIdx) : array.get(L_, bIdx)
+        col = isUp ? color.blue : color.black
+        lbl = label.new(bi, yP, "✕", xloc=xloc.bar_index, yloc=yloc.price, style=label.style_none, textcolor=col, size=size.small)
+        array.push(drawnLabels, lbl)
+
+    // --- OB zones: hollow boxes ---
+    // IFOB bull=blue, IFOB bear=black, AOB=green, OOB=red, AIFOB=orange
+    // SPENT uses preSpentState color
+    obSzD = array.size(obs)
+    extBI = bar_index + 50
+
+    for z = 0 to obSzD - 1
+        if z < 0 or z >= obSzD
+            continue
+        obD = array.get(obs, z)
+        idx = obD.candle
+        if idx < 0 or idx >= nArr
+            continue
+
+        // Focus filter
+        if InpFocusOB > 0
+            if obSzD - z != InpFocusOB
+                continue
+        else
+            bt = array.get(BT, idx)
+            if bt < dispFrom
+                continue
+
+        leftBI = array.get(BI, idx)
+        rightBI = extBI
+        if obD.stopK != -1 and obD.stopK < nArr
+            rightBI := array.get(BI, obD.stopK)
+
+        // Color
+        dSt = obD.state == 3 ? obD.preSpentState : obD.state
+        col = color.blue
+        if dSt == 0
+            col := obD.bullish ? color.blue : color.black
+        else if dSt == 1
+            col := color.green
+        else if dSt == 2
+            col := color.red
+        else if dSt == 4
+            col := color.orange
+        else
+            col := obD.bullish ? color.blue : color.black
+
+        bx = box.new(leftBI, obD.zt, rightBI, obD.zb, border_color=col, border_width=1, bgcolor=na, xloc=xloc.bar_index)
+        array.push(drawnBoxes, bx)
