@@ -73,7 +73,12 @@ type FvgZone
 type DbgEv
     int   barIdx
     bool  bullish       // true = bullish hunt (tryBullAFVG), false = bearish
-    bool  fired         // true if the pReg/aobSWx>=0 gate passed at all
+    int   pReg          // raw regime value at the moment this event fired,
+                          // captured directly from the outer scope (not
+                          // round-tripped through the function) -- 0=warmup,
+                          // 1=up, 2=down
+    int   armedIdx       // aobSWHi (bullish) or aobSWLi (bearish) passed in
+    bool  fired          // true if the pReg/aobSWx>=0 gate passed at all
     bool  refViolated
     int   lo
     int   hi
@@ -152,8 +157,8 @@ addEv(int cIdx, int kind, int sIdx, float pr) =>
 addMss(int aIdx, int bIdx, float pr, bool up) =>
     array.push(msses, MssEv.new(aIdx, bIdx, pr, up))
 
-addDbg(int barIdx, bool bullish, bool fired, bool refViolated, int lo, int hi, int gapsAdded) =>  // DEBUG ONLY
-    array.push(dbgEvents, DbgEv.new(barIdx, bullish, fired, refViolated, lo, hi, gapsAdded))
+addDbg(int barIdx, bool bullish, int pReg, int armedIdx, bool fired, bool refViolated, int lo, int hi, int gapsAdded) =>  // DEBUG ONLY
+    array.push(dbgEvents, DbgEv.new(barIdx, bullish, pReg, armedIdx, fired, refViolated, lo, hi, gapsAdded))
 
 addFVG(int leftIdx, float zb, float zt, bool bull, int tK, int st) =>
     // st: 0=IFVG (delayed eligibility, far-side stranding later), 1=AFVG
@@ -371,15 +376,15 @@ if not skipBar and bar_index != lastProcessedBI
                     swhPrice := pEv2.price
                     swhIdx   := pEv2.swingIdx
                     [firedB, refVB, loB, hiB, addedB] = tryBearAFVG(prevReg, aobSWLi, pEv2.swingIdx, pEv2.price, k)
-                    if firedB and InpShowAfvgDebug
-                        addDbg(k, false, firedB, refVB, loB, hiB, addedB)
+                    if InpShowAfvgDebug
+                        addDbg(k, false, prevReg, aobSWLi, firedB, refVB, loB, hiB, addedB)
                 else
                     haveSWL  := true
                     swlPrice := pEv2.price
                     swlIdx   := pEv2.swingIdx
                     [firedB, refVB, loB, hiB, addedB] = tryBullAFVG(prevReg, aobSWHi, pEv2.swingIdx, pEv2.price, k)
-                    if firedB and InpShowAfvgDebug
-                        addDbg(k, true, firedB, refVB, loB, hiB, addedB)
+                    if InpShowAfvgDebug
+                        addDbg(k, true, prevReg, aobSWHi, firedB, refVB, loB, hiB, addedB)
                 peek2 += 1
 
             // Second break: SWL
@@ -424,15 +429,15 @@ if not skipBar and bar_index != lastProcessedBI
                     swhPrice := pEv3.price
                     swhIdx   := pEv3.swingIdx
                     [firedB, refVB, loB, hiB, addedB] = tryBearAFVG(prevReg, aobSWLi, pEv3.swingIdx, pEv3.price, k)
-                    if firedB and InpShowAfvgDebug
-                        addDbg(k, false, firedB, refVB, loB, hiB, addedB)
+                    if InpShowAfvgDebug
+                        addDbg(k, false, prevReg, aobSWLi, firedB, refVB, loB, hiB, addedB)
                 else
                     haveSWL  := true
                     swlPrice := pEv3.price
                     swlIdx   := pEv3.swingIdx
                     [firedB, refVB, loB, hiB, addedB] = tryBullAFVG(prevReg, aobSWHi, pEv3.swingIdx, pEv3.price, k)
-                    if firedB and InpShowAfvgDebug
-                        addDbg(k, true, firedB, refVB, loB, hiB, addedB)
+                    if InpShowAfvgDebug
+                        addDbg(k, true, prevReg, aobSWHi, firedB, refVB, loB, hiB, addedB)
                 peek3 += 1
 
             // Second break: SWH
@@ -691,14 +696,18 @@ if barstate.islast
                        style=line.style_dotted, width=1)
         array.push(drawnLines, lnF)
 
-    // --- DEBUG ONLY: one label per AFVG hunt attempt, showing exactly what
-    // the reference-validity gate and range computed. F=fired (gate passed
-    // at all), R=refViolated (whole hunt rejected if 1), [lo-hi]=range
-    // scanned, +N=gaps actually added from that range. Remove this whole
-    // block once AFVG is confirmed correct.
+    // --- DEBUG ONLY: one label for EVERY swing-confirmation event that
+    // could have started an AFVG hunt (not just ones that fired), showing
+    // the raw regime value at that moment. pR=prevReg (0=warmup, 1=up,
+    // 2=down -- the gate needs 1 for bullish hunts, 2 for bearish), aI=the
+    // armed swing index passed in, F=fired (did the pR/aI>=0 gate pass),
+    // R=refViolated, [lo-hi]=range scanned, +N=gaps added. Trimmed to the
+    // most recent InpMaxLabelsPerCategory like everything else. Remove
+    // this whole block once AFVG is confirmed correct.
     if InpShowAfvgDebug
         dbgSz = array.size(dbgEvents)
-        for dz = 0 to dbgSz - 1
+        dbgStart = math.max(0, dbgSz - InpMaxLabelsPerCategory)
+        for dz = dbgStart to dbgSz - 1
             if dz < 0 or dz >= dbgSz
                 continue
             dEv = array.get(dbgEvents, dz)
@@ -708,7 +717,9 @@ if barstate.islast
             if btD < dispFrom
                 continue
             txt = (dEv.bullish ? "AFVG bull " : "AFVG bear ") +
-                  "F:" + str.tostring(dEv.fired ? 1 : 0) +
+                  "pR:" + str.tostring(dEv.pReg) +
+                  " aI:" + str.tostring(dEv.armedIdx) +
+                  " F:" + str.tostring(dEv.fired ? 1 : 0) +
                   " R:" + str.tostring(dEv.refViolated ? 1 : 0) +
                   " [" + str.tostring(dEv.lo) + "-" + str.tostring(dEv.hi) + "]" +
                   " +" + str.tostring(dEv.gapsAdded)
