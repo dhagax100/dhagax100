@@ -13,6 +13,7 @@ useDisplayFrom = input.bool(true, "Use exact display-from date (else use months)
 InpReplayUpTo  = input.time(0, "Replay up to date (0=show all)")
 useReplay      = input.bool(false, "Enable replay mode")
 InpFocusOB     = input.int(0, "Focus OB (0=show all in window, N=Nth from end)")
+InpMaxLabelsPerCategory = input.int(150, "Max swing-high / swing-low / MSS labels shown (each, most recent kept)", minval=1, maxval=160)
 
 // ===================== TYPE DEFINITIONS =====================
 type SwEv
@@ -620,8 +621,18 @@ if barstate.islast
     dispFrom = useDisplayFrom ? InpDisplayFrom : (time - InpMonthsBack * 30 * 24 * 60 * 60 * 1000)
 
     // --- Swing HIGHS: blue up arrow ---
+    // Trim to the most recent InpMaxLabelsPerCategory before drawing -- swing
+    // highs/lows/MSS all share Pine's single 500-label budget, and on noisy
+    // timeframes (5m/1h) the raw count can blow past that, causing Pine to
+    // silently auto-evict the OLDEST-created labels first. Since this loop
+    // runs first (creating the oldest labels of the pass), swing highs were
+    // the first to get silently wiped, then swing lows -- MSS (created last)
+    // was never touched. Trimming ourselves, per category, in recency order
+    // makes what's shown deterministic instead of leaving it to Pine's
+    // creation-order eviction.
     shSz = array.size(swHighs)
-    for s = 0 to shSz - 1
+    shStart = math.max(0, shSz - InpMaxLabelsPerCategory)
+    for s = shStart to shSz - 1
         if s < 0 or s >= shSz
             continue
         idx = array.get(swHighs, s)
@@ -636,7 +647,8 @@ if barstate.islast
 
     // --- Swing LOWS: black down arrow ---
     slSz = array.size(swLows)
-    for s = 0 to slSz - 1
+    slStart = math.max(0, slSz - InpMaxLabelsPerCategory)
+    for s = slStart to slSz - 1
         if s < 0 or s >= slSz
             continue
         idx = array.get(swLows, s)
@@ -651,7 +663,8 @@ if barstate.islast
 
     // --- MSS flips: cross mark at broken swing's location ---
     mssSz = array.size(msses)
-    for m = 0 to mssSz - 1
+    mssStart = math.max(0, mssSz - InpMaxLabelsPerCategory)
+    for m = mssStart to mssSz - 1
         if m < 0 or m >= mssSz
             continue
         mEv = array.get(msses, m)
