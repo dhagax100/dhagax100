@@ -138,7 +138,14 @@ tryBullAOB(int pReg, int aobSWHi, int newSwlI, float newSwlP, int k) =>
             if okB2
                 best2 := x
         if best2 != -1
-            if array.get(L_, best2) > newSwlP
+            // Near-side guard: picked candle can't straddle the new swing low
+            // that triggered this hunt (that candle IS the pivot, not a
+            // candle inside the retracement). Far-side guard: picked candle
+            // also can't straddle the armed swing HIGH the range started
+            // from -- without this, a very tight retracement leg (confirmed
+            // right on top of the armed high) could pick that same pivot
+            // candle from the far end instead, with nothing to reject it.
+            if array.get(L_, best2) > newSwlP and array.get(H_, best2) < array.get(H_, aobSWHi)
                 oB = array.get(O_, best2)
                 cB = array.get(C_, best2)
                 addOB(best2, math.min(oB, cB), math.max(oB, cB), true, k, 1)
@@ -163,7 +170,11 @@ tryBearAOB(int pReg, int aobSWLi, int newSwhI, float newSwhP, int k) =>
             if okB2
                 best2 := x
         if best2 != -1
-            if array.get(H_, best2) < newSwhP
+            // Near-side guard: picked candle can't straddle the new swing
+            // high that triggered this hunt. Far-side guard: picked candle
+            // also can't straddle the armed swing LOW the range started
+            // from -- same gap as the bullish hunt, mirrored.
+            if array.get(H_, best2) < newSwhP and array.get(L_, best2) > array.get(L_, aobSWLi)
                 oB = array.get(O_, best2)
                 cB = array.get(C_, best2)
                 addOB(best2, math.min(oB, cB), math.max(oB, cB), false, k, 1)
