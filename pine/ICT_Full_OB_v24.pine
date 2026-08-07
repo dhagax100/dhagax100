@@ -630,9 +630,8 @@ if barstate.islast
         bt = array.get(BT, idx)
         if bt < dispFrom
             continue
-        bi = array.get(BI, idx)
         yP = array.get(H_, idx)
-        lbl = label.new(bi, yP, "▲", xloc=xloc.bar_index, yloc=yloc.price, style=label.style_none, textcolor=color.blue, size=size.small)
+        lbl = label.new(bt, yP, "▲", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=color.blue, size=size.small)
         array.push(drawnLabels, lbl)
 
     // --- Swing LOWS: black down arrow ---
@@ -646,9 +645,8 @@ if barstate.islast
         bt = array.get(BT, idx)
         if bt < dispFrom
             continue
-        bi = array.get(BI, idx)
         yP = array.get(L_, idx)
-        lbl = label.new(bi, yP, "▼", xloc=xloc.bar_index, yloc=yloc.price, style=label.style_none, textcolor=color.black, size=size.small)
+        lbl = label.new(bt, yP, "▼", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=color.black, size=size.small)
         array.push(drawnLabels, lbl)
 
     // --- MSS flips: cross mark at broken swing's location ---
@@ -663,18 +661,17 @@ if barstate.islast
         bt = array.get(BT, bIdx)
         if bt < dispFrom
             continue
-        bi = array.get(BI, bIdx)
         isUp = mEv.toUp
         yP = isUp ? array.get(H_, bIdx) : array.get(L_, bIdx)
         col = isUp ? color.blue : color.black
-        lbl = label.new(bi, yP, "✕", xloc=xloc.bar_index, yloc=yloc.price, style=label.style_none, textcolor=col, size=size.small)
+        lbl = label.new(bt, yP, "✕", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=col, size=size.small)
         array.push(drawnLabels, lbl)
 
     // --- OB zones: hollow boxes ---
     // IFOB bull=blue, IFOB bear=black, AOB=green, OOB=red, AIFOB=orange
     // SPENT uses preSpentState color
     obSzD = array.size(obs)
-    extBI = bar_index + 50
+    extT = time + 50 * timeframe.in_seconds() * 1000
 
     for z = 0 to obSzD - 1
         if z < 0 or z >= obSzD
@@ -693,10 +690,10 @@ if barstate.islast
             if bt < dispFrom
                 continue
 
-        leftBI = array.get(BI, idx)
-        rightBI = extBI
+        leftT = array.get(BT, idx)
+        rightT = extT
         if obD.stopK != -1 and obD.stopK < nArr
-            rightBI := array.get(BI, obD.stopK)
+            rightT := array.get(BT, obD.stopK)
 
         // Color
         dSt = obD.state == 3 ? obD.preSpentState : obD.state
@@ -712,5 +709,5 @@ if barstate.islast
         else
             col := obD.bullish ? color.blue : color.black
 
-        bx = box.new(leftBI, obD.zt, rightBI, obD.zb, border_color=col, border_width=1, bgcolor=na, xloc=xloc.bar_index)
+        bx = box.new(leftT, obD.zt, rightT, obD.zb, border_color=col, border_width=1, bgcolor=na, xloc=xloc.bar_time)
         array.push(drawnBoxes, bx)
