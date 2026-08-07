@@ -14,7 +14,7 @@ InpReplayUpTo  = input.time(0, "Replay up to date (0=show all)")
 useReplay      = input.bool(false, "Enable replay mode")
 InpFocusOB     = input.int(0, "Focus OB (0=show all in window, N=Nth from end)")
 InpMaxLabelsPerCategory = input.int(150, "Max swing-high / swing-low / MSS labels shown (each, most recent kept)", minval=1, maxval=160)
-InpSwingLowGapATR = input.float(0.02, "Swing-low arrow gap below the low (x ATR14)", minval=0.0)
+InpSwingLowGapATR = input.float(0.05, "Swing-low arrow / down-MSS gap below the low (x ATR14)", minval=0.0)
 
 // ===================== TYPE DEFINITIONS =====================
 type SwEv
@@ -692,7 +692,11 @@ if barstate.islast
         if bt < dispFrom
             continue
         isUp = mEv.toUp
-        yP = isUp ? array.get(H_, bIdx) : array.get(L_, bIdx)
+        // Down-MSS shares the same swLowGapOffset nudge as the swing-low
+        // arrow (both sit at a candle's low with the same style_none glyph-
+        // anchor issue); up-MSS is left at the literal high, same as the
+        // swing-high arrow.
+        yP = isUp ? array.get(H_, bIdx) : array.get(L_, bIdx) - swLowGapOffset
         col = isUp ? color.blue : color.black
         lbl = label.new(bt, yP, "✕", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=col, size=size.small)
         array.push(drawnLabels, lbl)
