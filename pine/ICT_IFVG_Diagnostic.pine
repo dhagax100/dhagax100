@@ -549,7 +549,7 @@ if barstate.islast
         if fvD.stopK != -1 and fvD.stopK < nArr
             rightTF := array.get(BT, fvD.stopK)
 
-        colF = fvD.bullish ? color.blue : color.black
+        colF = dStF == 2 ? color.red : (fvD.bullish ? color.blue : color.black)
 
         bxF = box.new(leftTF, fvD.zt, rightTF, fvD.zb, border_color=colF, border_width=1,
                       bgcolor=color.new(colF, InpFvgFillTransparency), xloc=xloc.bar_time)

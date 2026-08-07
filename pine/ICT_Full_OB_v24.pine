@@ -959,10 +959,12 @@ if barstate.islast
         array.push(drawnBoxes, bx)
 
     // --- IFVG zones: filled box (solid border) + gray dotted 50% midline ---
-    // Bullish=blue, bearish=black, same color regardless of live/OFVG/SPENT
-    // state -- only OFVG's visibility differs (hidden on 5m/1h/4h, same
-    // treatment as OOB, via hideOOBHere computed above). History capped to
-    // the most recent InpMaxFvgPerCategory, same pattern as swings/MSS,
+    // Live IFVG: bullish=blue, bearish=black. OFVG (and any SPENT zone whose
+    // preSpentState was OFVG): red, same as OOB, but keeps its shading +
+    // dotted midline so it's still visually distinct from a hollow OOB box.
+    // OFVG's visibility also differs from a live zone (hidden on 5m/1h/4h,
+    // same treatment as OOB, via hideOOBHere computed above). History capped
+    // to the most recent InpMaxFvgPerCategory, same pattern as swings/MSS,
     // since "every qualifying gap in a leg counts" can produce far more
     // zones than OB's one-pick-per-leg ever does.
     fvgSzD = array.size(fvgs)
@@ -988,7 +990,7 @@ if barstate.islast
         if fvD.stopK != -1 and fvD.stopK < nArr
             rightTF := array.get(BT, fvD.stopK)
 
-        colF = fvD.bullish ? color.blue : color.black
+        colF = dStF == 2 ? color.red : (fvD.bullish ? color.blue : color.black)
 
         bxF = box.new(leftTF, fvD.zt, rightTF, fvD.zb, border_color=colF, border_width=1,
                       bgcolor=color.new(colF, InpFvgFillTransparency), xloc=xloc.bar_time)
