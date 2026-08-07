@@ -97,6 +97,8 @@ var int   lastSWHidx = -1
 var int   lastSWLidx = -1
 var int   pendBullAifob = -1
 var int   pendBearAifob = -1
+var int   fvgBullScanUpto = -1   // last bar index whose bullish 3-candle window was checked for a gap
+var int   fvgBearScanUpto = -1   // same, bearish side
 
 // Guard: process each bar exactly once
 var int lastProcessedBI = -1
@@ -417,6 +419,7 @@ if not skipBar and bar_index != lastProcessedBI
                     lo = math.min(math.min(lastSWLidx, k), swhIdx)
                     hi = math.max(math.max(lastSWLidx, k), swhIdx)
                     tryCreateIFVGs(lo, hi, true, k)
+                    fvgBullScanUpto := hi
                     best = -1
                     for x = lo to hi
                         cX = array.get(C_, x)
@@ -481,6 +484,7 @@ if not skipBar and bar_index != lastProcessedBI
                     lo2 = math.min(math.min(lastSWHidx, k), swlIdx)
                     hi2 = math.max(math.max(lastSWHidx, k), swlIdx)
                     tryCreateIFVGs(lo2, hi2, false, k)
+                    fvgBearScanUpto := hi2
                     best2 = -1
                     for x = lo2 to hi2
                         cX = array.get(C_, x)
@@ -518,6 +522,7 @@ if not skipBar and bar_index != lastProcessedBI
                     lo3 = math.min(math.min(lastSWHidx, k), swlIdx)
                     hi3 = math.max(math.max(lastSWHidx, k), swlIdx)
                     tryCreateIFVGs(lo3, hi3, false, k)
+                    fvgBearScanUpto := hi3
                     best3 = -1
                     for x = lo3 to hi3
                         cX = array.get(C_, x)
@@ -582,6 +587,7 @@ if not skipBar and bar_index != lastProcessedBI
                     lo4 = math.min(math.min(lastSWLidx, k), swhIdx)
                     hi4 = math.max(math.max(lastSWLidx, k), swhIdx)
                     tryCreateIFVGs(lo4, hi4, true, k)
+                    fvgBullScanUpto := hi4
                     best4 = -1
                     for x = lo4 to hi4
                         cX = array.get(C_, x)
@@ -600,6 +606,30 @@ if not skipBar and bar_index != lastProcessedBI
                         addOB(best4, math.min(oB, cB), math.max(oB, cB), true, k, 0)
                 haveSWH := false
                 swhCons := true
+
+        // STEP 1b: continuous IFVG scan — keeps checking the newest 3-candle
+        // window every bar for as long as the current regime persists, not
+        // just once at the exceedance moment. Covers (a) gaps that form on
+        // continuation candles after the exceedance, before the next same-
+        // direction swing confirms, and (b) every later leg of the same
+        // trend (including AIFOB-sourced legs), since it only stops when
+        // regime itself reverses. The batch scans above already cover the
+        // one-time retrospective breakout leg at each exceedance/reversal;
+        // this just picks up from there, bar by bar, with no double count
+        // (fvgBull/BearScanUpto is bumped to hi/hi2/hi3/hi4 right after each
+        // batch scan, so the window ending on the same bar isn't rechecked).
+        if regime == 1 and k >= 2 and k > fvgBullScanUpto
+            h1c = array.get(H_, k - 2)
+            l3c = array.get(L_, k)
+            if h1c < l3c
+                addFVG(k - 2, h1c, l3c, true, k)
+            fvgBullScanUpto := k
+        if regime == 2 and k >= 2 and k > fvgBearScanUpto
+            l1c = array.get(L_, k - 2)
+            h3c = array.get(H_, k)
+            if l1c > h3c
+                addFVG(k - 2, h3c, l1c, false, k)
+            fvgBearScanUpto := k
 
         // STEP 2: arm swings (consumed check) + IFOB/IFVG eligibility
         while ei < evTotal
