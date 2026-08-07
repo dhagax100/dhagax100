@@ -710,6 +710,14 @@ if barstate.islast
 
         // Color
         dSt = obD.state == 3 ? obD.preSpentState : obD.state
+        // AIFOB display disabled by request -- creation/promotion/eligibility/
+        // lifecycle logic above is untouched (a pending AIFOB still tracks its
+        // armed swing and still promotes to a real IFOB, state 0, the same as
+        // before); this only skips drawing a box for zones still classified
+        // as AIFOB (dSt==4) whether live or SPENT-while-still-AIFOB. Once a
+        // zone promotes to IFOB it draws normally again, unaffected.
+        if dSt == 4
+            continue
         col = color.blue
         if dSt == 0
             col := obD.bullish ? color.blue : color.black
