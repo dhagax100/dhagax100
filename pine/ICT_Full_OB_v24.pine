@@ -29,10 +29,10 @@ colIFOBBull      = input.color(color.blue,   title = "IFOB Bullish Color")
 colIFOBBear      = input.color(color.black,  title = "IFOB Bearish Color")
 colAOB           = input.color(color.green,  title = "AOB Color")
 colOOB           = input.color(color.red,    title = "OOB Color")
-colAIFOB         = input.color(color.orange, title = "AIFOB Color")
 
 // ============================== TYPES ==============================
-// state: 0=IFOB, 1=AOB, 2=OOB, 3=SPENT, 4=AIFOB
+// state: 0=IFOB, 1=AOB, 2=OOB, 3=SPENT (AIFOB/state 4 removed -- see
+// REMOVED FEATURE comment below the AOB hunts)
 type ObZone
     int   candleIdx
     int   candleTime  // time of candleIdx's bar, captured at creation (when
@@ -44,13 +44,30 @@ type ObZone
     int   triggerK
     int   eligibleK
     int   stopK
+    int   stopTime  // time of stopK's bar, captured at the moment it's set
+                     // (offset 0, always safe) so the draw loop's box
+                     // right-edge never needs a large-offset [] lookup either
     int   state
     int   origState
     int   preSpentState
+    int   lastDrawnState  // state at the last box redraw, -1 = never drawn;
+                           // lets the draw loop stop touching a zone's box
+                           // once it's no longer changing (see DRAW section)
     box   zoneBox
 
 // ============================== STATE ==============================
-var array<ObZone> obList = array.new<ObZone>()
+var array<ObZone> obList  = array.new<ObZone>()
+// Indices into obList that still need per-bar attention (eligibility,
+// lifecycle/stranding, touch, redraw). Every zone starts here at creation;
+// pruned once SPENT(3) -- the only truly terminal state (OOB zones stay in
+// this list forever since they can still get touched and flip to SPENT
+// later, per the spec). Without this, the STEP2/STEP3/DRAW loops below
+// would rescan the FULL history of every zone ever created on every single
+// bar, which is what actually blew Pine's 500ms-per-bar budget on a 1H
+// chart loaded with a lot of history (RE10022) -- unrelated to AIFOB,
+// this would have hit the same wall with AIFOB still in place too, just
+// at a larger history size.
+var array<int>     liveIdx = array.new_int()
 
 // swing-detection running trackers (mirror MQL5's peakIdx/troughIdx, with
 // their price shadowed alongside so H[peakIdx]/L[troughIdx] never need a
@@ -76,12 +93,6 @@ var int   swlIdx     = 0
 var int   regime     = 0     // 0 warmup, 1 up, 2 down
 var int   lastSWHidx = -1
 var int   lastSWLidx = -1
-
-// AIFOB pending trackers: index into obList of the AIFOB (if any) waiting
-// on the currently-armed swing high/low, reset whenever that reference
-// gets superseded before being exceeded.
-var int pendingBullAifobIdx = -1
-var int pendingBearAifobIdx = -1
 
 // ============================== HELPERS ==============================
 barTimeAt(idx) => time[bar_index - idx]
@@ -116,12 +127,15 @@ f_pickHighestBullish(lo, hi) =>
     best
 
 f_addOB(candleIdx, zb, zt, bullish, triggerK, st) =>
-    int elig = (st == 1 or st == 4) ? triggerK : -1
+    int elig = (st == 1) ? triggerK : -1
     int cTime = time[bar_index - candleIdx]
     z = ObZone.new(candleIdx = candleIdx, candleTime = cTime, zb = zb, zt = zt, bullish = bullish, triggerK = triggerK,
-                   eligibleK = elig, stopK = -1, state = st, origState = st, preSpentState = st, zoneBox = na)
+                   eligibleK = elig, stopK = -1, stopTime = na, state = st, origState = st, preSpentState = st,
+                   lastDrawnState = -1, zoneBox = na)
     array.push(obList, z)
-    array.size(obList) - 1
+    newIdx = array.size(obList) - 1
+    array.push(liveIdx, newIdx)
+    newIdx
 
 // AOB hunts -- must run regardless of the confirming candle's own body
 // direction (both are called from all four MID-ARM sites below).
@@ -149,30 +163,35 @@ f_tryBearishAOB(prevRegime, aobSWLidx, newSwhIdx, newSwhPrice) =>
                 result := f_addOB(best, math.min(open[offs], close[offs]), math.max(open[offs], close[offs]), false, bar_index, 1)
     result
 
-// AIFOB hunts -- an IFOB created early: the armed swing hasn't been
-// exceeded yet, but the opposite swing already confirmed, so the range a
-// real IFOB would eventually use can already be scanned.
-f_tryBullishAIFOB(prevRegime, haveSWH_, swhIdx_, lastSWLidx_, newSwlIdx) =>
-    int result = -1
-    if prevRegime == 1 and haveSWH_ and swhIdx_ >= 0 and lastSWLidx_ >= 0
-        lo = math.max(0, math.min(math.min(lastSWLidx_, newSwlIdx), swhIdx_ - 1))
-        hi = math.max(math.max(lastSWLidx_, newSwlIdx), swhIdx_ - 1)
-        best = f_pickLowestBearish(lo, hi)
-        if best != -1
-            offs = bar_index - best
-            result := f_addOB(best, math.min(open[offs], close[offs]), math.max(open[offs], close[offs]), true, bar_index, 4)
-    result
-
-f_tryBearishAIFOB(prevRegime, haveSWL_, swlIdx_, lastSWHidx_, newSwhIdx) =>
-    int result = -1
-    if prevRegime == 2 and haveSWL_ and swlIdx_ >= 0 and lastSWHidx_ >= 0
-        lo = math.max(0, math.min(math.min(lastSWHidx_, newSwhIdx), swlIdx_ - 1))
-        hi = math.max(math.max(lastSWHidx_, newSwhIdx), swlIdx_ - 1)
-        best = f_pickHighestBullish(lo, hi)
-        if best != -1
-            offs = bar_index - best
-            result := f_addOB(best, math.min(open[offs], close[offs]), math.max(open[offs], close[offs]), false, bar_index, 4)
-    result
+// ============================================================================
+// REMOVED FEATURE -- AIFOB (state 4), removed at the user's request. Kept
+// here as a reference writeup, not code, in case this needs reimplementing.
+//
+// Concept: an IFOB created EARLY -- before the swing it depends on has
+// actually been exceeded -- because the opposite (retracement) swing
+// already confirmed while the engine was still waiting for that exceedance.
+//
+// Creation rule (former f_tryBullishAIFOB/f_tryBearishAIFOB, called from
+// the swing-confirm MID-ARM branch alongside f_tryBullish/BearishAOB
+// whenever the AOB path did NOT already fire): same range/pick rule as a
+// real IFOB (strongest opposite-color body in the range), where the range
+// was [min(lastOppositeSwingIdx, newRetracementSwingIdx) .. armedSwingIdx - 1],
+// gated on: previous regime already established in the target direction,
+// the armed swing (haveSWH_/haveSWL_) actually existing, and
+// lastSWLidx_/lastSWHidx_ >= 0.
+//
+// Promotion rule (former pendingBullAifobIdx/pendingBearAifobIdx trackers):
+// when the armed swing DID later get exceeded (the normal IFOB-creation
+// branch), if a pending AIFOB index was recorded, that zone's state/
+// origState were flipped from 4 to 0 in place (promoted to a real IFOB,
+// not duplicated) instead of running the normal candle-pick logic again.
+//
+// Supersession rule: each time a FRESH swing of either kind confirmed
+// before that promotion happened, the pending index for the opposite AIFOB
+// slot was cleared (set to -1) -- i.e. a fresher swing invalidates a stale
+// pending AIFOB and the zone just continues on as a normal (unpromoted)
+// AIFOB from then on.
+// ============================================================================
 
 // ============================== SWING DETECTION (this bar) ==============================
 evCountBefore = array.size(evKind)
@@ -280,12 +299,7 @@ if not kBullish
             regime := 1
             if barTimeAt(swhIdx) >= displayFromInput
                 label.new(x = swhIdx, y = swhPrice, style = label.style_xcross, color = colMSSUp, size = size.tiny)
-        if pendingBullAifobIdx != -1
-            z = array.get(obList, pendingBullAifobIdx)
-            z.state := 0
-            z.origState := 0
-            pendingBullAifobIdx := -1
-        else if lastSWLidx >= 0
+        if lastSWLidx >= 0
             lo = math.min(math.min(lastSWLidx, bar_index), swhIdx)
             hi = math.max(math.max(lastSWLidx, bar_index), swhIdx)
             best = f_pickLowestBearish(lo, hi)
@@ -295,7 +309,7 @@ if not kBullish
         haveSWH := false
         swhConsumed := true
 
-    // MID-ARM: process this bar's new events, create AOBs/AIFOBs
+    // MID-ARM: process this bar's new events, create AOBs
     if evCountAfter > evCountBefore
         for idx = evCountBefore to evCountAfter - 1
             kind = array.get(evKind, idx)
@@ -305,22 +319,12 @@ if not kBullish
                 haveSWH := true
                 swhPrice := pr
                 swhIdx := sIdx
-                pendingBullAifobIdx := -1
                 f_tryBearishAOB(prevRegime, aobSWLidx, sIdx, pr)
-                if pendingBearAifobIdx == -1
-                    idx2 = f_tryBearishAIFOB(prevRegime, haveSWL, aobSWLidx, lastSWHidx, sIdx)
-                    if idx2 != -1
-                        pendingBearAifobIdx := idx2
             else
                 haveSWL := true
                 swlPrice := pr
                 swlIdx := sIdx
-                pendingBearAifobIdx := -1
                 f_tryBullishAOB(prevRegime, aobSWHidx, sIdx, pr)
-                if pendingBullAifobIdx == -1
-                    idx2 = f_tryBullishAIFOB(prevRegime, haveSWH, aobSWHidx, lastSWLidx, sIdx)
-                    if idx2 != -1
-                        pendingBullAifobIdx := idx2
 
     if haveSWL and low < swlPrice
         if regime == 0
@@ -329,12 +333,7 @@ if not kBullish
             regime := 2
             if barTimeAt(swlIdx) >= displayFromInput
                 label.new(x = swlIdx, y = swlPrice, style = label.style_xcross, color = colMSSDown, size = size.tiny)
-        if pendingBearAifobIdx != -1
-            z = array.get(obList, pendingBearAifobIdx)
-            z.state := 0
-            z.origState := 0
-            pendingBearAifobIdx := -1
-        else if lastSWHidx >= 0
+        if lastSWHidx >= 0
             lo = math.min(math.min(lastSWHidx, bar_index), swlIdx)
             hi = math.max(math.max(lastSWHidx, bar_index), swlIdx)
             best = f_pickHighestBullish(lo, hi)
@@ -352,12 +351,7 @@ else
             regime := 2
             if barTimeAt(swlIdx) >= displayFromInput
                 label.new(x = swlIdx, y = swlPrice, style = label.style_xcross, color = colMSSDown, size = size.tiny)
-        if pendingBearAifobIdx != -1
-            z = array.get(obList, pendingBearAifobIdx)
-            z.state := 0
-            z.origState := 0
-            pendingBearAifobIdx := -1
-        else if lastSWHidx >= 0
+        if lastSWHidx >= 0
             lo = math.min(math.min(lastSWHidx, bar_index), swlIdx)
             hi = math.max(math.max(lastSWHidx, bar_index), swlIdx)
             best = f_pickHighestBullish(lo, hi)
@@ -367,7 +361,7 @@ else
         haveSWL := false
         swlConsumed := true
 
-    // MID-ARM: process this bar's new events, create AOBs/AIFOBs
+    // MID-ARM: process this bar's new events, create AOBs
     if evCountAfter > evCountBefore
         for idx = evCountBefore to evCountAfter - 1
             kind = array.get(evKind, idx)
@@ -377,22 +371,12 @@ else
                 haveSWH := true
                 swhPrice := pr
                 swhIdx := sIdx
-                pendingBullAifobIdx := -1
                 f_tryBearishAOB(prevRegime, aobSWLidx, sIdx, pr)
-                if pendingBearAifobIdx == -1
-                    idx2 = f_tryBearishAIFOB(prevRegime, haveSWL, aobSWLidx, lastSWHidx, sIdx)
-                    if idx2 != -1
-                        pendingBearAifobIdx := idx2
             else
                 haveSWL := true
                 swlPrice := pr
                 swlIdx := sIdx
-                pendingBearAifobIdx := -1
                 f_tryBullishAOB(prevRegime, aobSWHidx, sIdx, pr)
-                if pendingBullAifobIdx == -1
-                    idx2 = f_tryBullishAIFOB(prevRegime, haveSWH, aobSWHidx, lastSWLidx, sIdx)
-                    if idx2 != -1
-                        pendingBullAifobIdx := idx2
 
     if haveSWH and high > swhPrice
         if regime == 0
@@ -401,12 +385,7 @@ else
             regime := 1
             if barTimeAt(swhIdx) >= displayFromInput
                 label.new(x = swhIdx, y = swhPrice, style = label.style_xcross, color = colMSSUp, size = size.tiny)
-        if pendingBullAifobIdx != -1
-            z = array.get(obList, pendingBullAifobIdx)
-            z.state := 0
-            z.origState := 0
-            pendingBullAifobIdx := -1
-        else if lastSWLidx >= 0
+        if lastSWLidx >= 0
             lo = math.min(math.min(lastSWLidx, bar_index), swhIdx)
             hi = math.max(math.max(lastSWLidx, bar_index), swhIdx)
             best = f_pickLowestBearish(lo, hi)
@@ -429,9 +408,9 @@ if evCountAfter > evCountBefore
                 swhPrice := pr
                 swhIdx := sIdx
             lastSWHidx := sIdx
-            if array.size(obList) > 0
-                for z = 0 to array.size(obList) - 1
-                    zone = array.get(obList, z)
+            if array.size(liveIdx) > 0
+                for li = 0 to array.size(liveIdx) - 1
+                    zone = array.get(obList, array.get(liveIdx, li))
                     if zone.bullish and zone.state == 0 and zone.eligibleK == -1 and bar_index > zone.triggerK
                         zone.eligibleK := bar_index
         else
@@ -440,16 +419,16 @@ if evCountAfter > evCountBefore
                 swlPrice := pr
                 swlIdx := sIdx
             lastSWLidx := sIdx
-            if array.size(obList) > 0
-                for z = 0 to array.size(obList) - 1
-                    zone = array.get(obList, z)
+            if array.size(liveIdx) > 0
+                for li = 0 to array.size(liveIdx) - 1
+                    zone = array.get(obList, array.get(liveIdx, li))
                     if (not zone.bullish) and zone.state == 0 and zone.eligibleK == -1 and bar_index > zone.triggerK
                         zone.eligibleK := bar_index
 
 // STEP 3: OB lifecycle at this bar
-if array.size(obList) > 0
-    for z = 0 to array.size(obList) - 1
-        zone = array.get(obList, z)
+if array.size(liveIdx) > 0
+    for li = 0 to array.size(liveIdx) - 1
+        zone = array.get(obList, array.get(liveIdx, li))
         if zone.state != 3
             zb = zone.zb
             zt = zone.zt
@@ -462,14 +441,13 @@ if array.size(obList) > 0
                     zone.preSpentState := zone.state
                     zone.state := 3
                     zone.stopK := bar_index
+                    zone.stopTime := time
                     impacted := true
 
             // STRANDING -> OLD: which swing proves it depends on which leg the
             // zone was built from (IFOB = breakout leg, mirrored direction;
-            // AOB = retracement leg, opposite mirrored direction). AIFOB
-            // (origState==4) counts as IFOB-style; only AOB (origState==1)
-            // gets the opposite one.
-            if (not impacted) and (zone.state == 0 or zone.state == 1 or zone.state == 4) and zone.eligibleK != -1
+            // AOB = retracement leg, opposite mirrored direction).
+            if (not impacted) and (zone.state == 0 or zone.state == 1) and zone.eligibleK != -1
                 bool isIFOB = zone.origState != 1
                 if evCountAfter > evCountBefore
                     for idx = evCountBefore to evCountAfter - 1
@@ -487,22 +465,50 @@ if array.size(obList) > 0
                                 zone.state := 2
 
 // ============================== DRAW / UPDATE OB BOXES ==============================
-if array.size(obList) > 0
-    for z = 0 to array.size(obList) - 1
-        zone = array.get(obList, z)
-        if zone.candleTime >= displayFromInput
+if array.size(liveIdx) > 0
+    for li = 0 to array.size(liveIdx) - 1
+        zone = array.get(obList, array.get(liveIdx, li))
+        // Once a zone stops changing (no longer IFOB/AOB/OOB -- i.e. it's
+        // SPENT) its box only needs ONE more redraw to catch that final
+        // state -- not one every bar forever. lastDrawnState != zone.state
+        // catches exactly that one transition, then skips it on every bar
+        // after. OOB(2) must stay in "still live" here too: an unimpacted
+        // OOB zone stays in liveIdx precisely because it can still be
+        // touched and flip to SPENT later (see the liveIdx comment above),
+        // so its box needs to keep extending to the current bar every bar
+        // until that happens -- excluding it here was the bug (it made
+        // OOB boxes freeze at the exact bar they turned OOB instead of
+        // extending, since lastDrawnState == state on every bar after that
+        // single post-transition redraw).
+        bool stillLive = zone.state == 0 or zone.state == 1 or zone.state == 2
+        if zone.candleTime >= displayFromInput and (stillLive or zone.lastDrawnState != zone.state)
             int drawState = zone.state == 3 ? zone.preSpentState : zone.state
             color col = zone.bullish ? colIFOBBull : colIFOBBear
             if drawState == 1
                 col := colAOB
             else if drawState == 2
                 col := colOOB
-            else if drawState == 4
-                col := colAIFOB
-            int rightEdge = zone.stopK != -1 ? zone.stopK : bar_index
+            // Time-based addressing (xloc.bar_time), not bar-index: a zone's
+            // origin candle can end up far enough in the past (e.g. picked
+            // from a long-armed swing's full range once it finally resolves)
+            // that box.new()'s bar-index `left` argument errors out ("too
+            // far from the current bar index") on intraday charts with a
+            // lot of loaded history. Time values have no such distance cap.
+            int rightEdgeTime = not na(zone.stopTime) ? zone.stopTime : time
             if na(zone.zoneBox)
-                zone.zoneBox := box.new(left = zone.candleIdx, top = zone.zt, bottom = zone.zb, right = rightEdge,
-                                         border_color = col, bgcolor = na, border_width = 1)
+                zone.zoneBox := box.new(left = zone.candleTime, top = zone.zt, bottom = zone.zb, right = rightEdgeTime,
+                                         xloc = xloc.bar_time, border_color = col, bgcolor = na, border_width = 1)
             else
-                box.set_right(zone.zoneBox, rightEdge)
+                box.set_right(zone.zoneBox, rightEdgeTime)
                 box.set_border_color(zone.zoneBox, col)
+            zone.lastDrawnState := zone.state
+
+// Prune SPENT(3) zones out of liveIdx now that they've had their final
+// redraw above -- they need no further eligibility/lifecycle/touch/draw
+// attention ever again. Walked backward so removal never shifts an
+// index still to be visited. OOB(2) zones deliberately stay in liveIdx:
+// per the spec they can still be touched and flip to SPENT later.
+if array.size(liveIdx) > 0
+    for li = array.size(liveIdx) - 1 to 0
+        if array.get(obList, array.get(liveIdx, li)).state == 3
+            array.remove(liveIdx, li)
