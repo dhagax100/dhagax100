@@ -34,6 +34,7 @@ InpMaxLabelsPerCategory = input.int(150, "Max swing-high / swing-low / MSS label
 InpSwingLowGapATR = input.float(0.08, "Swing-low arrow / down-MSS gap below the low (x ATR14)", minval=0.0)
 InpMaxFvgPerCategory = input.int(150, "Max IFVG boxes shown (most recent kept)", minval=1, maxval=160)
 InpFvgFillTransparency = input.int(85, "IFVG fill transparency % (0=solid, 100=invisible)", minval=0, maxval=100)
+InpShowAfvgDebug = input.bool(true, "DEBUG: show AFVG hunt labels (fired/refViolated/range/gaps found)")
 
 // ===================== TYPE DEFINITIONS =====================
 type SwEv
@@ -66,10 +67,23 @@ type FvgZone
                           // rule applies even after state moves on to 2/3
     int   preSpentState
 
+// DEBUG ONLY: records every AFVG hunt attempt (fired or not) so we can see
+// exactly what the reference-validity gate and range computed, per event,
+// without reading raw OHLC by hand. Remove once AFVG is confirmed correct.
+type DbgEv
+    int   barIdx
+    bool  bullish       // true = bullish hunt (tryBullAFVG), false = bearish
+    bool  fired         // true if the pReg/aobSWx>=0 gate passed at all
+    bool  refViolated
+    int   lo
+    int   hi
+    int   gapsAdded
+
 // ===================== PERSISTENT STATE =====================
 var events     = array.new<SwEv>()
 var msses      = array.new<MssEv>()
 var fvgs       = array.new<FvgZone>()
+var dbgEvents  = array.new<DbgEv>()   // DEBUG ONLY
 var swHighs    = array.new<int>()
 var swLows     = array.new<int>()
 
@@ -138,6 +152,9 @@ addEv(int cIdx, int kind, int sIdx, float pr) =>
 addMss(int aIdx, int bIdx, float pr, bool up) =>
     array.push(msses, MssEv.new(aIdx, bIdx, pr, up))
 
+addDbg(int barIdx, bool bullish, bool fired, bool refViolated, int lo, int hi, int gapsAdded) =>  // DEBUG ONLY
+    array.push(dbgEvents, DbgEv.new(barIdx, bullish, fired, refViolated, lo, hi, gapsAdded))
+
 addFVG(int leftIdx, float zb, float zt, bool bull, int tK, int st) =>
     // st: 0=IFVG (delayed eligibility, far-side stranding later), 1=AFVG
     // (immediate eligibility, near-side stranding later) -- mirrors
@@ -191,31 +208,44 @@ tryCreateAFVGs(int lo, int hi, bool bullish, int triggerK, float guardPrice) =>
 
 // --- AFVG HUNT: Bullish -- mirrors tryBullAOB's range + reference-
 // validity gate one-for-one (the OB candle-picking parts aren't needed
-// here, this diagnostic has no OB) ---
+// here, this diagnostic has no OB). Returns debug info as a tuple:
+// [fired, refViolated, lo2, hi2, gapsAdded] -- see DEBUG type above.
 tryBullAFVG(int pReg, int aobSWHi, int newSwlI, float newSwlP, int k) =>
-    if pReg == 1 and aobSWHi >= 0
+    fired = pReg == 1 and aobSWHi >= 0
+    refViolated = false
+    lo2 = -1
+    hi2 = -1
+    gapsBefore = array.size(fvgs)
+    if fired
         armedSwhPrice = array.get(H_, aobSWHi)
-        refViolated = false
         for v = aobSWHi + 1 to newSwlI
             if array.get(H_, v) >= armedSwhPrice
                 refViolated := true
         if not refViolated
-            lo2 = math.max(0, math.min(aobSWHi - 1, newSwlI))
-            hi2 = math.max(aobSWHi - 1, newSwlI)
+            lo2 := math.max(0, math.min(aobSWHi - 1, newSwlI))
+            hi2 := math.max(aobSWHi - 1, newSwlI)
             tryCreateAFVGs(lo2, hi2, true, k, newSwlP)
+    gapsAdded = array.size(fvgs) - gapsBefore
+    [fired, refViolated, lo2, hi2, gapsAdded]
 
 // --- AFVG HUNT: Bearish -- mirrors tryBearAOB ---
 tryBearAFVG(int pReg, int aobSWLi, int newSwhI, float newSwhP, int k) =>
-    if pReg == 2 and aobSWLi >= 0
+    fired = pReg == 2 and aobSWLi >= 0
+    refViolated = false
+    lo2 = -1
+    hi2 = -1
+    gapsBefore = array.size(fvgs)
+    if fired
         armedSwlPrice = array.get(L_, aobSWLi)
-        refViolated = false
         for v = aobSWLi + 1 to newSwhI
             if array.get(L_, v) <= armedSwlPrice
                 refViolated := true
         if not refViolated
-            lo2 = math.max(0, math.min(aobSWLi - 1, newSwhI))
-            hi2 = math.max(aobSWLi - 1, newSwhI)
+            lo2 := math.max(0, math.min(aobSWLi - 1, newSwhI))
+            hi2 := math.max(aobSWLi - 1, newSwhI)
             tryCreateAFVGs(lo2, hi2, false, k, newSwhP)
+    gapsAdded = array.size(fvgs) - gapsBefore
+    [fired, refViolated, lo2, hi2, gapsAdded]
 
 // ===================== MAIN PROCESSING =====================
 // Process each bar exactly once
@@ -340,12 +370,16 @@ if not skipBar and bar_index != lastProcessedBI
                     haveSWH  := true
                     swhPrice := pEv2.price
                     swhIdx   := pEv2.swingIdx
-                    tryBearAFVG(prevReg, aobSWLi, pEv2.swingIdx, pEv2.price, k)
+                    [firedB, refVB, loB, hiB, addedB] = tryBearAFVG(prevReg, aobSWLi, pEv2.swingIdx, pEv2.price, k)
+                    if firedB and InpShowAfvgDebug
+                        addDbg(k, false, firedB, refVB, loB, hiB, addedB)
                 else
                     haveSWL  := true
                     swlPrice := pEv2.price
                     swlIdx   := pEv2.swingIdx
-                    tryBullAFVG(prevReg, aobSWHi, pEv2.swingIdx, pEv2.price, k)
+                    [firedB, refVB, loB, hiB, addedB] = tryBullAFVG(prevReg, aobSWHi, pEv2.swingIdx, pEv2.price, k)
+                    if firedB and InpShowAfvgDebug
+                        addDbg(k, true, firedB, refVB, loB, hiB, addedB)
                 peek2 += 1
 
             // Second break: SWL
@@ -389,12 +423,16 @@ if not skipBar and bar_index != lastProcessedBI
                     haveSWH  := true
                     swhPrice := pEv3.price
                     swhIdx   := pEv3.swingIdx
-                    tryBearAFVG(prevReg, aobSWLi, pEv3.swingIdx, pEv3.price, k)
+                    [firedB, refVB, loB, hiB, addedB] = tryBearAFVG(prevReg, aobSWLi, pEv3.swingIdx, pEv3.price, k)
+                    if firedB and InpShowAfvgDebug
+                        addDbg(k, false, firedB, refVB, loB, hiB, addedB)
                 else
                     haveSWL  := true
                     swlPrice := pEv3.price
                     swlIdx   := pEv3.swingIdx
-                    tryBullAFVG(prevReg, aobSWHi, pEv3.swingIdx, pEv3.price, k)
+                    [firedB, refVB, loB, hiB, addedB] = tryBullAFVG(prevReg, aobSWHi, pEv3.swingIdx, pEv3.price, k)
+                    if firedB and InpShowAfvgDebug
+                        addDbg(k, true, firedB, refVB, loB, hiB, addedB)
                 peek3 += 1
 
             // Second break: SWH
@@ -652,3 +690,30 @@ if barstate.islast
         lnF = line.new(leftTF, midY, rightTF, midY, xloc=xloc.bar_time, color=color.gray,
                        style=line.style_dotted, width=1)
         array.push(drawnLines, lnF)
+
+    // --- DEBUG ONLY: one label per AFVG hunt attempt, showing exactly what
+    // the reference-validity gate and range computed. F=fired (gate passed
+    // at all), R=refViolated (whole hunt rejected if 1), [lo-hi]=range
+    // scanned, +N=gaps actually added from that range. Remove this whole
+    // block once AFVG is confirmed correct.
+    if InpShowAfvgDebug
+        dbgSz = array.size(dbgEvents)
+        for dz = 0 to dbgSz - 1
+            if dz < 0 or dz >= dbgSz
+                continue
+            dEv = array.get(dbgEvents, dz)
+            if dEv.barIdx < 0 or dEv.barIdx >= nArr
+                continue
+            btD = array.get(BT, dEv.barIdx)
+            if btD < dispFrom
+                continue
+            txt = (dEv.bullish ? "AFVG bull " : "AFVG bear ") +
+                  "F:" + str.tostring(dEv.fired ? 1 : 0) +
+                  " R:" + str.tostring(dEv.refViolated ? 1 : 0) +
+                  " [" + str.tostring(dEv.lo) + "-" + str.tostring(dEv.hi) + "]" +
+                  " +" + str.tostring(dEv.gapsAdded)
+            yD = dEv.bullish ? array.get(L_, dEv.barIdx) : array.get(H_, dEv.barIdx)
+            styD = dEv.bullish ? label.style_label_up : label.style_label_down
+            lblD = label.new(btD, yD, txt, xloc=xloc.bar_time, yloc=yloc.price, style=styD,
+                             color=color.new(color.purple, 70), textcolor=color.white, size=size.tiny)
+            array.push(drawnLabels, lblD)
