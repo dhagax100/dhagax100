@@ -148,30 +148,7 @@ tryBullAOB(int pReg, int aobSWHi, int newSwlI, float newSwlP, int k) =>
             if array.get(L_, best2) > newSwlP and array.get(H_, best2) < array.get(H_, aobSWHi)
                 oB = array.get(O_, best2)
                 cB = array.get(C_, best2)
-                zb2 = math.min(oB, cB)
-                zt2 = math.max(oB, cB)
-                // eligibleK is set to k (the trigger candle) inside addOB,
-                // but the zone's own body is best2, which can sit several
-                // candles BEFORE k. STEP 3's impact check only ever looks at
-                // the CURRENT bar against zones already in obs[], so any
-                // candle strictly between best2 and k that already ran
-                // through [zb2,zt2] was never checked -- the zone didn't
-                // exist yet when that candle was processed. Scan that gap
-                // now and, if a touch already happened there, create the
-                // zone pre-SPENT with the real historical stopK instead of
-                // as a live zone that just extends as if untouched.
-                preSpentK2 = -1
-                for y = best2 + 1 to k - 1
-                    if preSpentK2 == -1 and array.get(H_, y) >= zb2 and array.get(L_, y) <= zt2
-                        preSpentK2 := y
-                addOB(best2, zb2, zt2, true, k, 1)
-                newIdx2 = array.size(obs) - 1
-                if preSpentK2 != -1
-                    z2 = array.get(obs, newIdx2)
-                    z2.preSpentState := z2.state
-                    z2.state := 3
-                    z2.stopK := preSpentK2
-                    array.set(obs, newIdx2, z2)
+                addOB(best2, math.min(oB, cB), math.max(oB, cB), true, k, 1)
 
 // --- AOB HUNT: Bearish ---
 tryBearAOB(int pReg, int aobSWLi, int newSwhI, float newSwhP, int k) =>
@@ -200,21 +177,7 @@ tryBearAOB(int pReg, int aobSWLi, int newSwhI, float newSwhP, int k) =>
             if array.get(H_, best2) < newSwhP and array.get(L_, best2) > array.get(L_, aobSWLi)
                 oB = array.get(O_, best2)
                 cB = array.get(C_, best2)
-                zb3 = math.min(oB, cB)
-                zt3 = math.max(oB, cB)
-                // Same pre-existence-touch check as the bullish hunt, mirrored.
-                preSpentK3 = -1
-                for y = best2 + 1 to k - 1
-                    if preSpentK3 == -1 and array.get(H_, y) >= zb3 and array.get(L_, y) <= zt3
-                        preSpentK3 := y
-                addOB(best2, zb3, zt3, false, k, 1)
-                newIdx3 = array.size(obs) - 1
-                if preSpentK3 != -1
-                    z3 = array.get(obs, newIdx3)
-                    z3.preSpentState := z3.state
-                    z3.state := 3
-                    z3.stopK := preSpentK3
-                    array.set(obs, newIdx3, z3)
+                addOB(best2, math.min(oB, cB), math.max(oB, cB), false, k, 1)
 
 // --- AIFOB HUNT: Bullish (returns obs[] index or -1) ---
 tryBullAIFOB(int pReg, bool pHaveSWH, int pSwhI, int pLastSWLi, int newSwlI, int k) =>
