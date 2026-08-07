@@ -121,63 +121,82 @@ addOB(int cand, float zb, float zt, bool bull, int tK, int st) =>
 // --- AOB HUNT: Bullish ---
 tryBullAOB(int pReg, int aobSWHi, int newSwlI, float newSwlP, int k) =>
     if pReg == 1 and aobSWHi >= 0
-        lo2 = math.max(0, math.min(aobSWHi - 1, newSwlI))
-        hi2 = math.max(aobSWHi - 1, newSwlI)
-        best2 = -1
-        for x = lo2 to hi2
-            if x < 0
-                continue
-            cX = array.get(C_, x)
-            oX = array.get(O_, x)
-            okB2 = false
-            if cX > oX
-                if best2 == -1
-                    okB2 := true
-                else
-                    okB2 := cX > array.get(C_, best2)
-            if okB2
-                best2 := x
-        if best2 != -1
-            // Near-side guard: picked candle can't straddle the new swing low
-            // that triggered this hunt (that candle IS the pivot, not a
-            // candle inside the retracement). Far-side guard: picked candle
-            // also can't straddle the armed swing HIGH the range started
-            // from -- without this, a very tight retracement leg (confirmed
-            // right on top of the armed high) could pick that same pivot
-            // candle from the far end instead, with nothing to reject it.
-            if array.get(L_, best2) > newSwlP and array.get(H_, best2) < array.get(H_, aobSWHi)
-                oB = array.get(O_, best2)
-                cB = array.get(C_, best2)
-                addOB(best2, math.min(oB, cB), math.max(oB, cB), true, k, 1)
+        // Reference-validity guard: the armed swing high is captured once,
+        // then used later once the retracement's swing low finally confirms.
+        // The only thing gating that wait is chronological order (low
+        // confirms after high) -- nothing checks whether the armed high
+        // itself got exceeded by a LATER candle somewhere in between before
+        // this hunt ever fires. If any candle from right after the armed
+        // high through to the new swing low already broke above it, the
+        // reference is stale -- reject the whole hunt, not just check the
+        // one candle we end up picking against it.
+        armedSwhPrice = array.get(H_, aobSWHi)
+        refViolated = false
+        for v = aobSWHi + 1 to newSwlI
+            if array.get(H_, v) >= armedSwhPrice
+                refViolated := true
+        if not refViolated
+            lo2 = math.max(0, math.min(aobSWHi - 1, newSwlI))
+            hi2 = math.max(aobSWHi - 1, newSwlI)
+            best2 = -1
+            for x = lo2 to hi2
+                if x < 0
+                    continue
+                cX = array.get(C_, x)
+                oX = array.get(O_, x)
+                okB2 = false
+                if cX > oX
+                    if best2 == -1
+                        okB2 := true
+                    else
+                        okB2 := cX > array.get(C_, best2)
+                if okB2
+                    best2 := x
+            if best2 != -1
+                // Near-side guard: picked candle can't straddle the new swing
+                // low that triggered this hunt (that candle IS the pivot, not
+                // a candle inside the retracement).
+                if array.get(L_, best2) > newSwlP
+                    oB = array.get(O_, best2)
+                    cB = array.get(C_, best2)
+                    addOB(best2, math.min(oB, cB), math.max(oB, cB), true, k, 1)
 
 // --- AOB HUNT: Bearish ---
 tryBearAOB(int pReg, int aobSWLi, int newSwhI, float newSwhP, int k) =>
     if pReg == 2 and aobSWLi >= 0
-        lo2 = math.max(0, math.min(aobSWLi - 1, newSwhI))
-        hi2 = math.max(aobSWLi - 1, newSwhI)
-        best2 = -1
-        for x = lo2 to hi2
-            if x < 0
-                continue
-            cX = array.get(C_, x)
-            oX = array.get(O_, x)
-            okB2 = false
-            if cX < oX
-                if best2 == -1
-                    okB2 := true
-                else
-                    okB2 := cX < array.get(C_, best2)
-            if okB2
-                best2 := x
-        if best2 != -1
-            // Near-side guard: picked candle can't straddle the new swing
-            // high that triggered this hunt. Far-side guard: picked candle
-            // also can't straddle the armed swing LOW the range started
-            // from -- same gap as the bullish hunt, mirrored.
-            if array.get(H_, best2) < newSwhP and array.get(L_, best2) > array.get(L_, aobSWLi)
-                oB = array.get(O_, best2)
-                cB = array.get(C_, best2)
-                addOB(best2, math.min(oB, cB), math.max(oB, cB), false, k, 1)
+        // Reference-validity guard, mirrored from the bullish hunt: reject
+        // the whole thing if the armed swing low already got broken by a
+        // later candle before this hunt fires, instead of only checking the
+        // one candle we end up picking against it.
+        armedSwlPrice = array.get(L_, aobSWLi)
+        refViolated = false
+        for v = aobSWLi + 1 to newSwhI
+            if array.get(L_, v) <= armedSwlPrice
+                refViolated := true
+        if not refViolated
+            lo2 = math.max(0, math.min(aobSWLi - 1, newSwhI))
+            hi2 = math.max(aobSWLi - 1, newSwhI)
+            best2 = -1
+            for x = lo2 to hi2
+                if x < 0
+                    continue
+                cX = array.get(C_, x)
+                oX = array.get(O_, x)
+                okB2 = false
+                if cX < oX
+                    if best2 == -1
+                        okB2 := true
+                    else
+                        okB2 := cX < array.get(C_, best2)
+                if okB2
+                    best2 := x
+            if best2 != -1
+                // Near-side guard: picked candle can't straddle the new swing
+                // high that triggered this hunt.
+                if array.get(H_, best2) < newSwhP
+                    oB = array.get(O_, best2)
+                    cB = array.get(C_, best2)
+                    addOB(best2, math.min(oB, cB), math.max(oB, cB), false, k, 1)
 
 // --- AIFOB HUNT: Bullish (returns obs[] index or -1) ---
 tryBullAIFOB(int pReg, bool pHaveSWH, int pSwhI, int pLastSWLi, int newSwlI, int k) =>
