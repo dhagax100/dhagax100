@@ -620,6 +620,10 @@ if barstate.islast
     // Compute display-from time threshold (milliseconds)
     dispFrom = useDisplayFrom ? InpDisplayFrom : (time - InpMonthsBack * 30 * 24 * 60 * 60 * 1000)
 
+    // OOB is never traded off 5m/1h/4h (see docs/trading_logic.md's cascade),
+    // so its box is hidden on those chart timeframes only -- see OOB draw skip below.
+    hideOOBHere = timeframe.period == "5" or timeframe.period == "60" or timeframe.period == "240"
+
     // --- Swing HIGHS: blue up arrow ---
     // Trim to the most recent InpMaxLabelsPerCategory before drawing -- swing
     // highs/lows/MSS all share Pine's single 500-label budget, and on noisy
@@ -717,6 +721,13 @@ if barstate.islast
         // as AIFOB (dSt==4) whether live or SPENT-while-still-AIFOB. Once a
         // zone promotes to IFOB it draws normally again, unaffected.
         if dSt == 4
+            continue
+        // OOB display disabled by request on 5m/1h/4h -- never used at those
+        // timeframes per the trading cascade (docs/trading_logic.md), so hide
+        // the clutter there. Stranding detection/lifecycle above (a zone can
+        // still go OOB and later flip to SPENT on touch) is untouched, and
+        // OOB still draws normally on Daily/Weekly/Monthly/any other TF.
+        if dSt == 2 and hideOOBHere
             continue
         col = color.blue
         if dSt == 0
