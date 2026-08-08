@@ -483,370 +483,367 @@ tryBearAIFOB(array<ObZone> obArr, array<float> oArr, array<float> cArr, bool pHa
             result := array.size(obArr) - 1
     result
 
-// ===================== WEEKLY (bias) ENGINE — runs once per new weekly bar =====================
-// Same swing-detection + regime/MSS/OB+FVG+RB engine as ICT_Full_OB_v24.pine,
-// fed by wO/wH/wL/wC (only ever confirmed, closed bars -- see accumulation
-// above), using the shared parameterized helpers above. Triplicated (not
-// shared as one function) for W/4H/5M because the ~14 mutable trackers
-// below would otherwise need a huge, error-prone tuple in/out signature --
-// three plain copies, each touching only its own `var`s, is the safer
-// transcription of the exact same proven logic.
-if wNewBar
-    wN = array.size(wO)
+// ===================== SHARED PER-BAR ENGINE (Weekly/4H/5M all call this) =====================
+// Identical swing-detection + regime/MSS/OB+FVG+RB logic as pine/ICT_Full_OB_v24.pine,
+// written once and called once per tier (below) with that tier's own arrays and
+// state passed in/out -- avoids tripling this block, which is what pushed the
+// script over Pine's 550-local-scope compile limit the first time around.
+runEngine(array<float> oArr, array<float> hArr, array<float> lArr, array<float> cArr, array<SwEv> evArr, array<MssEv> mssArr, array<ObZone> obArr, array<FvgZone> fvgArr, array<RbZone> rbArr, array<int> swHArr, array<int> swLArr, int peakIdx, int troughIdx, bool haveSWH, float swhPrice, int swhIdx, bool haveSWL, float swlPrice, int swlIdx, int regime, int ei, int lastSWHidx, int lastSWLidx, int pendBullAifob, int pendBearAifob, int fvgBullScanUpto, int fvgBearScanUpto) =>
+    wN = array.size(oArr)
     if wN >= 2
         i = wN - 1
-        isBull = array.get(wC, i) >= array.get(wO, i)
-        brkH = array.get(wH, i) > array.get(wH, i - 1)
-        brkL = array.get(wL, i) < array.get(wL, i - 1)
+        isBull = array.get(cArr, i) >= array.get(oArr, i)
+        brkH = array.get(hArr, i) > array.get(hArr, i - 1)
+        brkL = array.get(lArr, i) < array.get(lArr, i - 1)
         dualAct = brkH and brkL
 
         prevDual = false
-        eCnt = array.size(wEvents)
+        eCnt = array.size(evArr)
         if eCnt >= 2
-            ev1 = array.get(wEvents, eCnt - 1)
-            ev2 = array.get(wEvents, eCnt - 2)
+            ev1 = array.get(evArr, eCnt - 1)
+            ev2 = array.get(evArr, eCnt - 2)
             prevDual := (ev1.kind != ev2.kind) and (ev1.confirmIdx == ev2.confirmIdx) and (ev1.confirmIdx == i - 1)
         blockPD = prevDual and not dualAct
-        evBeforeSwing = array.size(wEvents)
+        evBeforeSwing = array.size(evArr)
 
         if not isBull
-            if array.get(wH, i) > array.get(wH, wPeakIdx)
-                wPeakIdx := i
+            if array.get(hArr, i) > array.get(hArr, peakIdx)
+                peakIdx := i
             if brkH
-                lk = array.size(wEvents) > 0 ? array.get(wEvents, array.size(wEvents) - 1).kind : -1
+                lk = array.size(evArr) > 0 ? array.get(evArr, array.size(evArr) - 1).kind : -1
                 if lk != 1 and not blockPD
-                    addSL(wSwLows, wTroughIdx)
-                    addEv(wEvents, i, 1, wTroughIdx, array.get(wL, wTroughIdx))
-                    wPeakIdx := i
-            if array.get(wL, i) < array.get(wL, wTroughIdx)
-                wTroughIdx := i
+                    addSL(swLArr, troughIdx)
+                    addEv(evArr, i, 1, troughIdx, array.get(lArr, troughIdx))
+                    peakIdx := i
+            if array.get(lArr, i) < array.get(lArr, troughIdx)
+                troughIdx := i
             if brkL
-                lk2 = array.size(wEvents) > 0 ? array.get(wEvents, array.size(wEvents) - 1).kind : -1
+                lk2 = array.size(evArr) > 0 ? array.get(evArr, array.size(evArr) - 1).kind : -1
                 if lk2 != 0 and not blockPD
-                    addSH(wSwHighs, wPeakIdx)
-                    addEv(wEvents, i, 0, wPeakIdx, array.get(wH, wPeakIdx))
-                    wTroughIdx := i
+                    addSH(swHArr, peakIdx)
+                    addEv(evArr, i, 0, peakIdx, array.get(hArr, peakIdx))
+                    troughIdx := i
         else
-            if array.get(wL, i) < array.get(wL, wTroughIdx)
-                wTroughIdx := i
+            if array.get(lArr, i) < array.get(lArr, troughIdx)
+                troughIdx := i
             if brkL
-                lk3 = array.size(wEvents) > 0 ? array.get(wEvents, array.size(wEvents) - 1).kind : -1
+                lk3 = array.size(evArr) > 0 ? array.get(evArr, array.size(evArr) - 1).kind : -1
                 if lk3 != 0 and not blockPD
-                    addSH(wSwHighs, wPeakIdx)
-                    addEv(wEvents, i, 0, wPeakIdx, array.get(wH, wPeakIdx))
-                    wTroughIdx := i
-            if array.get(wH, i) > array.get(wH, wPeakIdx)
-                wPeakIdx := i
+                    addSH(swHArr, peakIdx)
+                    addEv(evArr, i, 0, peakIdx, array.get(hArr, peakIdx))
+                    troughIdx := i
+            if array.get(hArr, i) > array.get(hArr, peakIdx)
+                peakIdx := i
             if brkH
-                lk4 = array.size(wEvents) > 0 ? array.get(wEvents, array.size(wEvents) - 1).kind : -1
+                lk4 = array.size(evArr) > 0 ? array.get(evArr, array.size(evArr) - 1).kind : -1
                 if lk4 != 1 and not blockPD
-                    addSL(wSwLows, wTroughIdx)
-                    addEv(wEvents, i, 1, wTroughIdx, array.get(wL, wTroughIdx))
-                    wPeakIdx := i
+                    addSL(swLArr, troughIdx)
+                    addEv(evArr, i, 1, troughIdx, array.get(lArr, troughIdx))
+                    peakIdx := i
 
         k = i
-        evTotal = array.size(wEvents)
-        peek0 = wEi
+        evTotal = array.size(evArr)
+        peek0 = ei
         while peek0 < evTotal
-            pEv = array.get(wEvents, peek0)
+            pEv = array.get(evArr, peek0)
             if pEv.confirmIdx != k
                 break
             if pEv.kind == 0
-                wLastSWHidx := pEv.swingIdx
+                lastSWHidx := pEv.swingIdx
             else
-                wLastSWLidx := pEv.swingIdx
+                lastSWLidx := pEv.swingIdx
             peek0 += 1
 
-        prevReg = wRegime
+        prevReg = regime
         swhCons = false
         swlCons = false
-        aobSWHi = wSwhIdx
-        aobSWLi = wSwlIdx
-        kBull = array.get(wC, k) >= array.get(wO, k)
+        aobSWHi = swhIdx
+        aobSWLi = swlIdx
+        kBull = array.get(cArr, k) >= array.get(oArr, k)
 
         if not kBull
-            if wHaveSWH and array.get(wH, k) > wSwhPrice
-                if wRegime == 0
-                    wRegime := 1
-                else if wRegime == 2
-                    wRegime := 1
-                    addMss(wMsses, k, wSwhIdx, wSwhPrice, true)
-                if wPendBullAifob != -1
-                    obRef = array.get(wObs, wPendBullAifob)
+            if haveSWH and array.get(hArr, k) > swhPrice
+                if regime == 0
+                    regime := 1
+                else if regime == 2
+                    regime := 1
+                    addMss(mssArr, k, swhIdx, swhPrice, true)
+                if pendBullAifob != -1
+                    obRef = array.get(obArr, pendBullAifob)
                     obRef.state := 0
                     obRef.origState := 0
-                    array.set(wObs, wPendBullAifob, obRef)
-                    wPendBullAifob := -1
-                else if wLastSWLidx >= 0
-                    lo = math.min(math.min(wLastSWLidx, k), wSwhIdx)
-                    hi = math.max(math.max(wLastSWLidx, k), wSwhIdx)
-                    tryCreateIFVGs(wFvgs, wH, wL, lo, hi, true, k)
-                    wFvgBullScanUpto := hi
+                    array.set(obArr, pendBullAifob, obRef)
+                    pendBullAifob := -1
+                else if lastSWLidx >= 0
+                    lo = math.min(math.min(lastSWLidx, k), swhIdx)
+                    hi = math.max(math.max(lastSWLidx, k), swhIdx)
+                    tryCreateIFVGs(fvgArr, hArr, lArr, lo, hi, true, k)
+                    fvgBullScanUpto := hi
                     best = -1
                     for x = lo to hi
-                        cX = array.get(wC, x)
-                        oX = array.get(wO, x)
+                        cX = array.get(cArr, x)
+                        oX = array.get(oArr, x)
                         okB = false
                         if cX < oX
-                            okB := best == -1 or cX < array.get(wC, best)
+                            okB := best == -1 or cX < array.get(cArr, best)
                         if okB
                             best := x
                     if best != -1
-                        oB = array.get(wO, best)
-                        cB = array.get(wC, best)
-                        addOB(wObs, best, math.min(oB, cB), math.max(oB, cB), true, k, 0)
-                if wLastSWLidx >= 0
-                    addRBFromSwing(wRbs, wO, wH, wL, wC, wLastSWLidx, false, k, 0)
-                wHaveSWH := false
+                        oB = array.get(oArr, best)
+                        cB = array.get(cArr, best)
+                        addOB(obArr, best, math.min(oB, cB), math.max(oB, cB), true, k, 0)
+                if lastSWLidx >= 0
+                    addRBFromSwing(rbArr, oArr, hArr, lArr, cArr, lastSWLidx, false, k, 0)
+                haveSWH := false
                 swhCons := true
 
-            peek2 = wEi
+            peek2 = ei
             while peek2 < evTotal
-                pEv2 = array.get(wEvents, peek2)
+                pEv2 = array.get(evArr, peek2)
                 if pEv2.confirmIdx != k
                     break
                 if pEv2.kind == 0
-                    wHaveSWH := true
-                    wSwhPrice := pEv2.price
-                    wSwhIdx := pEv2.swingIdx
-                    wPendBullAifob := -1
-                    tryBearAOB(wObs, wO, wH, wL, wC, prevReg, aobSWLi, pEv2.swingIdx, pEv2.price, k)
-                    tryBearAFVG(wFvgs, wH, wL, prevReg, aobSWLi, pEv2.swingIdx, pEv2.price, k)
-                    tryBearARB(wRbs, wO, wH, wL, wC, prevReg, aobSWLi, pEv2.swingIdx, k)
-                    if wPendBearAifob == -1
-                        r2 = tryBearAIFOB(wObs, wO, wC, wHaveSWL, aobSWLi, wLastSWHidx, pEv2.swingIdx, k)
+                    haveSWH := true
+                    swhPrice := pEv2.price
+                    swhIdx := pEv2.swingIdx
+                    pendBullAifob := -1
+                    tryBearAOB(obArr, oArr, hArr, lArr, cArr, prevReg, aobSWLi, pEv2.swingIdx, pEv2.price, k)
+                    tryBearAFVG(fvgArr, hArr, lArr, prevReg, aobSWLi, pEv2.swingIdx, pEv2.price, k)
+                    tryBearARB(rbArr, oArr, hArr, lArr, cArr, prevReg, aobSWLi, pEv2.swingIdx, k)
+                    if pendBearAifob == -1
+                        r2 = tryBearAIFOB(obArr, oArr, cArr, haveSWL, aobSWLi, lastSWHidx, pEv2.swingIdx, k)
                         if r2 != -1
-                            wPendBearAifob := r2
+                            pendBearAifob := r2
                 else
-                    wHaveSWL := true
-                    wSwlPrice := pEv2.price
-                    wSwlIdx := pEv2.swingIdx
-                    wPendBearAifob := -1
-                    tryBullAOB(wObs, wO, wH, wL, wC, prevReg, aobSWHi, pEv2.swingIdx, pEv2.price, k)
-                    tryBullAFVG(wFvgs, wH, wL, prevReg, aobSWHi, pEv2.swingIdx, pEv2.price, k)
-                    tryBullARB(wRbs, wO, wH, wL, wC, prevReg, aobSWHi, pEv2.swingIdx, k)
-                    if wPendBullAifob == -1
-                        r3 = tryBullAIFOB(wObs, wO, wC, wHaveSWH, aobSWHi, wLastSWLidx, pEv2.swingIdx, k)
+                    haveSWL := true
+                    swlPrice := pEv2.price
+                    swlIdx := pEv2.swingIdx
+                    pendBearAifob := -1
+                    tryBullAOB(obArr, oArr, hArr, lArr, cArr, prevReg, aobSWHi, pEv2.swingIdx, pEv2.price, k)
+                    tryBullAFVG(fvgArr, hArr, lArr, prevReg, aobSWHi, pEv2.swingIdx, pEv2.price, k)
+                    tryBullARB(rbArr, oArr, hArr, lArr, cArr, prevReg, aobSWHi, pEv2.swingIdx, k)
+                    if pendBullAifob == -1
+                        r3 = tryBullAIFOB(obArr, oArr, cArr, haveSWH, aobSWHi, lastSWLidx, pEv2.swingIdx, k)
                         if r3 != -1
-                            wPendBullAifob := r3
+                            pendBullAifob := r3
                 peek2 += 1
 
-            if wHaveSWL and array.get(wL, k) < wSwlPrice
-                if wRegime == 0
-                    wRegime := 2
-                else if wRegime == 1
-                    wRegime := 2
-                    addMss(wMsses, k, wSwlIdx, wSwlPrice, false)
-                if wPendBearAifob != -1
-                    obRef2 = array.get(wObs, wPendBearAifob)
+            if haveSWL and array.get(lArr, k) < swlPrice
+                if regime == 0
+                    regime := 2
+                else if regime == 1
+                    regime := 2
+                    addMss(mssArr, k, swlIdx, swlPrice, false)
+                if pendBearAifob != -1
+                    obRef2 = array.get(obArr, pendBearAifob)
                     obRef2.state := 0
                     obRef2.origState := 0
-                    array.set(wObs, wPendBearAifob, obRef2)
-                    wPendBearAifob := -1
-                else if wLastSWHidx >= 0
-                    lo2 = math.min(math.min(wLastSWHidx, k), wSwlIdx)
-                    hi2 = math.max(math.max(wLastSWHidx, k), wSwlIdx)
-                    tryCreateIFVGs(wFvgs, wH, wL, lo2, hi2, false, k)
-                    wFvgBearScanUpto := hi2
+                    array.set(obArr, pendBearAifob, obRef2)
+                    pendBearAifob := -1
+                else if lastSWHidx >= 0
+                    lo2 = math.min(math.min(lastSWHidx, k), swlIdx)
+                    hi2 = math.max(math.max(lastSWHidx, k), swlIdx)
+                    tryCreateIFVGs(fvgArr, hArr, lArr, lo2, hi2, false, k)
+                    fvgBearScanUpto := hi2
                     best2 = -1
                     for x = lo2 to hi2
-                        cX = array.get(wC, x)
-                        oX = array.get(wO, x)
+                        cX = array.get(cArr, x)
+                        oX = array.get(oArr, x)
                         okB2 = false
                         if cX > oX
-                            okB2 := best2 == -1 or cX > array.get(wC, best2)
+                            okB2 := best2 == -1 or cX > array.get(cArr, best2)
                         if okB2
                             best2 := x
                     if best2 != -1
-                        oB = array.get(wO, best2)
-                        cB = array.get(wC, best2)
-                        addOB(wObs, best2, math.min(oB, cB), math.max(oB, cB), false, k, 0)
-                if wLastSWHidx >= 0
-                    addRBFromSwing(wRbs, wO, wH, wL, wC, wLastSWHidx, true, k, 0)
-                wHaveSWL := false
+                        oB = array.get(oArr, best2)
+                        cB = array.get(cArr, best2)
+                        addOB(obArr, best2, math.min(oB, cB), math.max(oB, cB), false, k, 0)
+                if lastSWHidx >= 0
+                    addRBFromSwing(rbArr, oArr, hArr, lArr, cArr, lastSWHidx, true, k, 0)
+                haveSWL := false
                 swlCons := true
         else
-            if wHaveSWL and array.get(wL, k) < wSwlPrice
-                if wRegime == 0
-                    wRegime := 2
-                else if wRegime == 1
-                    wRegime := 2
-                    addMss(wMsses, k, wSwlIdx, wSwlPrice, false)
-                if wPendBearAifob != -1
-                    obRef3 = array.get(wObs, wPendBearAifob)
+            if haveSWL and array.get(lArr, k) < swlPrice
+                if regime == 0
+                    regime := 2
+                else if regime == 1
+                    regime := 2
+                    addMss(mssArr, k, swlIdx, swlPrice, false)
+                if pendBearAifob != -1
+                    obRef3 = array.get(obArr, pendBearAifob)
                     obRef3.state := 0
                     obRef3.origState := 0
-                    array.set(wObs, wPendBearAifob, obRef3)
-                    wPendBearAifob := -1
-                else if wLastSWHidx >= 0
-                    lo3 = math.min(math.min(wLastSWHidx, k), wSwlIdx)
-                    hi3 = math.max(math.max(wLastSWHidx, k), wSwlIdx)
-                    tryCreateIFVGs(wFvgs, wH, wL, lo3, hi3, false, k)
-                    wFvgBearScanUpto := hi3
+                    array.set(obArr, pendBearAifob, obRef3)
+                    pendBearAifob := -1
+                else if lastSWHidx >= 0
+                    lo3 = math.min(math.min(lastSWHidx, k), swlIdx)
+                    hi3 = math.max(math.max(lastSWHidx, k), swlIdx)
+                    tryCreateIFVGs(fvgArr, hArr, lArr, lo3, hi3, false, k)
+                    fvgBearScanUpto := hi3
                     best3 = -1
                     for x = lo3 to hi3
-                        cX = array.get(wC, x)
-                        oX = array.get(wO, x)
+                        cX = array.get(cArr, x)
+                        oX = array.get(oArr, x)
                         okB3 = false
                         if cX > oX
-                            okB3 := best3 == -1 or cX > array.get(wC, best3)
+                            okB3 := best3 == -1 or cX > array.get(cArr, best3)
                         if okB3
                             best3 := x
                     if best3 != -1
-                        oB = array.get(wO, best3)
-                        cB = array.get(wC, best3)
-                        addOB(wObs, best3, math.min(oB, cB), math.max(oB, cB), false, k, 0)
-                if wLastSWHidx >= 0
-                    addRBFromSwing(wRbs, wO, wH, wL, wC, wLastSWHidx, true, k, 0)
-                wHaveSWL := false
+                        oB = array.get(oArr, best3)
+                        cB = array.get(cArr, best3)
+                        addOB(obArr, best3, math.min(oB, cB), math.max(oB, cB), false, k, 0)
+                if lastSWHidx >= 0
+                    addRBFromSwing(rbArr, oArr, hArr, lArr, cArr, lastSWHidx, true, k, 0)
+                haveSWL := false
                 swlCons := true
 
-            peek3 = wEi
+            peek3 = ei
             while peek3 < evTotal
-                pEv3 = array.get(wEvents, peek3)
+                pEv3 = array.get(evArr, peek3)
                 if pEv3.confirmIdx != k
                     break
                 if pEv3.kind == 0
-                    wHaveSWH := true
-                    wSwhPrice := pEv3.price
-                    wSwhIdx := pEv3.swingIdx
-                    wPendBullAifob := -1
-                    tryBearAOB(wObs, wO, wH, wL, wC, prevReg, aobSWLi, pEv3.swingIdx, pEv3.price, k)
-                    tryBearAFVG(wFvgs, wH, wL, prevReg, aobSWLi, pEv3.swingIdx, pEv3.price, k)
-                    tryBearARB(wRbs, wO, wH, wL, wC, prevReg, aobSWLi, pEv3.swingIdx, k)
-                    if wPendBearAifob == -1
-                        r4 = tryBearAIFOB(wObs, wO, wC, wHaveSWL, aobSWLi, wLastSWHidx, pEv3.swingIdx, k)
+                    haveSWH := true
+                    swhPrice := pEv3.price
+                    swhIdx := pEv3.swingIdx
+                    pendBullAifob := -1
+                    tryBearAOB(obArr, oArr, hArr, lArr, cArr, prevReg, aobSWLi, pEv3.swingIdx, pEv3.price, k)
+                    tryBearAFVG(fvgArr, hArr, lArr, prevReg, aobSWLi, pEv3.swingIdx, pEv3.price, k)
+                    tryBearARB(rbArr, oArr, hArr, lArr, cArr, prevReg, aobSWLi, pEv3.swingIdx, k)
+                    if pendBearAifob == -1
+                        r4 = tryBearAIFOB(obArr, oArr, cArr, haveSWL, aobSWLi, lastSWHidx, pEv3.swingIdx, k)
                         if r4 != -1
-                            wPendBearAifob := r4
+                            pendBearAifob := r4
                 else
-                    wHaveSWL := true
-                    wSwlPrice := pEv3.price
-                    wSwlIdx := pEv3.swingIdx
-                    wPendBearAifob := -1
-                    tryBullAOB(wObs, wO, wH, wL, wC, prevReg, aobSWHi, pEv3.swingIdx, pEv3.price, k)
-                    tryBullAFVG(wFvgs, wH, wL, prevReg, aobSWHi, pEv3.swingIdx, pEv3.price, k)
-                    tryBullARB(wRbs, wO, wH, wL, wC, prevReg, aobSWHi, pEv3.swingIdx, k)
-                    if wPendBullAifob == -1
-                        r5 = tryBullAIFOB(wObs, wO, wC, wHaveSWH, aobSWHi, wLastSWLidx, pEv3.swingIdx, k)
+                    haveSWL := true
+                    swlPrice := pEv3.price
+                    swlIdx := pEv3.swingIdx
+                    pendBearAifob := -1
+                    tryBullAOB(obArr, oArr, hArr, lArr, cArr, prevReg, aobSWHi, pEv3.swingIdx, pEv3.price, k)
+                    tryBullAFVG(fvgArr, hArr, lArr, prevReg, aobSWHi, pEv3.swingIdx, pEv3.price, k)
+                    tryBullARB(rbArr, oArr, hArr, lArr, cArr, prevReg, aobSWHi, pEv3.swingIdx, k)
+                    if pendBullAifob == -1
+                        r5 = tryBullAIFOB(obArr, oArr, cArr, haveSWH, aobSWHi, lastSWLidx, pEv3.swingIdx, k)
                         if r5 != -1
-                            wPendBullAifob := r5
+                            pendBullAifob := r5
                 peek3 += 1
 
-            if wHaveSWH and array.get(wH, k) > wSwhPrice
-                if wRegime == 0
-                    wRegime := 1
-                else if wRegime == 2
-                    wRegime := 1
-                    addMss(wMsses, k, wSwhIdx, wSwhPrice, true)
-                if wPendBullAifob != -1
-                    obRef4 = array.get(wObs, wPendBullAifob)
+            if haveSWH and array.get(hArr, k) > swhPrice
+                if regime == 0
+                    regime := 1
+                else if regime == 2
+                    regime := 1
+                    addMss(mssArr, k, swhIdx, swhPrice, true)
+                if pendBullAifob != -1
+                    obRef4 = array.get(obArr, pendBullAifob)
                     obRef4.state := 0
                     obRef4.origState := 0
-                    array.set(wObs, wPendBullAifob, obRef4)
-                    wPendBullAifob := -1
-                else if wLastSWLidx >= 0
-                    lo4 = math.min(math.min(wLastSWLidx, k), wSwhIdx)
-                    hi4 = math.max(math.max(wLastSWLidx, k), wSwhIdx)
-                    tryCreateIFVGs(wFvgs, wH, wL, lo4, hi4, true, k)
-                    wFvgBullScanUpto := hi4
+                    array.set(obArr, pendBullAifob, obRef4)
+                    pendBullAifob := -1
+                else if lastSWLidx >= 0
+                    lo4 = math.min(math.min(lastSWLidx, k), swhIdx)
+                    hi4 = math.max(math.max(lastSWLidx, k), swhIdx)
+                    tryCreateIFVGs(fvgArr, hArr, lArr, lo4, hi4, true, k)
+                    fvgBullScanUpto := hi4
                     best4 = -1
                     for x = lo4 to hi4
-                        cX = array.get(wC, x)
-                        oX = array.get(wO, x)
+                        cX = array.get(cArr, x)
+                        oX = array.get(oArr, x)
                         okB4 = false
                         if cX < oX
-                            okB4 := best4 == -1 or cX < array.get(wC, best4)
+                            okB4 := best4 == -1 or cX < array.get(cArr, best4)
                         if okB4
                             best4 := x
                     if best4 != -1
-                        oB = array.get(wO, best4)
-                        cB = array.get(wC, best4)
-                        addOB(wObs, best4, math.min(oB, cB), math.max(oB, cB), true, k, 0)
-                if wLastSWLidx >= 0
-                    addRBFromSwing(wRbs, wO, wH, wL, wC, wLastSWLidx, false, k, 0)
-                wHaveSWH := false
+                        oB = array.get(oArr, best4)
+                        cB = array.get(cArr, best4)
+                        addOB(obArr, best4, math.min(oB, cB), math.max(oB, cB), true, k, 0)
+                if lastSWLidx >= 0
+                    addRBFromSwing(rbArr, oArr, hArr, lArr, cArr, lastSWLidx, false, k, 0)
+                haveSWH := false
                 swhCons := true
 
-        if wRegime == 1 and k >= 2 and k > wFvgBullScanUpto
-            h1c = array.get(wH, k - 2)
-            l3c = array.get(wL, k)
+        if regime == 1 and k >= 2 and k > fvgBullScanUpto
+            h1c = array.get(hArr, k - 2)
+            l3c = array.get(lArr, k)
             if h1c < l3c
-                addFVG(wFvgs, k - 2, h1c, l3c, true, k, 0)
-            wFvgBullScanUpto := k
-        if wRegime == 2 and k >= 2 and k > wFvgBearScanUpto
-            l1c = array.get(wL, k - 2)
-            h3c = array.get(wH, k)
+                addFVG(fvgArr, k - 2, h1c, l3c, true, k, 0)
+            fvgBullScanUpto := k
+        if regime == 2 and k >= 2 and k > fvgBearScanUpto
+            l1c = array.get(lArr, k - 2)
+            h3c = array.get(hArr, k)
             if l1c > h3c
-                addFVG(wFvgs, k - 2, h3c, l1c, false, k, 0)
-            wFvgBearScanUpto := k
+                addFVG(fvgArr, k - 2, h3c, l1c, false, k, 0)
+            fvgBearScanUpto := k
 
-        while wEi < evTotal
-            sEv = array.get(wEvents, wEi)
+        while ei < evTotal
+            sEv = array.get(evArr, ei)
             if sEv.confirmIdx != k
                 break
             if sEv.kind == 0
                 if not swhCons
-                    wHaveSWH := true
-                    wSwhPrice := sEv.price
-                    wSwhIdx := sEv.swingIdx
-                wLastSWHidx := sEv.swingIdx
-                for z = 0 to array.size(wObs) - 1
-                    if z < 0 or z >= array.size(wObs)
+                    haveSWH := true
+                    swhPrice := sEv.price
+                    swhIdx := sEv.swingIdx
+                lastSWHidx := sEv.swingIdx
+                for z = 0 to array.size(obArr) - 1
+                    if z < 0 or z >= array.size(obArr)
                         continue
-                    obZ = array.get(wObs, z)
+                    obZ = array.get(obArr, z)
                     if obZ.bullish and obZ.state == 0 and obZ.eligibleK == -1 and k > obZ.triggerK
                         obZ.eligibleK := k
-                        array.set(wObs, z, obZ)
-                for zf = 0 to array.size(wFvgs) - 1
-                    if zf < 0 or zf >= array.size(wFvgs)
+                        array.set(obArr, z, obZ)
+                for zf = 0 to array.size(fvgArr) - 1
+                    if zf < 0 or zf >= array.size(fvgArr)
                         continue
-                    fvgZ = array.get(wFvgs, zf)
+                    fvgZ = array.get(fvgArr, zf)
                     if fvgZ.bullish and fvgZ.state == 0 and fvgZ.eligibleK == -1 and k > fvgZ.triggerK
                         fvgZ.eligibleK := k
-                        array.set(wFvgs, zf, fvgZ)
-                for zr = 0 to array.size(wRbs) - 1
-                    if zr < 0 or zr >= array.size(wRbs)
+                        array.set(fvgArr, zf, fvgZ)
+                for zr = 0 to array.size(rbArr) - 1
+                    if zr < 0 or zr >= array.size(rbArr)
                         continue
-                    rbZ = array.get(wRbs, zr)
+                    rbZ = array.get(rbArr, zr)
                     if rbZ.bullish and rbZ.state == 0 and rbZ.eligibleK == -1 and k > rbZ.triggerK
                         rbZ.eligibleK := k
-                        array.set(wRbs, zr, rbZ)
+                        array.set(rbArr, zr, rbZ)
             else
                 if not swlCons
-                    wHaveSWL := true
-                    wSwlPrice := sEv.price
-                    wSwlIdx := sEv.swingIdx
-                wLastSWLidx := sEv.swingIdx
-                for z = 0 to array.size(wObs) - 1
-                    if z < 0 or z >= array.size(wObs)
+                    haveSWL := true
+                    swlPrice := sEv.price
+                    swlIdx := sEv.swingIdx
+                lastSWLidx := sEv.swingIdx
+                for z = 0 to array.size(obArr) - 1
+                    if z < 0 or z >= array.size(obArr)
                         continue
-                    obZ2 = array.get(wObs, z)
+                    obZ2 = array.get(obArr, z)
                     if not obZ2.bullish and obZ2.state == 0 and obZ2.eligibleK == -1 and k > obZ2.triggerK
                         obZ2.eligibleK := k
-                        array.set(wObs, z, obZ2)
-                for zf2 = 0 to array.size(wFvgs) - 1
-                    if zf2 < 0 or zf2 >= array.size(wFvgs)
+                        array.set(obArr, z, obZ2)
+                for zf2 = 0 to array.size(fvgArr) - 1
+                    if zf2 < 0 or zf2 >= array.size(fvgArr)
                         continue
-                    fvgZ2 = array.get(wFvgs, zf2)
+                    fvgZ2 = array.get(fvgArr, zf2)
                     if not fvgZ2.bullish and fvgZ2.state == 0 and fvgZ2.eligibleK == -1 and k > fvgZ2.triggerK
                         fvgZ2.eligibleK := k
-                        array.set(wFvgs, zf2, fvgZ2)
-                for zr2 = 0 to array.size(wRbs) - 1
-                    if zr2 < 0 or zr2 >= array.size(wRbs)
+                        array.set(fvgArr, zf2, fvgZ2)
+                for zr2 = 0 to array.size(rbArr) - 1
+                    if zr2 < 0 or zr2 >= array.size(rbArr)
                         continue
-                    rbZ2 = array.get(wRbs, zr2)
+                    rbZ2 = array.get(rbArr, zr2)
                     if not rbZ2.bullish and rbZ2.state == 0 and rbZ2.eligibleK == -1 and k > rbZ2.triggerK
                         rbZ2.eligibleK := k
-                        array.set(wRbs, zr2, rbZ2)
-            wEi += 1
+                        array.set(rbArr, zr2, rbZ2)
+            ei += 1
 
-        obTotal = array.size(wObs)
-        hK = array.get(wH, k)
-        lK = array.get(wL, k)
+        obTotal = array.size(obArr)
+        hK = array.get(hArr, k)
+        lK = array.get(lArr, k)
         for z = 0 to obTotal - 1
             if z < 0 or z >= obTotal
                 continue
-            obZ3 = array.get(wObs, z)
+            obZ3 = array.get(obArr, z)
             if obZ3.state != 3
                 zb = obZ3.zb
                 zt = obZ3.zt
@@ -857,14 +854,14 @@ if wNewBar
                         obZ3.preSpentState := obZ3.state
                         obZ3.state := 3
                         obZ3.stopK := k
-                        array.set(wObs, z, obZ3)
+                        array.set(obArr, z, obZ3)
                         impacted := true
                 if not impacted and (obZ3.state == 0 or obZ3.state == 1 or obZ3.state == 4) and obZ3.eligibleK != -1
                     isIFOB = obZ3.origState != 1
                     for e2 = evBeforeSwing to evTotal - 1
                         if e2 < 0 or e2 >= evTotal
                             continue
-                        stEv = array.get(wEvents, e2)
+                        stEv = array.get(evArr, e2)
                         if stEv.confirmIdx == k
                             stranded = false
                             if isIFOB
@@ -879,13 +876,13 @@ if wNewBar
                                     stranded := true
                             if stranded
                                 obZ3.state := 2
-                                array.set(wObs, z, obZ3)
+                                array.set(obArr, z, obZ3)
 
-        fvgTotal = array.size(wFvgs)
+        fvgTotal = array.size(fvgArr)
         for zf3 = 0 to fvgTotal - 1
             if zf3 < 0 or zf3 >= fvgTotal
                 continue
-            fvgZ3 = array.get(wFvgs, zf3)
+            fvgZ3 = array.get(fvgArr, zf3)
             if fvgZ3.state != 3
                 zbf = fvgZ3.zb
                 ztf = fvgZ3.zt
@@ -896,23 +893,23 @@ if wNewBar
                         fvgZ3.preSpentState := fvgZ3.state
                         fvgZ3.state := 3
                         fvgZ3.stopK := k
-                        array.set(wFvgs, zf3, fvgZ3)
+                        array.set(fvgArr, zf3, fvgZ3)
                         impactedF := true
                 if not impactedF and (fvgZ3.state == 0 or fvgZ3.state == 1) and fvgZ3.eligibleK != -1 and k >= fvgZ3.eligibleK
-                    cK = array.get(wC, k)
+                    cK = array.get(cArr, k)
                     closedThrough = bullf ? cK < zbf : cK > ztf
                     if closedThrough
                         fvgZ3.preSpentState := fvgZ3.state
                         fvgZ3.state := 3
                         fvgZ3.stopK := k
-                        array.set(wFvgs, zf3, fvgZ3)
+                        array.set(fvgArr, zf3, fvgZ3)
                         impactedF := true
                 if not impactedF and (fvgZ3.state == 0 or fvgZ3.state == 1) and fvgZ3.eligibleK != -1
                     isIFVG = fvgZ3.origin != 1
                     for e2 = evBeforeSwing to evTotal - 1
                         if e2 < 0 or e2 >= evTotal
                             continue
-                        stEv = array.get(wEvents, e2)
+                        stEv = array.get(evArr, e2)
                         if stEv.confirmIdx == k
                             strandedF = false
                             if isIFVG
@@ -927,13 +924,13 @@ if wNewBar
                                     strandedF := true
                             if strandedF
                                 fvgZ3.state := 2
-                                array.set(wFvgs, zf3, fvgZ3)
+                                array.set(fvgArr, zf3, fvgZ3)
 
-        rbTotal = array.size(wRbs)
+        rbTotal = array.size(rbArr)
         for zr3 = 0 to rbTotal - 1
             if zr3 < 0 or zr3 >= rbTotal
                 continue
-            rbZ3 = array.get(wRbs, zr3)
+            rbZ3 = array.get(rbArr, zr3)
             if rbZ3.state != 3
                 zbr = rbZ3.zb
                 ztr = rbZ3.zt
@@ -944,14 +941,14 @@ if wNewBar
                         rbZ3.preSpentState := rbZ3.state
                         rbZ3.state := 3
                         rbZ3.stopK := k
-                        array.set(wRbs, zr3, rbZ3)
+                        array.set(rbArr, zr3, rbZ3)
                         impactedR := true
                 if not impactedR and (rbZ3.state == 0 or rbZ3.state == 1) and rbZ3.eligibleK != -1
                     isIRB = rbZ3.origin != 1
                     for e2 = evBeforeSwing to evTotal - 1
                         if e2 < 0 or e2 >= evTotal
                             continue
-                        stEv = array.get(wEvents, e2)
+                        stEv = array.get(evArr, e2)
                         if stEv.confirmIdx == k
                             strandedR = false
                             if isIRB
@@ -966,969 +963,24 @@ if wNewBar
                                     strandedR := true
                             if strandedR
                                 rbZ3.state := 2
-                                array.set(wRbs, zr3, rbZ3)
+                                array.set(rbArr, zr3, rbZ3)
+    [peakIdx, troughIdx, haveSWH, swhPrice, swhIdx, haveSWL, swlPrice, swlIdx, regime, ei, lastSWHidx, lastSWLidx, pendBullAifob, pendBearAifob, fvgBullScanUpto, fvgBearScanUpto]
 
 
-// ===================== 4H (confirm) ENGINE — runs once per new 4H bar =====================
-// Mechanically identical to the Weekly engine above (see its comment) --
-// same logic, fed by h4O/h4H/h4L/h4C, guarded by h4NewBar.
+// ===================== WEEKLY (bias) ENGINE =====================
+// Shared runEngine() above; identical logic for every tier.
+if wNewBar
+    [wPeakIdx, wTroughIdx, wHaveSWH, wSwhPrice, wSwhIdx, wHaveSWL, wSwlPrice, wSwlIdx, wRegime, wEi, wLastSWHidx, wLastSWLidx, wPendBullAifob, wPendBearAifob, wFvgBullScanUpto, wFvgBearScanUpto] = runEngine(wO, wH, wL, wC, wEvents, wMsses, wObs, wFvgs, wRbs, wSwHighs, wSwLows, wPeakIdx, wTroughIdx, wHaveSWH, wSwhPrice, wSwhIdx, wHaveSWL, wSwlPrice, wSwlIdx, wRegime, wEi, wLastSWHidx, wLastSWLidx, wPendBullAifob, wPendBearAifob, wFvgBullScanUpto, wFvgBearScanUpto)
+
+// ===================== 4H (confirm) ENGINE =====================
+// Shared runEngine() above; identical logic for every tier.
 if h4NewBar
-    h4N = array.size(h4O)
-    if h4N >= 2
-        i = h4N - 1
-        isBull = array.get(h4C, i) >= array.get(h4O, i)
-        brkH = array.get(h4H, i) > array.get(h4H, i - 1)
-        brkL = array.get(h4L, i) < array.get(h4L, i - 1)
-        dualAct = brkH and brkL
+    [h4PeakIdx, h4TroughIdx, h4HaveSWH, h4SwhPrice, h4SwhIdx, h4HaveSWL, h4SwlPrice, h4SwlIdx, h4Regime, h4Ei, h4LastSWHidx, h4LastSWLidx, h4PendBullAifob, h4PendBearAifob, h4FvgBullScanUpto, h4FvgBearScanUpto] = runEngine(h4O, h4H, h4L, h4C, h4Events, h4Msses, h4Obs, h4Fvgs, h4Rbs, h4SwHighs, h4SwLows, h4PeakIdx, h4TroughIdx, h4HaveSWH, h4SwhPrice, h4SwhIdx, h4HaveSWL, h4SwlPrice, h4SwlIdx, h4Regime, h4Ei, h4LastSWHidx, h4LastSWLidx, h4PendBullAifob, h4PendBearAifob, h4FvgBullScanUpto, h4FvgBearScanUpto)
 
-        prevDual = false
-        eCnt = array.size(h4Events)
-        if eCnt >= 2
-            ev1 = array.get(h4Events, eCnt - 1)
-            ev2 = array.get(h4Events, eCnt - 2)
-            prevDual := (ev1.kind != ev2.kind) and (ev1.confirmIdx == ev2.confirmIdx) and (ev1.confirmIdx == i - 1)
-        blockPD = prevDual and not dualAct
-        evBeforeSwing = array.size(h4Events)
-
-        if not isBull
-            if array.get(h4H, i) > array.get(h4H, h4PeakIdx)
-                h4PeakIdx := i
-            if brkH
-                lk = array.size(h4Events) > 0 ? array.get(h4Events, array.size(h4Events) - 1).kind : -1
-                if lk != 1 and not blockPD
-                    addSL(h4SwLows, h4TroughIdx)
-                    addEv(h4Events, i, 1, h4TroughIdx, array.get(h4L, h4TroughIdx))
-                    h4PeakIdx := i
-            if array.get(h4L, i) < array.get(h4L, h4TroughIdx)
-                h4TroughIdx := i
-            if brkL
-                lk2 = array.size(h4Events) > 0 ? array.get(h4Events, array.size(h4Events) - 1).kind : -1
-                if lk2 != 0 and not blockPD
-                    addSH(h4SwHighs, h4PeakIdx)
-                    addEv(h4Events, i, 0, h4PeakIdx, array.get(h4H, h4PeakIdx))
-                    h4TroughIdx := i
-        else
-            if array.get(h4L, i) < array.get(h4L, h4TroughIdx)
-                h4TroughIdx := i
-            if brkL
-                lk3 = array.size(h4Events) > 0 ? array.get(h4Events, array.size(h4Events) - 1).kind : -1
-                if lk3 != 0 and not blockPD
-                    addSH(h4SwHighs, h4PeakIdx)
-                    addEv(h4Events, i, 0, h4PeakIdx, array.get(h4H, h4PeakIdx))
-                    h4TroughIdx := i
-            if array.get(h4H, i) > array.get(h4H, h4PeakIdx)
-                h4PeakIdx := i
-            if brkH
-                lk4 = array.size(h4Events) > 0 ? array.get(h4Events, array.size(h4Events) - 1).kind : -1
-                if lk4 != 1 and not blockPD
-                    addSL(h4SwLows, h4TroughIdx)
-                    addEv(h4Events, i, 1, h4TroughIdx, array.get(h4L, h4TroughIdx))
-                    h4PeakIdx := i
-
-        k = i
-        evTotal = array.size(h4Events)
-        peek0 = h4Ei
-        while peek0 < evTotal
-            pEv = array.get(h4Events, peek0)
-            if pEv.confirmIdx != k
-                break
-            if pEv.kind == 0
-                h4LastSWHidx := pEv.swingIdx
-            else
-                h4LastSWLidx := pEv.swingIdx
-            peek0 += 1
-
-        prevReg = h4Regime
-        swhCons = false
-        swlCons = false
-        aobSWHi = h4SwhIdx
-        aobSWLi = h4SwlIdx
-        kBull = array.get(h4C, k) >= array.get(h4O, k)
-
-        if not kBull
-            if h4HaveSWH and array.get(h4H, k) > h4SwhPrice
-                if h4Regime == 0
-                    h4Regime := 1
-                else if h4Regime == 2
-                    h4Regime := 1
-                    addMss(h4Msses, k, h4SwhIdx, h4SwhPrice, true)
-                if h4PendBullAifob != -1
-                    obRef = array.get(h4Obs, h4PendBullAifob)
-                    obRef.state := 0
-                    obRef.origState := 0
-                    array.set(h4Obs, h4PendBullAifob, obRef)
-                    h4PendBullAifob := -1
-                else if h4LastSWLidx >= 0
-                    lo = math.min(math.min(h4LastSWLidx, k), h4SwhIdx)
-                    hi = math.max(math.max(h4LastSWLidx, k), h4SwhIdx)
-                    tryCreateIFVGs(h4Fvgs, h4H, h4L, lo, hi, true, k)
-                    h4FvgBullScanUpto := hi
-                    best = -1
-                    for x = lo to hi
-                        cX = array.get(h4C, x)
-                        oX = array.get(h4O, x)
-                        okB = false
-                        if cX < oX
-                            okB := best == -1 or cX < array.get(h4C, best)
-                        if okB
-                            best := x
-                    if best != -1
-                        oB = array.get(h4O, best)
-                        cB = array.get(h4C, best)
-                        addOB(h4Obs, best, math.min(oB, cB), math.max(oB, cB), true, k, 0)
-                if h4LastSWLidx >= 0
-                    addRBFromSwing(h4Rbs, h4O, h4H, h4L, h4C, h4LastSWLidx, false, k, 0)
-                h4HaveSWH := false
-                swhCons := true
-
-            peek2 = h4Ei
-            while peek2 < evTotal
-                pEv2 = array.get(h4Events, peek2)
-                if pEv2.confirmIdx != k
-                    break
-                if pEv2.kind == 0
-                    h4HaveSWH := true
-                    h4SwhPrice := pEv2.price
-                    h4SwhIdx := pEv2.swingIdx
-                    h4PendBullAifob := -1
-                    tryBearAOB(h4Obs, h4O, h4H, h4L, h4C, prevReg, aobSWLi, pEv2.swingIdx, pEv2.price, k)
-                    tryBearAFVG(h4Fvgs, h4H, h4L, prevReg, aobSWLi, pEv2.swingIdx, pEv2.price, k)
-                    tryBearARB(h4Rbs, h4O, h4H, h4L, h4C, prevReg, aobSWLi, pEv2.swingIdx, k)
-                    if h4PendBearAifob == -1
-                        r2 = tryBearAIFOB(h4Obs, h4O, h4C, h4HaveSWL, aobSWLi, h4LastSWHidx, pEv2.swingIdx, k)
-                        if r2 != -1
-                            h4PendBearAifob := r2
-                else
-                    h4HaveSWL := true
-                    h4SwlPrice := pEv2.price
-                    h4SwlIdx := pEv2.swingIdx
-                    h4PendBearAifob := -1
-                    tryBullAOB(h4Obs, h4O, h4H, h4L, h4C, prevReg, aobSWHi, pEv2.swingIdx, pEv2.price, k)
-                    tryBullAFVG(h4Fvgs, h4H, h4L, prevReg, aobSWHi, pEv2.swingIdx, pEv2.price, k)
-                    tryBullARB(h4Rbs, h4O, h4H, h4L, h4C, prevReg, aobSWHi, pEv2.swingIdx, k)
-                    if h4PendBullAifob == -1
-                        r3 = tryBullAIFOB(h4Obs, h4O, h4C, h4HaveSWH, aobSWHi, h4LastSWLidx, pEv2.swingIdx, k)
-                        if r3 != -1
-                            h4PendBullAifob := r3
-                peek2 += 1
-
-            if h4HaveSWL and array.get(h4L, k) < h4SwlPrice
-                if h4Regime == 0
-                    h4Regime := 2
-                else if h4Regime == 1
-                    h4Regime := 2
-                    addMss(h4Msses, k, h4SwlIdx, h4SwlPrice, false)
-                if h4PendBearAifob != -1
-                    obRef2 = array.get(h4Obs, h4PendBearAifob)
-                    obRef2.state := 0
-                    obRef2.origState := 0
-                    array.set(h4Obs, h4PendBearAifob, obRef2)
-                    h4PendBearAifob := -1
-                else if h4LastSWHidx >= 0
-                    lo2 = math.min(math.min(h4LastSWHidx, k), h4SwlIdx)
-                    hi2 = math.max(math.max(h4LastSWHidx, k), h4SwlIdx)
-                    tryCreateIFVGs(h4Fvgs, h4H, h4L, lo2, hi2, false, k)
-                    h4FvgBearScanUpto := hi2
-                    best2 = -1
-                    for x = lo2 to hi2
-                        cX = array.get(h4C, x)
-                        oX = array.get(h4O, x)
-                        okB2 = false
-                        if cX > oX
-                            okB2 := best2 == -1 or cX > array.get(h4C, best2)
-                        if okB2
-                            best2 := x
-                    if best2 != -1
-                        oB = array.get(h4O, best2)
-                        cB = array.get(h4C, best2)
-                        addOB(h4Obs, best2, math.min(oB, cB), math.max(oB, cB), false, k, 0)
-                if h4LastSWHidx >= 0
-                    addRBFromSwing(h4Rbs, h4O, h4H, h4L, h4C, h4LastSWHidx, true, k, 0)
-                h4HaveSWL := false
-                swlCons := true
-        else
-            if h4HaveSWL and array.get(h4L, k) < h4SwlPrice
-                if h4Regime == 0
-                    h4Regime := 2
-                else if h4Regime == 1
-                    h4Regime := 2
-                    addMss(h4Msses, k, h4SwlIdx, h4SwlPrice, false)
-                if h4PendBearAifob != -1
-                    obRef3 = array.get(h4Obs, h4PendBearAifob)
-                    obRef3.state := 0
-                    obRef3.origState := 0
-                    array.set(h4Obs, h4PendBearAifob, obRef3)
-                    h4PendBearAifob := -1
-                else if h4LastSWHidx >= 0
-                    lo3 = math.min(math.min(h4LastSWHidx, k), h4SwlIdx)
-                    hi3 = math.max(math.max(h4LastSWHidx, k), h4SwlIdx)
-                    tryCreateIFVGs(h4Fvgs, h4H, h4L, lo3, hi3, false, k)
-                    h4FvgBearScanUpto := hi3
-                    best3 = -1
-                    for x = lo3 to hi3
-                        cX = array.get(h4C, x)
-                        oX = array.get(h4O, x)
-                        okB3 = false
-                        if cX > oX
-                            okB3 := best3 == -1 or cX > array.get(h4C, best3)
-                        if okB3
-                            best3 := x
-                    if best3 != -1
-                        oB = array.get(h4O, best3)
-                        cB = array.get(h4C, best3)
-                        addOB(h4Obs, best3, math.min(oB, cB), math.max(oB, cB), false, k, 0)
-                if h4LastSWHidx >= 0
-                    addRBFromSwing(h4Rbs, h4O, h4H, h4L, h4C, h4LastSWHidx, true, k, 0)
-                h4HaveSWL := false
-                swlCons := true
-
-            peek3 = h4Ei
-            while peek3 < evTotal
-                pEv3 = array.get(h4Events, peek3)
-                if pEv3.confirmIdx != k
-                    break
-                if pEv3.kind == 0
-                    h4HaveSWH := true
-                    h4SwhPrice := pEv3.price
-                    h4SwhIdx := pEv3.swingIdx
-                    h4PendBullAifob := -1
-                    tryBearAOB(h4Obs, h4O, h4H, h4L, h4C, prevReg, aobSWLi, pEv3.swingIdx, pEv3.price, k)
-                    tryBearAFVG(h4Fvgs, h4H, h4L, prevReg, aobSWLi, pEv3.swingIdx, pEv3.price, k)
-                    tryBearARB(h4Rbs, h4O, h4H, h4L, h4C, prevReg, aobSWLi, pEv3.swingIdx, k)
-                    if h4PendBearAifob == -1
-                        r4 = tryBearAIFOB(h4Obs, h4O, h4C, h4HaveSWL, aobSWLi, h4LastSWHidx, pEv3.swingIdx, k)
-                        if r4 != -1
-                            h4PendBearAifob := r4
-                else
-                    h4HaveSWL := true
-                    h4SwlPrice := pEv3.price
-                    h4SwlIdx := pEv3.swingIdx
-                    h4PendBearAifob := -1
-                    tryBullAOB(h4Obs, h4O, h4H, h4L, h4C, prevReg, aobSWHi, pEv3.swingIdx, pEv3.price, k)
-                    tryBullAFVG(h4Fvgs, h4H, h4L, prevReg, aobSWHi, pEv3.swingIdx, pEv3.price, k)
-                    tryBullARB(h4Rbs, h4O, h4H, h4L, h4C, prevReg, aobSWHi, pEv3.swingIdx, k)
-                    if h4PendBullAifob == -1
-                        r5 = tryBullAIFOB(h4Obs, h4O, h4C, h4HaveSWH, aobSWHi, h4LastSWLidx, pEv3.swingIdx, k)
-                        if r5 != -1
-                            h4PendBullAifob := r5
-                peek3 += 1
-
-            if h4HaveSWH and array.get(h4H, k) > h4SwhPrice
-                if h4Regime == 0
-                    h4Regime := 1
-                else if h4Regime == 2
-                    h4Regime := 1
-                    addMss(h4Msses, k, h4SwhIdx, h4SwhPrice, true)
-                if h4PendBullAifob != -1
-                    obRef4 = array.get(h4Obs, h4PendBullAifob)
-                    obRef4.state := 0
-                    obRef4.origState := 0
-                    array.set(h4Obs, h4PendBullAifob, obRef4)
-                    h4PendBullAifob := -1
-                else if h4LastSWLidx >= 0
-                    lo4 = math.min(math.min(h4LastSWLidx, k), h4SwhIdx)
-                    hi4 = math.max(math.max(h4LastSWLidx, k), h4SwhIdx)
-                    tryCreateIFVGs(h4Fvgs, h4H, h4L, lo4, hi4, true, k)
-                    h4FvgBullScanUpto := hi4
-                    best4 = -1
-                    for x = lo4 to hi4
-                        cX = array.get(h4C, x)
-                        oX = array.get(h4O, x)
-                        okB4 = false
-                        if cX < oX
-                            okB4 := best4 == -1 or cX < array.get(h4C, best4)
-                        if okB4
-                            best4 := x
-                    if best4 != -1
-                        oB = array.get(h4O, best4)
-                        cB = array.get(h4C, best4)
-                        addOB(h4Obs, best4, math.min(oB, cB), math.max(oB, cB), true, k, 0)
-                if h4LastSWLidx >= 0
-                    addRBFromSwing(h4Rbs, h4O, h4H, h4L, h4C, h4LastSWLidx, false, k, 0)
-                h4HaveSWH := false
-                swhCons := true
-
-        if h4Regime == 1 and k >= 2 and k > h4FvgBullScanUpto
-            h1c = array.get(h4H, k - 2)
-            l3c = array.get(h4L, k)
-            if h1c < l3c
-                addFVG(h4Fvgs, k - 2, h1c, l3c, true, k, 0)
-            h4FvgBullScanUpto := k
-        if h4Regime == 2 and k >= 2 and k > h4FvgBearScanUpto
-            l1c = array.get(h4L, k - 2)
-            h3c = array.get(h4H, k)
-            if l1c > h3c
-                addFVG(h4Fvgs, k - 2, h3c, l1c, false, k, 0)
-            h4FvgBearScanUpto := k
-
-        while h4Ei < evTotal
-            sEv = array.get(h4Events, h4Ei)
-            if sEv.confirmIdx != k
-                break
-            if sEv.kind == 0
-                if not swhCons
-                    h4HaveSWH := true
-                    h4SwhPrice := sEv.price
-                    h4SwhIdx := sEv.swingIdx
-                h4LastSWHidx := sEv.swingIdx
-                for z = 0 to array.size(h4Obs) - 1
-                    if z < 0 or z >= array.size(h4Obs)
-                        continue
-                    obZ = array.get(h4Obs, z)
-                    if obZ.bullish and obZ.state == 0 and obZ.eligibleK == -1 and k > obZ.triggerK
-                        obZ.eligibleK := k
-                        array.set(h4Obs, z, obZ)
-                for zf = 0 to array.size(h4Fvgs) - 1
-                    if zf < 0 or zf >= array.size(h4Fvgs)
-                        continue
-                    fvgZ = array.get(h4Fvgs, zf)
-                    if fvgZ.bullish and fvgZ.state == 0 and fvgZ.eligibleK == -1 and k > fvgZ.triggerK
-                        fvgZ.eligibleK := k
-                        array.set(h4Fvgs, zf, fvgZ)
-                for zr = 0 to array.size(h4Rbs) - 1
-                    if zr < 0 or zr >= array.size(h4Rbs)
-                        continue
-                    rbZ = array.get(h4Rbs, zr)
-                    if rbZ.bullish and rbZ.state == 0 and rbZ.eligibleK == -1 and k > rbZ.triggerK
-                        rbZ.eligibleK := k
-                        array.set(h4Rbs, zr, rbZ)
-            else
-                if not swlCons
-                    h4HaveSWL := true
-                    h4SwlPrice := sEv.price
-                    h4SwlIdx := sEv.swingIdx
-                h4LastSWLidx := sEv.swingIdx
-                for z = 0 to array.size(h4Obs) - 1
-                    if z < 0 or z >= array.size(h4Obs)
-                        continue
-                    obZ2 = array.get(h4Obs, z)
-                    if not obZ2.bullish and obZ2.state == 0 and obZ2.eligibleK == -1 and k > obZ2.triggerK
-                        obZ2.eligibleK := k
-                        array.set(h4Obs, z, obZ2)
-                for zf2 = 0 to array.size(h4Fvgs) - 1
-                    if zf2 < 0 or zf2 >= array.size(h4Fvgs)
-                        continue
-                    fvgZ2 = array.get(h4Fvgs, zf2)
-                    if not fvgZ2.bullish and fvgZ2.state == 0 and fvgZ2.eligibleK == -1 and k > fvgZ2.triggerK
-                        fvgZ2.eligibleK := k
-                        array.set(h4Fvgs, zf2, fvgZ2)
-                for zr2 = 0 to array.size(h4Rbs) - 1
-                    if zr2 < 0 or zr2 >= array.size(h4Rbs)
-                        continue
-                    rbZ2 = array.get(h4Rbs, zr2)
-                    if not rbZ2.bullish and rbZ2.state == 0 and rbZ2.eligibleK == -1 and k > rbZ2.triggerK
-                        rbZ2.eligibleK := k
-                        array.set(h4Rbs, zr2, rbZ2)
-            h4Ei += 1
-
-        obTotal = array.size(h4Obs)
-        hK = array.get(h4H, k)
-        lK = array.get(h4L, k)
-        for z = 0 to obTotal - 1
-            if z < 0 or z >= obTotal
-                continue
-            obZ3 = array.get(h4Obs, z)
-            if obZ3.state != 3
-                zb = obZ3.zb
-                zt = obZ3.zt
-                bull = obZ3.bullish
-                impacted = false
-                if obZ3.eligibleK != -1 and k >= obZ3.eligibleK
-                    if hK >= zb and lK <= zt
-                        obZ3.preSpentState := obZ3.state
-                        obZ3.state := 3
-                        obZ3.stopK := k
-                        array.set(h4Obs, z, obZ3)
-                        impacted := true
-                if not impacted and (obZ3.state == 0 or obZ3.state == 1 or obZ3.state == 4) and obZ3.eligibleK != -1
-                    isIFOB = obZ3.origState != 1
-                    for e2 = evBeforeSwing to evTotal - 1
-                        if e2 < 0 or e2 >= evTotal
-                            continue
-                        stEv = array.get(h4Events, e2)
-                        if stEv.confirmIdx == k
-                            stranded = false
-                            if isIFOB
-                                if bull and stEv.kind == 1 and stEv.price > zt
-                                    stranded := true
-                                if not bull and stEv.kind == 0 and stEv.price < zb
-                                    stranded := true
-                            else
-                                if bull and stEv.kind == 0 and stEv.price < zb
-                                    stranded := true
-                                if not bull and stEv.kind == 1 and stEv.price > zt
-                                    stranded := true
-                            if stranded
-                                obZ3.state := 2
-                                array.set(h4Obs, z, obZ3)
-
-        fvgTotal = array.size(h4Fvgs)
-        for zf3 = 0 to fvgTotal - 1
-            if zf3 < 0 or zf3 >= fvgTotal
-                continue
-            fvgZ3 = array.get(h4Fvgs, zf3)
-            if fvgZ3.state != 3
-                zbf = fvgZ3.zb
-                ztf = fvgZ3.zt
-                bullf = fvgZ3.bullish
-                impactedF = false
-                if fvgZ3.eligibleK != -1 and k >= fvgZ3.eligibleK
-                    if hK >= zbf and lK <= ztf
-                        fvgZ3.preSpentState := fvgZ3.state
-                        fvgZ3.state := 3
-                        fvgZ3.stopK := k
-                        array.set(h4Fvgs, zf3, fvgZ3)
-                        impactedF := true
-                if not impactedF and (fvgZ3.state == 0 or fvgZ3.state == 1) and fvgZ3.eligibleK != -1 and k >= fvgZ3.eligibleK
-                    cK = array.get(h4C, k)
-                    closedThrough = bullf ? cK < zbf : cK > ztf
-                    if closedThrough
-                        fvgZ3.preSpentState := fvgZ3.state
-                        fvgZ3.state := 3
-                        fvgZ3.stopK := k
-                        array.set(h4Fvgs, zf3, fvgZ3)
-                        impactedF := true
-                if not impactedF and (fvgZ3.state == 0 or fvgZ3.state == 1) and fvgZ3.eligibleK != -1
-                    isIFVG = fvgZ3.origin != 1
-                    for e2 = evBeforeSwing to evTotal - 1
-                        if e2 < 0 or e2 >= evTotal
-                            continue
-                        stEv = array.get(h4Events, e2)
-                        if stEv.confirmIdx == k
-                            strandedF = false
-                            if isIFVG
-                                if bullf and stEv.kind == 1 and stEv.price > ztf
-                                    strandedF := true
-                                if not bullf and stEv.kind == 0 and stEv.price < zbf
-                                    strandedF := true
-                            else
-                                if bullf and stEv.kind == 0 and stEv.price < zbf
-                                    strandedF := true
-                                if not bullf and stEv.kind == 1 and stEv.price > ztf
-                                    strandedF := true
-                            if strandedF
-                                fvgZ3.state := 2
-                                array.set(h4Fvgs, zf3, fvgZ3)
-
-        rbTotal = array.size(h4Rbs)
-        for zr3 = 0 to rbTotal - 1
-            if zr3 < 0 or zr3 >= rbTotal
-                continue
-            rbZ3 = array.get(h4Rbs, zr3)
-            if rbZ3.state != 3
-                zbr = rbZ3.zb
-                ztr = rbZ3.zt
-                bullr = rbZ3.bullish
-                impactedR = false
-                if rbZ3.eligibleK != -1 and k >= rbZ3.eligibleK
-                    if hK >= zbr and lK <= ztr
-                        rbZ3.preSpentState := rbZ3.state
-                        rbZ3.state := 3
-                        rbZ3.stopK := k
-                        array.set(h4Rbs, zr3, rbZ3)
-                        impactedR := true
-                if not impactedR and (rbZ3.state == 0 or rbZ3.state == 1) and rbZ3.eligibleK != -1
-                    isIRB = rbZ3.origin != 1
-                    for e2 = evBeforeSwing to evTotal - 1
-                        if e2 < 0 or e2 >= evTotal
-                            continue
-                        stEv = array.get(h4Events, e2)
-                        if stEv.confirmIdx == k
-                            strandedR = false
-                            if isIRB
-                                if bullr and stEv.kind == 1 and stEv.price > ztr
-                                    strandedR := true
-                                if not bullr and stEv.kind == 0 and stEv.price < zbr
-                                    strandedR := true
-                            else
-                                if bullr and stEv.kind == 0 and stEv.price < zbr
-                                    strandedR := true
-                                if not bullr and stEv.kind == 1 and stEv.price > ztr
-                                    strandedR := true
-                            if strandedR
-                                rbZ3.state := 2
-                                array.set(h4Rbs, zr3, rbZ3)
-
-
-// ===================== 5M (entry) ENGINE — runs once per new 5M bar =====================
-// Mechanically identical to the Weekly engine above (see its comment) --
-// same logic, fed by m5O/m5H/m5L/m5C, guarded by m5NewBar.
+// ===================== 5M (entry) ENGINE =====================
+// Shared runEngine() above; identical logic for every tier.
 if m5NewBar
-    m5N = array.size(m5O)
-    if m5N >= 2
-        i = m5N - 1
-        isBull = array.get(m5C, i) >= array.get(m5O, i)
-        brkH = array.get(m5H, i) > array.get(m5H, i - 1)
-        brkL = array.get(m5L, i) < array.get(m5L, i - 1)
-        dualAct = brkH and brkL
-
-        prevDual = false
-        eCnt = array.size(m5Events)
-        if eCnt >= 2
-            ev1 = array.get(m5Events, eCnt - 1)
-            ev2 = array.get(m5Events, eCnt - 2)
-            prevDual := (ev1.kind != ev2.kind) and (ev1.confirmIdx == ev2.confirmIdx) and (ev1.confirmIdx == i - 1)
-        blockPD = prevDual and not dualAct
-        evBeforeSwing = array.size(m5Events)
-
-        if not isBull
-            if array.get(m5H, i) > array.get(m5H, m5PeakIdx)
-                m5PeakIdx := i
-            if brkH
-                lk = array.size(m5Events) > 0 ? array.get(m5Events, array.size(m5Events) - 1).kind : -1
-                if lk != 1 and not blockPD
-                    addSL(m5SwLows, m5TroughIdx)
-                    addEv(m5Events, i, 1, m5TroughIdx, array.get(m5L, m5TroughIdx))
-                    m5PeakIdx := i
-            if array.get(m5L, i) < array.get(m5L, m5TroughIdx)
-                m5TroughIdx := i
-            if brkL
-                lk2 = array.size(m5Events) > 0 ? array.get(m5Events, array.size(m5Events) - 1).kind : -1
-                if lk2 != 0 and not blockPD
-                    addSH(m5SwHighs, m5PeakIdx)
-                    addEv(m5Events, i, 0, m5PeakIdx, array.get(m5H, m5PeakIdx))
-                    m5TroughIdx := i
-        else
-            if array.get(m5L, i) < array.get(m5L, m5TroughIdx)
-                m5TroughIdx := i
-            if brkL
-                lk3 = array.size(m5Events) > 0 ? array.get(m5Events, array.size(m5Events) - 1).kind : -1
-                if lk3 != 0 and not blockPD
-                    addSH(m5SwHighs, m5PeakIdx)
-                    addEv(m5Events, i, 0, m5PeakIdx, array.get(m5H, m5PeakIdx))
-                    m5TroughIdx := i
-            if array.get(m5H, i) > array.get(m5H, m5PeakIdx)
-                m5PeakIdx := i
-            if brkH
-                lk4 = array.size(m5Events) > 0 ? array.get(m5Events, array.size(m5Events) - 1).kind : -1
-                if lk4 != 1 and not blockPD
-                    addSL(m5SwLows, m5TroughIdx)
-                    addEv(m5Events, i, 1, m5TroughIdx, array.get(m5L, m5TroughIdx))
-                    m5PeakIdx := i
-
-        k = i
-        evTotal = array.size(m5Events)
-        peek0 = m5Ei
-        while peek0 < evTotal
-            pEv = array.get(m5Events, peek0)
-            if pEv.confirmIdx != k
-                break
-            if pEv.kind == 0
-                m5LastSWHidx := pEv.swingIdx
-            else
-                m5LastSWLidx := pEv.swingIdx
-            peek0 += 1
-
-        prevReg = m5Regime
-        swhCons = false
-        swlCons = false
-        aobSWHi = m5SwhIdx
-        aobSWLi = m5SwlIdx
-        kBull = array.get(m5C, k) >= array.get(m5O, k)
-
-        if not kBull
-            if m5HaveSWH and array.get(m5H, k) > m5SwhPrice
-                if m5Regime == 0
-                    m5Regime := 1
-                else if m5Regime == 2
-                    m5Regime := 1
-                    addMss(m5Msses, k, m5SwhIdx, m5SwhPrice, true)
-                if m5PendBullAifob != -1
-                    obRef = array.get(m5Obs, m5PendBullAifob)
-                    obRef.state := 0
-                    obRef.origState := 0
-                    array.set(m5Obs, m5PendBullAifob, obRef)
-                    m5PendBullAifob := -1
-                else if m5LastSWLidx >= 0
-                    lo = math.min(math.min(m5LastSWLidx, k), m5SwhIdx)
-                    hi = math.max(math.max(m5LastSWLidx, k), m5SwhIdx)
-                    tryCreateIFVGs(m5Fvgs, m5H, m5L, lo, hi, true, k)
-                    m5FvgBullScanUpto := hi
-                    best = -1
-                    for x = lo to hi
-                        cX = array.get(m5C, x)
-                        oX = array.get(m5O, x)
-                        okB = false
-                        if cX < oX
-                            okB := best == -1 or cX < array.get(m5C, best)
-                        if okB
-                            best := x
-                    if best != -1
-                        oB = array.get(m5O, best)
-                        cB = array.get(m5C, best)
-                        addOB(m5Obs, best, math.min(oB, cB), math.max(oB, cB), true, k, 0)
-                if m5LastSWLidx >= 0
-                    addRBFromSwing(m5Rbs, m5O, m5H, m5L, m5C, m5LastSWLidx, false, k, 0)
-                m5HaveSWH := false
-                swhCons := true
-
-            peek2 = m5Ei
-            while peek2 < evTotal
-                pEv2 = array.get(m5Events, peek2)
-                if pEv2.confirmIdx != k
-                    break
-                if pEv2.kind == 0
-                    m5HaveSWH := true
-                    m5SwhPrice := pEv2.price
-                    m5SwhIdx := pEv2.swingIdx
-                    m5PendBullAifob := -1
-                    tryBearAOB(m5Obs, m5O, m5H, m5L, m5C, prevReg, aobSWLi, pEv2.swingIdx, pEv2.price, k)
-                    tryBearAFVG(m5Fvgs, m5H, m5L, prevReg, aobSWLi, pEv2.swingIdx, pEv2.price, k)
-                    tryBearARB(m5Rbs, m5O, m5H, m5L, m5C, prevReg, aobSWLi, pEv2.swingIdx, k)
-                    if m5PendBearAifob == -1
-                        r2 = tryBearAIFOB(m5Obs, m5O, m5C, m5HaveSWL, aobSWLi, m5LastSWHidx, pEv2.swingIdx, k)
-                        if r2 != -1
-                            m5PendBearAifob := r2
-                else
-                    m5HaveSWL := true
-                    m5SwlPrice := pEv2.price
-                    m5SwlIdx := pEv2.swingIdx
-                    m5PendBearAifob := -1
-                    tryBullAOB(m5Obs, m5O, m5H, m5L, m5C, prevReg, aobSWHi, pEv2.swingIdx, pEv2.price, k)
-                    tryBullAFVG(m5Fvgs, m5H, m5L, prevReg, aobSWHi, pEv2.swingIdx, pEv2.price, k)
-                    tryBullARB(m5Rbs, m5O, m5H, m5L, m5C, prevReg, aobSWHi, pEv2.swingIdx, k)
-                    if m5PendBullAifob == -1
-                        r3 = tryBullAIFOB(m5Obs, m5O, m5C, m5HaveSWH, aobSWHi, m5LastSWLidx, pEv2.swingIdx, k)
-                        if r3 != -1
-                            m5PendBullAifob := r3
-                peek2 += 1
-
-            if m5HaveSWL and array.get(m5L, k) < m5SwlPrice
-                if m5Regime == 0
-                    m5Regime := 2
-                else if m5Regime == 1
-                    m5Regime := 2
-                    addMss(m5Msses, k, m5SwlIdx, m5SwlPrice, false)
-                if m5PendBearAifob != -1
-                    obRef2 = array.get(m5Obs, m5PendBearAifob)
-                    obRef2.state := 0
-                    obRef2.origState := 0
-                    array.set(m5Obs, m5PendBearAifob, obRef2)
-                    m5PendBearAifob := -1
-                else if m5LastSWHidx >= 0
-                    lo2 = math.min(math.min(m5LastSWHidx, k), m5SwlIdx)
-                    hi2 = math.max(math.max(m5LastSWHidx, k), m5SwlIdx)
-                    tryCreateIFVGs(m5Fvgs, m5H, m5L, lo2, hi2, false, k)
-                    m5FvgBearScanUpto := hi2
-                    best2 = -1
-                    for x = lo2 to hi2
-                        cX = array.get(m5C, x)
-                        oX = array.get(m5O, x)
-                        okB2 = false
-                        if cX > oX
-                            okB2 := best2 == -1 or cX > array.get(m5C, best2)
-                        if okB2
-                            best2 := x
-                    if best2 != -1
-                        oB = array.get(m5O, best2)
-                        cB = array.get(m5C, best2)
-                        addOB(m5Obs, best2, math.min(oB, cB), math.max(oB, cB), false, k, 0)
-                if m5LastSWHidx >= 0
-                    addRBFromSwing(m5Rbs, m5O, m5H, m5L, m5C, m5LastSWHidx, true, k, 0)
-                m5HaveSWL := false
-                swlCons := true
-        else
-            if m5HaveSWL and array.get(m5L, k) < m5SwlPrice
-                if m5Regime == 0
-                    m5Regime := 2
-                else if m5Regime == 1
-                    m5Regime := 2
-                    addMss(m5Msses, k, m5SwlIdx, m5SwlPrice, false)
-                if m5PendBearAifob != -1
-                    obRef3 = array.get(m5Obs, m5PendBearAifob)
-                    obRef3.state := 0
-                    obRef3.origState := 0
-                    array.set(m5Obs, m5PendBearAifob, obRef3)
-                    m5PendBearAifob := -1
-                else if m5LastSWHidx >= 0
-                    lo3 = math.min(math.min(m5LastSWHidx, k), m5SwlIdx)
-                    hi3 = math.max(math.max(m5LastSWHidx, k), m5SwlIdx)
-                    tryCreateIFVGs(m5Fvgs, m5H, m5L, lo3, hi3, false, k)
-                    m5FvgBearScanUpto := hi3
-                    best3 = -1
-                    for x = lo3 to hi3
-                        cX = array.get(m5C, x)
-                        oX = array.get(m5O, x)
-                        okB3 = false
-                        if cX > oX
-                            okB3 := best3 == -1 or cX > array.get(m5C, best3)
-                        if okB3
-                            best3 := x
-                    if best3 != -1
-                        oB = array.get(m5O, best3)
-                        cB = array.get(m5C, best3)
-                        addOB(m5Obs, best3, math.min(oB, cB), math.max(oB, cB), false, k, 0)
-                if m5LastSWHidx >= 0
-                    addRBFromSwing(m5Rbs, m5O, m5H, m5L, m5C, m5LastSWHidx, true, k, 0)
-                m5HaveSWL := false
-                swlCons := true
-
-            peek3 = m5Ei
-            while peek3 < evTotal
-                pEv3 = array.get(m5Events, peek3)
-                if pEv3.confirmIdx != k
-                    break
-                if pEv3.kind == 0
-                    m5HaveSWH := true
-                    m5SwhPrice := pEv3.price
-                    m5SwhIdx := pEv3.swingIdx
-                    m5PendBullAifob := -1
-                    tryBearAOB(m5Obs, m5O, m5H, m5L, m5C, prevReg, aobSWLi, pEv3.swingIdx, pEv3.price, k)
-                    tryBearAFVG(m5Fvgs, m5H, m5L, prevReg, aobSWLi, pEv3.swingIdx, pEv3.price, k)
-                    tryBearARB(m5Rbs, m5O, m5H, m5L, m5C, prevReg, aobSWLi, pEv3.swingIdx, k)
-                    if m5PendBearAifob == -1
-                        r4 = tryBearAIFOB(m5Obs, m5O, m5C, m5HaveSWL, aobSWLi, m5LastSWHidx, pEv3.swingIdx, k)
-                        if r4 != -1
-                            m5PendBearAifob := r4
-                else
-                    m5HaveSWL := true
-                    m5SwlPrice := pEv3.price
-                    m5SwlIdx := pEv3.swingIdx
-                    m5PendBearAifob := -1
-                    tryBullAOB(m5Obs, m5O, m5H, m5L, m5C, prevReg, aobSWHi, pEv3.swingIdx, pEv3.price, k)
-                    tryBullAFVG(m5Fvgs, m5H, m5L, prevReg, aobSWHi, pEv3.swingIdx, pEv3.price, k)
-                    tryBullARB(m5Rbs, m5O, m5H, m5L, m5C, prevReg, aobSWHi, pEv3.swingIdx, k)
-                    if m5PendBullAifob == -1
-                        r5 = tryBullAIFOB(m5Obs, m5O, m5C, m5HaveSWH, aobSWHi, m5LastSWLidx, pEv3.swingIdx, k)
-                        if r5 != -1
-                            m5PendBullAifob := r5
-                peek3 += 1
-
-            if m5HaveSWH and array.get(m5H, k) > m5SwhPrice
-                if m5Regime == 0
-                    m5Regime := 1
-                else if m5Regime == 2
-                    m5Regime := 1
-                    addMss(m5Msses, k, m5SwhIdx, m5SwhPrice, true)
-                if m5PendBullAifob != -1
-                    obRef4 = array.get(m5Obs, m5PendBullAifob)
-                    obRef4.state := 0
-                    obRef4.origState := 0
-                    array.set(m5Obs, m5PendBullAifob, obRef4)
-                    m5PendBullAifob := -1
-                else if m5LastSWLidx >= 0
-                    lo4 = math.min(math.min(m5LastSWLidx, k), m5SwhIdx)
-                    hi4 = math.max(math.max(m5LastSWLidx, k), m5SwhIdx)
-                    tryCreateIFVGs(m5Fvgs, m5H, m5L, lo4, hi4, true, k)
-                    m5FvgBullScanUpto := hi4
-                    best4 = -1
-                    for x = lo4 to hi4
-                        cX = array.get(m5C, x)
-                        oX = array.get(m5O, x)
-                        okB4 = false
-                        if cX < oX
-                            okB4 := best4 == -1 or cX < array.get(m5C, best4)
-                        if okB4
-                            best4 := x
-                    if best4 != -1
-                        oB = array.get(m5O, best4)
-                        cB = array.get(m5C, best4)
-                        addOB(m5Obs, best4, math.min(oB, cB), math.max(oB, cB), true, k, 0)
-                if m5LastSWLidx >= 0
-                    addRBFromSwing(m5Rbs, m5O, m5H, m5L, m5C, m5LastSWLidx, false, k, 0)
-                m5HaveSWH := false
-                swhCons := true
-
-        if m5Regime == 1 and k >= 2 and k > m5FvgBullScanUpto
-            h1c = array.get(m5H, k - 2)
-            l3c = array.get(m5L, k)
-            if h1c < l3c
-                addFVG(m5Fvgs, k - 2, h1c, l3c, true, k, 0)
-            m5FvgBullScanUpto := k
-        if m5Regime == 2 and k >= 2 and k > m5FvgBearScanUpto
-            l1c = array.get(m5L, k - 2)
-            h3c = array.get(m5H, k)
-            if l1c > h3c
-                addFVG(m5Fvgs, k - 2, h3c, l1c, false, k, 0)
-            m5FvgBearScanUpto := k
-
-        while m5Ei < evTotal
-            sEv = array.get(m5Events, m5Ei)
-            if sEv.confirmIdx != k
-                break
-            if sEv.kind == 0
-                if not swhCons
-                    m5HaveSWH := true
-                    m5SwhPrice := sEv.price
-                    m5SwhIdx := sEv.swingIdx
-                m5LastSWHidx := sEv.swingIdx
-                for z = 0 to array.size(m5Obs) - 1
-                    if z < 0 or z >= array.size(m5Obs)
-                        continue
-                    obZ = array.get(m5Obs, z)
-                    if obZ.bullish and obZ.state == 0 and obZ.eligibleK == -1 and k > obZ.triggerK
-                        obZ.eligibleK := k
-                        array.set(m5Obs, z, obZ)
-                for zf = 0 to array.size(m5Fvgs) - 1
-                    if zf < 0 or zf >= array.size(m5Fvgs)
-                        continue
-                    fvgZ = array.get(m5Fvgs, zf)
-                    if fvgZ.bullish and fvgZ.state == 0 and fvgZ.eligibleK == -1 and k > fvgZ.triggerK
-                        fvgZ.eligibleK := k
-                        array.set(m5Fvgs, zf, fvgZ)
-                for zr = 0 to array.size(m5Rbs) - 1
-                    if zr < 0 or zr >= array.size(m5Rbs)
-                        continue
-                    rbZ = array.get(m5Rbs, zr)
-                    if rbZ.bullish and rbZ.state == 0 and rbZ.eligibleK == -1 and k > rbZ.triggerK
-                        rbZ.eligibleK := k
-                        array.set(m5Rbs, zr, rbZ)
-            else
-                if not swlCons
-                    m5HaveSWL := true
-                    m5SwlPrice := sEv.price
-                    m5SwlIdx := sEv.swingIdx
-                m5LastSWLidx := sEv.swingIdx
-                for z = 0 to array.size(m5Obs) - 1
-                    if z < 0 or z >= array.size(m5Obs)
-                        continue
-                    obZ2 = array.get(m5Obs, z)
-                    if not obZ2.bullish and obZ2.state == 0 and obZ2.eligibleK == -1 and k > obZ2.triggerK
-                        obZ2.eligibleK := k
-                        array.set(m5Obs, z, obZ2)
-                for zf2 = 0 to array.size(m5Fvgs) - 1
-                    if zf2 < 0 or zf2 >= array.size(m5Fvgs)
-                        continue
-                    fvgZ2 = array.get(m5Fvgs, zf2)
-                    if not fvgZ2.bullish and fvgZ2.state == 0 and fvgZ2.eligibleK == -1 and k > fvgZ2.triggerK
-                        fvgZ2.eligibleK := k
-                        array.set(m5Fvgs, zf2, fvgZ2)
-                for zr2 = 0 to array.size(m5Rbs) - 1
-                    if zr2 < 0 or zr2 >= array.size(m5Rbs)
-                        continue
-                    rbZ2 = array.get(m5Rbs, zr2)
-                    if not rbZ2.bullish and rbZ2.state == 0 and rbZ2.eligibleK == -1 and k > rbZ2.triggerK
-                        rbZ2.eligibleK := k
-                        array.set(m5Rbs, zr2, rbZ2)
-            m5Ei += 1
-
-        obTotal = array.size(m5Obs)
-        hK = array.get(m5H, k)
-        lK = array.get(m5L, k)
-        for z = 0 to obTotal - 1
-            if z < 0 or z >= obTotal
-                continue
-            obZ3 = array.get(m5Obs, z)
-            if obZ3.state != 3
-                zb = obZ3.zb
-                zt = obZ3.zt
-                bull = obZ3.bullish
-                impacted = false
-                if obZ3.eligibleK != -1 and k >= obZ3.eligibleK
-                    if hK >= zb and lK <= zt
-                        obZ3.preSpentState := obZ3.state
-                        obZ3.state := 3
-                        obZ3.stopK := k
-                        array.set(m5Obs, z, obZ3)
-                        impacted := true
-                if not impacted and (obZ3.state == 0 or obZ3.state == 1 or obZ3.state == 4) and obZ3.eligibleK != -1
-                    isIFOB = obZ3.origState != 1
-                    for e2 = evBeforeSwing to evTotal - 1
-                        if e2 < 0 or e2 >= evTotal
-                            continue
-                        stEv = array.get(m5Events, e2)
-                        if stEv.confirmIdx == k
-                            stranded = false
-                            if isIFOB
-                                if bull and stEv.kind == 1 and stEv.price > zt
-                                    stranded := true
-                                if not bull and stEv.kind == 0 and stEv.price < zb
-                                    stranded := true
-                            else
-                                if bull and stEv.kind == 0 and stEv.price < zb
-                                    stranded := true
-                                if not bull and stEv.kind == 1 and stEv.price > zt
-                                    stranded := true
-                            if stranded
-                                obZ3.state := 2
-                                array.set(m5Obs, z, obZ3)
-
-        fvgTotal = array.size(m5Fvgs)
-        for zf3 = 0 to fvgTotal - 1
-            if zf3 < 0 or zf3 >= fvgTotal
-                continue
-            fvgZ3 = array.get(m5Fvgs, zf3)
-            if fvgZ3.state != 3
-                zbf = fvgZ3.zb
-                ztf = fvgZ3.zt
-                bullf = fvgZ3.bullish
-                impactedF = false
-                if fvgZ3.eligibleK != -1 and k >= fvgZ3.eligibleK
-                    if hK >= zbf and lK <= ztf
-                        fvgZ3.preSpentState := fvgZ3.state
-                        fvgZ3.state := 3
-                        fvgZ3.stopK := k
-                        array.set(m5Fvgs, zf3, fvgZ3)
-                        impactedF := true
-                if not impactedF and (fvgZ3.state == 0 or fvgZ3.state == 1) and fvgZ3.eligibleK != -1 and k >= fvgZ3.eligibleK
-                    cK = array.get(m5C, k)
-                    closedThrough = bullf ? cK < zbf : cK > ztf
-                    if closedThrough
-                        fvgZ3.preSpentState := fvgZ3.state
-                        fvgZ3.state := 3
-                        fvgZ3.stopK := k
-                        array.set(m5Fvgs, zf3, fvgZ3)
-                        impactedF := true
-                if not impactedF and (fvgZ3.state == 0 or fvgZ3.state == 1) and fvgZ3.eligibleK != -1
-                    isIFVG = fvgZ3.origin != 1
-                    for e2 = evBeforeSwing to evTotal - 1
-                        if e2 < 0 or e2 >= evTotal
-                            continue
-                        stEv = array.get(m5Events, e2)
-                        if stEv.confirmIdx == k
-                            strandedF = false
-                            if isIFVG
-                                if bullf and stEv.kind == 1 and stEv.price > ztf
-                                    strandedF := true
-                                if not bullf and stEv.kind == 0 and stEv.price < zbf
-                                    strandedF := true
-                            else
-                                if bullf and stEv.kind == 0 and stEv.price < zbf
-                                    strandedF := true
-                                if not bullf and stEv.kind == 1 and stEv.price > ztf
-                                    strandedF := true
-                            if strandedF
-                                fvgZ3.state := 2
-                                array.set(m5Fvgs, zf3, fvgZ3)
-
-        rbTotal = array.size(m5Rbs)
-        for zr3 = 0 to rbTotal - 1
-            if zr3 < 0 or zr3 >= rbTotal
-                continue
-            rbZ3 = array.get(m5Rbs, zr3)
-            if rbZ3.state != 3
-                zbr = rbZ3.zb
-                ztr = rbZ3.zt
-                bullr = rbZ3.bullish
-                impactedR = false
-                if rbZ3.eligibleK != -1 and k >= rbZ3.eligibleK
-                    if hK >= zbr and lK <= ztr
-                        rbZ3.preSpentState := rbZ3.state
-                        rbZ3.state := 3
-                        rbZ3.stopK := k
-                        array.set(m5Rbs, zr3, rbZ3)
-                        impactedR := true
-                if not impactedR and (rbZ3.state == 0 or rbZ3.state == 1) and rbZ3.eligibleK != -1
-                    isIRB = rbZ3.origin != 1
-                    for e2 = evBeforeSwing to evTotal - 1
-                        if e2 < 0 or e2 >= evTotal
-                            continue
-                        stEv = array.get(m5Events, e2)
-                        if stEv.confirmIdx == k
-                            strandedR = false
-                            if isIRB
-                                if bullr and stEv.kind == 1 and stEv.price > ztr
-                                    strandedR := true
-                                if not bullr and stEv.kind == 0 and stEv.price < zbr
-                                    strandedR := true
-                            else
-                                if bullr and stEv.kind == 0 and stEv.price < zbr
-                                    strandedR := true
-                                if not bullr and stEv.kind == 1 and stEv.price > ztr
-                                    strandedR := true
-                            if strandedR
-                                rbZ3.state := 2
-                                array.set(m5Rbs, zr3, rbZ3)
+    [m5PeakIdx, m5TroughIdx, m5HaveSWH, m5SwhPrice, m5SwhIdx, m5HaveSWL, m5SwlPrice, m5SwlIdx, m5Regime, m5Ei, m5LastSWHidx, m5LastSWLidx, m5PendBullAifob, m5PendBearAifob, m5FvgBullScanUpto, m5FvgBearScanUpto] = runEngine(m5O, m5H, m5L, m5C, m5Events, m5Msses, m5Obs, m5Fvgs, m5Rbs, m5SwHighs, m5SwLows, m5PeakIdx, m5TroughIdx, m5HaveSWH, m5SwhPrice, m5SwhIdx, m5HaveSWL, m5SwlPrice, m5SwlIdx, m5Regime, m5Ei, m5LastSWHidx, m5LastSWLidx, m5PendBullAifob, m5PendBearAifob, m5FvgBullScanUpto, m5FvgBearScanUpto)
 
 // ===================== S1 CASCADE STATE =====================
 // kind: -1 none, 0 OB, 1 FVG, 2 RB
@@ -2303,11 +1355,7 @@ if m5NewBar
 // Same palette/behavior as ICT_Full_OB_v24.pine, parameterized so it's
 // written once and reused for all three tiers (prefix distinguishes them
 // in label text, e.g. "W", "4H", "5M").
-drawTier(array<int> swHArr, array<int> swLArr, array<MssEv> mssArr,
-         array<ObZone> obArr, array<FvgZone> fvgArr, array<RbZone> rbArr,
-         array<float> hArr, array<float> lArr, array<float> cArr, array<int> btArr, int nArr,
-         string prefix, float swLowGap, int extMs, bool hideOOB,
-         color swhCol, color swlCol) =>
+drawTier(array<int> swHArr, array<int> swLArr, array<MssEv> mssArr, array<ObZone> obArr, array<FvgZone> fvgArr, array<RbZone> rbArr, array<float> hArr, array<float> lArr, array<float> cArr, array<int> btArr, int nArr, string prefix, float swLowGap, int extMs, bool hideOOB, color swhCol, color swlCol) =>
 
     dispFrom = InpDisplayFrom
 
@@ -2478,14 +1526,11 @@ if barstate.islast
     m5ExtMs = 20 * timeframe.in_seconds() * 1000
 
     if InpShowW
-        drawTier(wSwHighs, wSwLows, wMsses, wObs, wFvgs, wRbs, wH, wL, wC, wBT, array.size(wO),
-                 "W", wSwLowGap, wExtMs, false, color.purple, color.maroon)
+        drawTier(wSwHighs, wSwLows, wMsses, wObs, wFvgs, wRbs, wH, wL, wC, wBT, array.size(wO), "W", wSwLowGap, wExtMs, false, color.purple, color.maroon)
     if InpShowH4
-        drawTier(h4SwHighs, h4SwLows, h4Msses, h4Obs, h4Fvgs, h4Rbs, h4H, h4L, h4C, h4BT, array.size(h4O),
-                 "4H", h4SwLowGap, h4ExtMs, false, color.blue, color.black)
+        drawTier(h4SwHighs, h4SwLows, h4Msses, h4Obs, h4Fvgs, h4Rbs, h4H, h4L, h4C, h4BT, array.size(h4O), "4H", h4SwLowGap, h4ExtMs, false, color.blue, color.black)
     if InpShowM5
-        drawTier(m5SwHighs, m5SwLows, m5Msses, m5Obs, m5Fvgs, m5Rbs, m5H, m5L, m5C, m5BT, array.size(m5O),
-                 "5M", m5SwLowGap, m5ExtMs, false, color.teal, color.gray)
+        drawTier(m5SwHighs, m5SwLows, m5Msses, m5Obs, m5Fvgs, m5Rbs, m5H, m5L, m5C, m5BT, array.size(m5O), "5M", m5SwLowGap, m5ExtMs, false, color.teal, color.gray)
 
     // --- "S1 ENTRY POI" special mark on the currently-escalated 4H zone ---
     if confirmIdx != -1 and entryWatchStart > 0
