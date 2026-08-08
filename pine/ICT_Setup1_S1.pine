@@ -362,13 +362,17 @@ tryBullAOB(array<ObZone> obArr, array<float> oArr, array<float> hArr, array<floa
                     oX = array.get(oArr, x)
                     okB2 = false
                     if cX > oX
-                        okB2 := best2 == -1 or cX > array.get(cArr, best2)
+                        if best2 == -1
+                            okB2 := true
+                        else
+                            okB2 := cX > array.get(cArr, best2)
                     if okB2
                         best2 := x
-            if best2 != -1 and array.get(lArr, best2) > newSwlP
-                oB = array.get(oArr, best2)
-                cB = array.get(cArr, best2)
-                addOB(obArr, best2, math.min(oB, cB), math.max(oB, cB), true, k, 1)
+            if best2 != -1
+                if array.get(lArr, best2) > newSwlP
+                    oB = array.get(oArr, best2)
+                    cB = array.get(cArr, best2)
+                    addOB(obArr, best2, math.min(oB, cB), math.max(oB, cB), true, k, 1)
 
 tryBearAOB(array<ObZone> obArr, array<float> oArr, array<float> hArr, array<float> lArr, array<float> cArr, int pReg, int aobSWLi, int newSwhI, float newSwhP, int k) =>
     if pReg == 2 and aobSWLi >= 0
@@ -387,13 +391,17 @@ tryBearAOB(array<ObZone> obArr, array<float> oArr, array<float> hArr, array<floa
                     oX = array.get(oArr, x)
                     okB2 = false
                     if cX < oX
-                        okB2 := best2 == -1 or cX < array.get(cArr, best2)
+                        if best2 == -1
+                            okB2 := true
+                        else
+                            okB2 := cX < array.get(cArr, best2)
                     if okB2
                         best2 := x
-            if best2 != -1 and array.get(hArr, best2) < newSwhP
-                oB = array.get(oArr, best2)
-                cB = array.get(cArr, best2)
-                addOB(obArr, best2, math.min(oB, cB), math.max(oB, cB), false, k, 1)
+            if best2 != -1
+                if array.get(hArr, best2) < newSwhP
+                    oB = array.get(oArr, best2)
+                    cB = array.get(cArr, best2)
+                    addOB(obArr, best2, math.min(oB, cB), math.max(oB, cB), false, k, 1)
 
 tryBullAFVG(array<FvgZone> fvgArr, array<float> hArr, array<float> lArr, int pReg, int aobSWHi, int newSwlI, float newSwlP, int k) =>
     if pReg == 1 and aobSWHi >= 0
@@ -451,7 +459,10 @@ tryBullAIFOB(array<ObZone> obArr, array<float> oArr, array<float> cArr, bool pHa
                 oX = array.get(oArr, x)
                 okB = false
                 if cX < oX
-                    okB := best == -1 or cX < array.get(cArr, best)
+                    if best == -1
+                        okB := true
+                    else
+                        okB := cX < array.get(cArr, best)
                 if okB
                     best := x
         if best != -1
@@ -473,7 +484,10 @@ tryBearAIFOB(array<ObZone> obArr, array<float> oArr, array<float> cArr, bool pHa
                 oX = array.get(oArr, x)
                 okB = false
                 if cX > oX
-                    okB := best == -1 or cX > array.get(cArr, best)
+                    if best == -1
+                        okB := true
+                    else
+                        okB := cX > array.get(cArr, best)
                 if okB
                     best := x
         if best != -1
@@ -601,7 +615,10 @@ runEngine(array<float> oArr, array<float> hArr, array<float> lArr, array<float> 
                         oX = array.get(oArr, x)
                         okB = false
                         if cX < oX
-                            okB := best == -1 or cX < array.get(cArr, best)
+                            if best == -1
+                                okB := true
+                            else
+                                okB := cX < array.get(cArr, best)
                         if okB
                             best := x
                     if best != -1
@@ -667,7 +684,10 @@ runEngine(array<float> oArr, array<float> hArr, array<float> lArr, array<float> 
                         oX = array.get(oArr, x)
                         okB2 = false
                         if cX > oX
-                            okB2 := best2 == -1 or cX > array.get(cArr, best2)
+                            if best2 == -1
+                                okB2 := true
+                            else
+                                okB2 := cX > array.get(cArr, best2)
                         if okB2
                             best2 := x
                     if best2 != -1
@@ -702,7 +722,10 @@ runEngine(array<float> oArr, array<float> hArr, array<float> lArr, array<float> 
                         oX = array.get(oArr, x)
                         okB3 = false
                         if cX > oX
-                            okB3 := best3 == -1 or cX > array.get(cArr, best3)
+                            if best3 == -1
+                                okB3 := true
+                            else
+                                okB3 := cX > array.get(cArr, best3)
                         if okB3
                             best3 := x
                     if best3 != -1
@@ -768,7 +791,10 @@ runEngine(array<float> oArr, array<float> hArr, array<float> lArr, array<float> 
                         oX = array.get(oArr, x)
                         okB4 = false
                         if cX < oX
-                            okB4 := best4 == -1 or cX < array.get(cArr, best4)
+                            if best4 == -1
+                                okB4 := true
+                            else
+                                okB4 := cX < array.get(cArr, best4)
                         if okB4
                             best4 := x
                     if best4 != -1
