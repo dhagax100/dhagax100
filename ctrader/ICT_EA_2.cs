@@ -1,11 +1,9 @@
 // ICT_EA_2.cs -- cTrader (cAlgo) Weekly/Daily bias -> 4H confirm -> 5M entry cascade.
 //
-// Reuses the SAME proven swing/MSS/OB+FVG engine as ICT_EA_1.cs, unchanged
-// (dual-candle swing detection, alternation rule, MSS, IFOB/AOB/AIFOB/OOB/
-// SPENT and the FVG equivalents IFVG/AFVG/AIFVG/OFVG -- OB and FVG are two
-// flavors of the same POI in one unified list, so this cascade automatically
-// hunts both). Only the cascade logic below is new -- built to the spec from
-// conversation:
+// Reuses the same swing/MSS engine as ICT_EA_1.cs, extended with a THIRD POI
+// type: RB (Rejection Block), ported from pine/ICT_RB_Diagnostic.pine (spec
+// confirmed there already). So this hunts OB, FVG, and RB zones, all in one
+// unified list, all sharing the same eligibility/impact/stranding lifecycle.
 //
 // TIER 1 (bias, Weekly or Daily -- InpBiasTF): a POI goes live the instant
 // price wicks into it and stays live -- rolling forward across period closes
@@ -14,33 +12,33 @@
 // swing low kills a bullish one). Wick-only touches never kill it.
 //
 // TIER 2 (confirm, fixed 4H): once the bias POI is live, hunt 4H POIs
-// (aggressive = counter-trend AOB/AFVG, or in-favor = with-trend IFOB/
-// AIFOB/IFVG/AIFVG) matching the bias direction, formed since bias entry.
-// Same two kill conditions apply here too (confirmed: this scales to every
-// tier). A newly-touched 4H zone that overlaps the one already being
-// watched is merged into it rather than restarting the watch.
+// (aggressive = counter-trend, or in-favor = with-trend) matching the bias
+// direction, formed since bias entry. Same two kill conditions apply here
+// too. A newly-touched 4H zone that overlaps the one already being watched
+// is merged into it rather than restarting the watch.
 //
 // TIER 3 (entry, fixed 5M): once price wicks into the live 4H zone, trail a
 // stop order to the latest matching-direction 5M swing (sell-stop at swing
 // lows for a bearish cascade, buy-stop at swing highs for a bullish one)
 // until it fills, the 4H/bias POI invalidates, or the session window closes
-// for the day (pending order cancelled at window close; the hunt resumes on
-// the same zone next session day if it's still live).
+// for the day. SL sits just behind the swing candle's own wick (+1 pip for
+// spread); TP is a fixed reward:risk multiple of that.
 //
-// ASSUMPTIONS not yet nailed down in spec -- flagged for review, same as the
-// .mq5 sibling of this file:
-//  - Position SL defaults to the 4H confirm zone's far boundary; TP at
-//    InpRR_Target x that risk.
-//  - One trade at a time (any open position blocks new entries), and a
-//    fill fully resets the cascade back to idle -- mirrors ICT_EA_1's
-//    "one shot per touch" design.
-//  - Only one bias POI tracked live at a time (the multi-POI-at-once case
-//    is the explicitly-deferred next topic).
-//  - Rejection Block (RB) isn't in this engine yet (only ported to Pine so
-//    far) -- OB and FVG are hunted, RB is a fast-follow.
+// After a fill: the cascade does NOT reset. It keeps hunting the SAME 4H
+// zone for another 5M entry as long as that zone (and the bias POI it came
+// from) is still live and we're inside a trading session window. Only when
+// the 4H zone or the bias POI itself dies do we go back up a tier to look
+// for a fresh one.
+//
+// Trading hours (confirmed, same as ICT_EA_1): London 08:00-12:00 and New
+// York 13:00-17:00, broker/server time -- both adjustable below.
+//
+// One trade at a time: any open position blocks new entries (checked
+// unfiltered, same convention as ICT_EA_1).
 //
 // First complete build of this cascade -- expect a test-and-refine cycle,
-// same as every other EA in this repo.
+// same as every other EA in this repo. A couple of cAlgo calls are flagged
+// NOTE where the exact overload should be checked against your SDK version.
 
 using System;
 using System.Collections.Generic;
@@ -73,7 +71,7 @@ namespace cAlgo.Robots
         [Parameter("Trading window length from each session start (hrs)", DefaultValue = 4, Group = "Session")]
         public int InpSessionWindowHrs { get; set; }
 
-        [Parameter("Position label (magic-number equivalent)", DefaultValue = "ICT_EA_2", Group = "Misc")]
+        [Parameter("Position label", DefaultValue = "ICT_EA_2", Group = "Misc")]
         public string InpLabel { get; set; }
 
         [Parameter("Show bias-tier structure on chart", DefaultValue = true, Group = "Visuals")]
@@ -86,7 +84,6 @@ namespace cAlgo.Robots
         public bool InpShowEntry { get; set; }
 
         //================================ ENGINE TYPES ================================
-        // Unchanged from ICT_EA_1.cs -- same POI engine, same rules.
         private struct SwEv
         {
             public int ConfirmIdx;
@@ -95,7 +92,9 @@ namespace cAlgo.Robots
             public double Price;
         }
 
-        // state: 0=IFOB, 1=AOB, 2=OOB, 3=SPENT, 4=AIFOB
+        private enum PoiKind { OB, FVG, RB }
+
+        // state: 0=IFOB/IRB, 1=AOB/ARB, 2=OOB/ORB, 3=SPENT, 4=AIFOB (OB only, RB has no AIFOB-equivalent)
         private class ObZone
         {
             public int Candle;
@@ -107,12 +106,17 @@ namespace cAlgo.Robots
             public int TouchK;
             public int State;
             public int OrigState;
-            public int PreSpentState = -1;
-            public bool IsFvg = false;
+            public PoiKind Kind = PoiKind.OB;
         }
 
         private struct MssEvent { public int K; public bool Bullish; }
 
+        //+------------------------------------------------------------------+
+        //| OBEngine -- one instance per timeframe. Refresh() reprocesses the  |
+        //| full window from scratch each call. cAlgo's Bars object is        |
+        //| permanent (only ever grows), so an OB/event assigned index Q      |
+        //| keeps index Q for the entire run.                                  |
+        //+------------------------------------------------------------------+
         private class OBEngine
         {
             private readonly Bars _bars;
@@ -163,8 +167,21 @@ namespace cAlgo.Robots
             public int AddFvg(int candle, double zb, double zt, bool bull, int triggerK, int state)
             {
                 int idx = AddOB(candle, zb, zt, bull, triggerK, state);
-                Ob[idx].IsFvg = true;
+                Ob[idx].Kind = PoiKind.FVG;
                 return idx;
+            }
+
+            // RB zone: the WICK of a single swing-pivot candle, not a scanned pick.
+            // Swing high: top=the high, bottom=closer of open/close. Mirrored for a
+            // swing low. isHigh=true -> bearish RB; isHigh=false -> bullish RB
+            // (label is by raw wick type, regardless of which hunt created it).
+            public int AddRbFromSwing(int idx, bool isHigh, int triggerK, int state)
+            {
+                int newIdx = isHigh
+                    ? AddOB(idx, Math.Max(O(idx), C(idx)), H(idx), false, triggerK, state)
+                    : AddOB(idx, L(idx), Math.Min(O(idx), C(idx)), true, triggerK, state);
+                Ob[newIdx].Kind = PoiKind.RB;
+                return newIdx;
             }
 
             public void ScanFvgs(int lo, int hi, bool bullish, int triggerK, int state, double? straddlePrice = null)
@@ -250,6 +267,28 @@ namespace cAlgo.Robots
                 int best = PickHighestBullish(lo, hi);
                 if (best == -1) return -1;
                 return AddOB(best, Math.Min(O(best), C(best)), Math.Max(O(best), C(best)), false, k, 4);
+            }
+
+            // ARB: same trigger moment + reference-validity gate as the matching AOB
+            // (armed swing must not have been exceeded since), but instead of
+            // scanning/picking a candle, the zone is just the armed swing's own
+            // wick. Anchor = the FAR (armed) swing, immediate eligibility.
+            public void TryBullArb(int prevRegime, int aobSWHidx, int newSwlIdx, int k)
+            {
+                if (prevRegime != 1 || aobSWHidx < 0) return;
+                double armedSwhPrice = H(aobSWHidx);
+                for (int v = aobSWHidx + 1; v <= newSwlIdx; v++)
+                    if (H(v) >= armedSwhPrice) return; // reference violated -- no ARB
+                AddRbFromSwing(aobSWHidx, true, k, 1);
+            }
+
+            public void TryBearArb(int prevRegime, int aobSWLidx, int newSwhIdx, int k)
+            {
+                if (prevRegime != 2 || aobSWLidx < 0) return;
+                double armedSwlPrice = L(aobSWLidx);
+                for (int v = aobSWLidx + 1; v <= newSwhIdx; v++)
+                    if (L(v) <= armedSwlPrice) return;
+                AddRbFromSwing(aobSWLidx, false, k, 1);
             }
 
             public bool Refresh()
@@ -351,6 +390,8 @@ namespace cAlgo.Robots
                                 int best = PickLowestBearish(lo, hi);
                                 if (best != -1) AddOB(best, Math.Min(O(best), C(best)), Math.Max(O(best), C(best)), true, k, 0);
                             }
+                            // IRB fires here too, independent of the IFOB/AIFOB branch above.
+                            if (LastSWLidx >= 0) AddRbFromSwing(LastSWLidx, false, k, 0);
                             HaveSWH = false; swhConsumed = true;
                         }
                         {
@@ -362,6 +403,7 @@ namespace cAlgo.Robots
                                     HaveSWH = true; SwhPrice = Ev[peek2].Price; SwhIdx = Ev[peek2].SwingIdx;
                                     PendingBullAifobIdx = -1;
                                     TryBearishAOB(prevRegime, aobSWLidx, Ev[peek2].SwingIdx, Ev[peek2].Price, k);
+                                    TryBearArb(prevRegime, aobSWLidx, Ev[peek2].SwingIdx, k);
                                     if (PendingBearAifobIdx == -1)
                                     {
                                         int idx2 = TryBearishAIFOB(prevRegime, HaveSWL, aobSWLidx, LastSWHidx, Ev[peek2].SwingIdx, k);
@@ -373,6 +415,7 @@ namespace cAlgo.Robots
                                     HaveSWL = true; SwlPrice = Ev[peek2].Price; SwlIdx = Ev[peek2].SwingIdx;
                                     PendingBearAifobIdx = -1;
                                     TryBullishAOB(prevRegime, aobSWHidx, Ev[peek2].SwingIdx, Ev[peek2].Price, k);
+                                    TryBullArb(prevRegime, aobSWHidx, Ev[peek2].SwingIdx, k);
                                     if (PendingBullAifobIdx == -1)
                                     {
                                         int idx2 = TryBullishAIFOB(prevRegime, HaveSWH, aobSWHidx, LastSWLidx, Ev[peek2].SwingIdx, k);
@@ -395,6 +438,7 @@ namespace cAlgo.Robots
                                 int best = PickHighestBullish(lo, hi);
                                 if (best != -1) AddOB(best, Math.Min(O(best), C(best)), Math.Max(O(best), C(best)), false, k, 0);
                             }
+                            if (LastSWHidx >= 0) AddRbFromSwing(LastSWHidx, true, k, 0);
                             HaveSWL = false; swlConsumed = true;
                         }
                     }
@@ -413,6 +457,7 @@ namespace cAlgo.Robots
                                 int best = PickHighestBullish(lo, hi);
                                 if (best != -1) AddOB(best, Math.Min(O(best), C(best)), Math.Max(O(best), C(best)), false, k, 0);
                             }
+                            if (LastSWHidx >= 0) AddRbFromSwing(LastSWHidx, true, k, 0);
                             HaveSWL = false; swlConsumed = true;
                         }
                         {
@@ -424,6 +469,7 @@ namespace cAlgo.Robots
                                     HaveSWH = true; SwhPrice = Ev[peek2].Price; SwhIdx = Ev[peek2].SwingIdx;
                                     PendingBullAifobIdx = -1;
                                     TryBearishAOB(prevRegime, aobSWLidx, Ev[peek2].SwingIdx, Ev[peek2].Price, k);
+                                    TryBearArb(prevRegime, aobSWLidx, Ev[peek2].SwingIdx, k);
                                     if (PendingBearAifobIdx == -1)
                                     {
                                         int idx2 = TryBearishAIFOB(prevRegime, HaveSWL, aobSWLidx, LastSWHidx, Ev[peek2].SwingIdx, k);
@@ -435,6 +481,7 @@ namespace cAlgo.Robots
                                     HaveSWL = true; SwlPrice = Ev[peek2].Price; SwlIdx = Ev[peek2].SwingIdx;
                                     PendingBearAifobIdx = -1;
                                     TryBullishAOB(prevRegime, aobSWHidx, Ev[peek2].SwingIdx, Ev[peek2].Price, k);
+                                    TryBullArb(prevRegime, aobSWHidx, Ev[peek2].SwingIdx, k);
                                     if (PendingBullAifobIdx == -1)
                                     {
                                         int idx2 = TryBullishAIFOB(prevRegime, HaveSWH, aobSWHidx, LastSWLidx, Ev[peek2].SwingIdx, k);
@@ -457,6 +504,7 @@ namespace cAlgo.Robots
                                 int best = PickLowestBearish(lo, hi);
                                 if (best != -1) AddOB(best, Math.Min(O(best), C(best)), Math.Max(O(best), C(best)), true, k, 0);
                             }
+                            if (LastSWLidx >= 0) AddRbFromSwing(LastSWLidx, false, k, 0);
                             HaveSWH = false; swhConsumed = true;
                         }
                     }
@@ -494,13 +542,12 @@ namespace cAlgo.Robots
                         {
                             if (H(k) >= zb && L(k) <= zt)
                             {
-                                Ob[z].PreSpentState = Ob[z].State;
                                 Ob[z].State = 3; Ob[z].TouchK = k; impacted = true;
                             }
                         }
                         if (!impacted && (Ob[z].State == 0 || Ob[z].State == 1 || Ob[z].State == 4) && Ob[z].EligibleK != -1)
                         {
-                            bool isIFOB = (Ob[z].OrigState != 1);
+                            bool isIFOB = (Ob[z].OrigState != 1); // 0/4 = far-side stranding (IFOB/IRB-style); 1 = near-side (AOB/ARB-style)
                             for (int e2 = 0; e2 < Ev.Count; e2++)
                             {
                                 if (Ev[e2].ConfirmIdx != k) continue;
@@ -541,7 +588,7 @@ namespace cAlgo.Robots
 
         //================================ TIER TRACKING ================================
         // Generic "is this POI still halal" tracker, shared by the bias and confirm
-        // tiers (confirmed: the two kill conditions scale to every tier).
+        // tiers -- the two kill conditions scale to every tier.
         private class PoiTrack
         {
             public int Idx = -1;
@@ -575,8 +622,7 @@ namespace cAlgo.Robots
         }
 
         //+------------------------------------------------------------------+
-        //| Risk-based position sizing from SL distance (in price). Same     |
-        //| pattern as ICT_EA_1.cs's CalcLotSize.                             |
+        //| Risk-based position sizing from SL distance (in price).           |
         //+------------------------------------------------------------------+
         private double CalcLotSize(double riskDistPrice, bool isBuy, double entryPrice)
         {
@@ -607,11 +653,10 @@ namespace cAlgo.Robots
         }
 
         //+------------------------------------------------------------------+
-        //| Is the tracked POI (bias or confirm tier -- same rule, either     |
+        //| Is the tracked POI (bias or confirm tier -- same rule, either      |
         //| engine) still halal on the tier's own just-closed candle lc?      |
         //| Kills on: (1) a candle BODY closing inside the zone, or (2) the   |
-        //| matching-direction swing confirming at any point after entry.     |
-        //| Wick-only touches never kill it.                                  |
+        //| matching-direction swing confirming any time after entry.         |
         //+------------------------------------------------------------------+
         private bool PoiStillHalal(OBEngine eng, PoiTrack tr, int lc)
         {
@@ -756,7 +801,7 @@ namespace cAlgo.Robots
                     _confirmZb = ob.Zb; _confirmZt = ob.Zt;
                     StartEntryWatch(_confirm.T(lc));
                     string flavor = ob.OrigState == 1 ? "aggressive" : "in-favor";
-                    string kind = ob.IsFvg ? "FVG" : "OB";
+                    string kind = ob.Kind == PoiKind.OB ? "OB" : ob.Kind == PoiKind.FVG ? "FVG" : "RB";
                     Print($"[CONFIRM] {_confirm.T(lc):u} escalating {(wantBull ? "bullish" : "bearish")} 4H {flavor} {kind} POI #{z} [{ob.Zb:F5}-{ob.Zt:F5}] to 5m watch");
                 }
             }
@@ -764,6 +809,8 @@ namespace cAlgo.Robots
 
         //+------------------------------------------------------------------+
         //| TIER 3: 5M trailing stop-entry inside the live confirm zone.      |
+        //| SL sits just behind the entry swing candle's own wick (+1 pip     |
+        //| for spread); TP is InpRR_Target x that risk.                      |
         //+------------------------------------------------------------------+
         private void UpdateEntryLevel()
         {
@@ -807,7 +854,9 @@ namespace cAlgo.Robots
             double price = _entry.Ev[bestE].Price;
             if (_pendingOrder != null && Math.Abs(price - _entrySwingPrice) < Symbol.TickSize) return; // unchanged
 
-            double sl = _confirmBull ? _confirmZb : _confirmZt; // ASSUMPTION: SL at the confirm zone's far boundary
+            double onePip = Symbol.PipSize;
+            int swingCandleIdx = _entry.Ev[bestE].SwingIdx;
+            double sl = _confirmBull ? _entry.L(swingCandleIdx) - onePip : _entry.H(swingCandleIdx) + onePip;
             double riskDist = _confirmBull ? (price - sl) : (sl - price);
             if (riskDist <= 0) return; // degenerate geometry -- skip until it resolves
             double tp = _confirmBull ? price + riskDist * InpRR_Target : price - riskDist * InpRR_Target;
@@ -833,16 +882,18 @@ namespace cAlgo.Robots
         }
 
         //+------------------------------------------------------------------+
-        //| A fill fully resets the cascade -- one shot per bias touch, same  |
-        //| philosophy as ICT_EA_1. A fresh bias touch (this zone or another) |
-        //| restarts the hunt from scratch.                                   |
+        //| A fill does NOT reset the cascade -- keep hunting the same 4H     |
+        //| zone for another 5M entry as long as it (and the bias POI) is     |
+        //| still live. Only PoiStillHalal killing the confirm/bias tier      |
+        //| ever fully retires the hunt.                                      |
         //+------------------------------------------------------------------+
         private void OnPositionOpenedHandler(PositionOpenedEventArgs args)
         {
             if (args.Position.Label != InpLabel) return;
-            Print($"[ENTRY] {Server.Time:u} position opened -- cascade reset, waiting for a fresh bias touch");
+            Print($"[ENTRY] {Server.Time:u} position opened -- watching for the next setup while the zone stays live");
             _pendingOrder = null; // it just became this position -- nothing left to cancel
-            RetireBias();
+            _entryEnteredIdx = -1;
+            _entryStage = (_confirmTr.Idx != -1) ? 1 : 0;
         }
 
         //+------------------------------------------------------------------+
@@ -869,11 +920,11 @@ namespace cAlgo.Robots
         }
 
         //+------------------------------------------------------------------+
-        //| Chart drawing -- same palette/behavior as ICT_EA_1.cs's DrawEngine.|
+        //| Chart drawing.                                                     |
         //+------------------------------------------------------------------+
-        private Color ObColor(int state, int origState, bool isFvg)
+        private Color ObColor(int state, int origState, PoiKind kind)
         {
-            if (!isFvg)
+            if (kind == PoiKind.OB)
             {
                 if (state == 2) return Color.Gray;
                 if (state == 3) return origState == 1 ? Color.RoyalBlue : origState == 4 ? Color.Teal : Color.SeaGreen;
@@ -881,7 +932,7 @@ namespace cAlgo.Robots
                 if (origState == 4) return Color.Turquoise;
                 return Color.LimeGreen;
             }
-            else
+            if (kind == PoiKind.FVG)
             {
                 if (state == 2) return Color.DimGray;
                 if (state == 3) return origState == 1 ? Color.MediumPurple : origState == 4 ? Color.Indigo : Color.Purple;
@@ -889,14 +940,21 @@ namespace cAlgo.Robots
                 if (origState == 4) return Color.DarkOrange;
                 return Color.Gold;
             }
+            // RB
+            if (state == 2) return Color.Red;
+            if (state == 3) return origState == 1 ? Color.DarkGreen : Color.SaddleBrown;
+            if (origState == 1) return Color.MediumSeaGreen; // ARB, live
+            return Color.SteelBlue;                          // IRB, live
         }
 
-        private string ObLabel(int state, int origState, bool isFvg)
+        private string ObLabel(int state, int origState, PoiKind kind)
         {
-            string baseLabel = !isFvg
+            string baseLabel = kind == PoiKind.OB
                 ? (origState == 1 ? "AOB" : origState == 4 ? "AIFOB" : "IFOB")
-                : (origState == 1 ? "AFVG" : origState == 4 ? "AIFVG" : "IFVG");
-            if (state == 2) return isFvg ? "OFVG" : "OOB";
+                : kind == PoiKind.FVG
+                    ? (origState == 1 ? "AFVG" : origState == 4 ? "AIFVG" : "IFVG")
+                    : (origState == 1 ? "ARB" : "IRB");
+            if (state == 2) return kind == PoiKind.OB ? "OOB" : kind == PoiKind.FVG ? "OFVG" : "ORB";
             if (state == 3) return baseLabel + " (spent)";
             return baseLabel;
         }
@@ -928,15 +986,15 @@ namespace cAlgo.Robots
                 int lastState = i < cache.ObState.Count ? cache.ObState[i] : -1;
                 if (!stillLive && lastState == ob.State) continue;
 
-                Color c = ObColor(ob.State, ob.OrigState, ob.IsFvg);
-                string label = ObLabel(ob.State, ob.OrigState, ob.IsFvg);
+                Color c = ObColor(ob.State, ob.OrigState, ob.Kind);
+                string label = ObLabel(ob.State, ob.OrigState, ob.Kind);
                 DateTime t1 = eng.T(ob.Candle);
                 DateTime t2 = stillLive ? eng.T(eng.N - 1) : (ob.TouchK != -1 ? eng.T(ob.TouchK) : t1);
 
                 var rect = Chart.DrawRectangle($"{prefix}_ob_{i}", t1, ob.Zt, t2, ob.Zb, c, 1);
                 rect.IsFilled = false;
                 // NOTE: verify this property name (LineStyle vs Style) against your cAlgo API version.
-                rect.LineStyle = ob.IsFvg ? LineStyle.Dots : LineStyle.Solid;
+                rect.LineStyle = ob.Kind == PoiKind.OB ? LineStyle.Solid : ob.Kind == PoiKind.FVG ? LineStyle.Dots : LineStyle.Lines;
                 Chart.DrawText($"{prefix}_obtxt_{i}", $"{prefix} {label}", t1, ob.Bullish ? ob.Zb : ob.Zt, c);
 
                 while (cache.ObState.Count <= i) cache.ObState.Add(-1);
@@ -962,8 +1020,8 @@ namespace cAlgo.Robots
         }
 
         //+------------------------------------------------------------------+
-        //| Request extra history without blocking -- see ICT_EA_1.cs's       |
-        //| GetEngineBars for why this must be fire-and-forget.               |
+        //| Request extra history without blocking (fire-and-forget --        |
+        //| see ICT_EA_1.cs for why a synchronous wait-loop deadlocks).       |
         //+------------------------------------------------------------------+
         private Bars GetEngineBars(TimeFrame tf)
         {
