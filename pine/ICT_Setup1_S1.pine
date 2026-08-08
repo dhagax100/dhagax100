@@ -1613,3 +1613,25 @@ if barstate.islast
     if not na(statusLbl)
         label.delete(statusLbl)
     statusLbl := label.new(bar_index, high, statusTxt, xloc = xloc.bar_index, yloc = yloc.price, style = label.style_label_left, color = color.new(color.gray, 20), textcolor = color.white, size = size.small)
+
+// ===================== ALWAYS-VISIBLE PRICE-SCALE MARKERS =====================
+// Boxes/lines/labels don't reliably pull TradingView's price scale open to
+// include them -- plot() does (when the scale is set to Auto). These plots
+// exist so the current Weekly zone, 4H zone, and live entry/SL/TP are ALWAYS
+// inside the visible price range, however zoomed in you are, instead of
+// requiring a manual "fit price scale" click to go find them.
+biasZtPlot = biasIdx == -1 ? na : (biasKind == 0 ? array.get(wObs, biasIdx).zt : biasKind == 1 ? array.get(wFvgs, biasIdx).zt : array.get(wRbs, biasIdx).zt)
+biasZbPlot = biasIdx == -1 ? na : (biasKind == 0 ? array.get(wObs, biasIdx).zb : biasKind == 1 ? array.get(wFvgs, biasIdx).zb : array.get(wRbs, biasIdx).zb)
+confirmZtPlot = confirmIdx == -1 ? na : confirmZt
+confirmZbPlot = confirmIdx == -1 ? na : confirmZb
+plotEntryPrice = na(entryLine) ? na : line.get_y1(entryLine)
+plotSLPrice = na(slLine) ? na : line.get_y1(slLine)
+plotTPPrice = na(tpLine) ? na : line.get_y1(tpLine)
+
+plot(biasZtPlot, title = "S1 Weekly zone top", color = color.new(color.purple, 30), linewidth = 1, style = plot.style_linebr)
+plot(biasZbPlot, title = "S1 Weekly zone bottom", color = color.new(color.purple, 30), linewidth = 1, style = plot.style_linebr)
+plot(confirmZtPlot, title = "S1 4H zone top", color = color.new(color.blue, 30), linewidth = 1, style = plot.style_linebr)
+plot(confirmZbPlot, title = "S1 4H zone bottom", color = color.new(color.blue, 30), linewidth = 1, style = plot.style_linebr)
+plot(plotEntryPrice, title = "S1 Entry", color = color.orange, linewidth = 2, style = plot.style_linebr)
+plot(plotSLPrice, title = "S1 SL", color = color.red, linewidth = 1, style = plot.style_linebr)
+plot(plotTPPrice, title = "S1 TP", color = color.green, linewidth = 1, style = plot.style_linebr)
