@@ -32,7 +32,7 @@ InpReplayUpTo  = input.time(0, "Replay up to date (0=show all)")
 useReplay      = input.bool(false, "Enable replay mode")
 InpMaxLabelsPerCategory = input.int(150, "Max swing-high / swing-low / MSS labels shown (each, most recent kept)", minval=1, maxval=160)
 InpSwingLowGapATR = input.float(0.08, "Swing-low arrow / down-MSS gap below the low (x ATR14)", minval=0.0)
-InpMaxFvgPerCategory = input.int(150, "Max IFVG boxes shown (most recent kept)", minval=1, maxval=160)
+InpMaxFvgPerCategory = input.int(150, "Max IFVG / AFVG boxes shown (each category, most recent by chart date)", minval=1, maxval=160)
 InpFvgFillTransparency = input.int(85, "IFVG fill transparency % (0=solid, 100=invisible)", minval=0, maxval=100)
 InpShowAfvgDebug = input.bool(true, "DEBUG: show AFVG hunt labels (fired/refViolated/range/gaps found)")
 
@@ -725,14 +725,38 @@ if barstate.islast
     // -- but keeps its shading + dotted midline, unlike a hollow OOB box.
     // SPENT zones are colored by preSpentState (dStF), same as everything
     // else here -- shown as whatever they were right before getting hit.
+    //
+    // Capped independently per category (IFVG vs AFVG, by origin), AND by
+    // chronological leftIdx rather than raw array-insertion position.
+    // Insertion order isn't the same thing as recency here: a single
+    // break-time tryCreateIFVGs call can push a whole batch of gaps from
+    // deep in a leg all at once, while the per-bar continuous scan pushes
+    // one entry per bar going forward -- so a slice of "last N array
+    // entries" lets months of continuous-scan pushes silently bury an
+    // entire still-relevant historical batch, even though nothing about
+    // it is actually stale. Selecting by leftIdx fixes both problems at
+    // once: each category gets its own budget, and "most recent" means
+    // most recent on the chart, not most recently appended to the array.
     fvgSzD = array.size(fvgs)
-    fvgStart = math.max(0, fvgSzD - InpMaxFvgPerCategory)
-    for zf = fvgStart to fvgSzD - 1
-        if zf < 0 or zf >= fvgSzD
-            continue
+    ifvgLeft = array.new<int>()
+    afvgLeft = array.new<int>()
+    for zf = 0 to fvgSzD - 1
+        fvScan = array.get(fvgs, zf)
+        if fvScan.origin == 1
+            array.push(afvgLeft, fvScan.leftIdx)
+        else
+            array.push(ifvgLeft, fvScan.leftIdx)
+    array.sort(ifvgLeft, order.descending)
+    array.sort(afvgLeft, order.descending)
+    ifvgCutoff = array.size(ifvgLeft) > 0 ? array.get(ifvgLeft, math.min(InpMaxFvgPerCategory, array.size(ifvgLeft)) - 1) : 999999999
+    afvgCutoff = array.size(afvgLeft) > 0 ? array.get(afvgLeft, math.min(InpMaxFvgPerCategory, array.size(afvgLeft)) - 1) : 999999999
+    for zf = 0 to fvgSzD - 1
         fvD = array.get(fvgs, zf)
         idxF = fvD.leftIdx
         if idxF < 0 or idxF >= nArr
+            continue
+        catCutoff = fvD.origin == 1 ? afvgCutoff : ifvgCutoff
+        if idxF < catCutoff
             continue
 
         btF = array.get(BT, idxF)
