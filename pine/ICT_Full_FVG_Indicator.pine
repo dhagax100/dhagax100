@@ -1,28 +1,22 @@
-// ICT_IFVG_Diagnostic — Pine Script v5
-// Stripped-down copy of ICT_Full_OB_v24 for verifying IFVG/AFVG behavior
-// only. Order Block logic (IFOB/AOB/AIFOB/OOB creation, best-candle
-// picking) is entirely removed -- swing/MSS detection and the IFVG/AFVG
-// creation/eligibility/lifecycle/drawing logic are UNCHANGED from
-// ICT_Full_OB_v24.pine. AFVG still needs the AOB hunt's range + reference-
-// validity gate (tryBullAFVG/tryBearAFVG below), since that's the range it
-// scans and the guard that decides whether it's allowed to fire at all --
-// this is the one piece of "AOB-adjacent" logic kept, stripped down to
-// just that gate, with the OB-specific candle-picking removed.
+// ICT_Full_FVG_Indicator — Pine Script v5
+// Standalone FVG-only companion to ICT_Full_OB_v24: draws swing highs,
+// swing lows, MSS flips, IFVG (continuation-only FVG) and AFVG
+// (Anticipatory FVG, mirrors AOB) using the identical swing/MSS/FVG engine
+// as the main indicator. No Order Block logic (IFOB/AOB/AIFOB/OOB) at all,
+// by design -- this script is FVG-only, not a simplified approximation of
+// the main one.
 //
-// Why this file exists: on Daily, the full script's OB-picking loops
-// (best-candle scan per leg, AOB reference-validity scan) run once per
-// exceedance event across the ENTIRE loaded history -- and Daily bars go
-// back decades (far more total bars than 5m/1h, which TradingView caps to
-// a much shorter rolling intraday window on most plans). That adds up
-// past TradingView's 20s script-execution limit (RE10110) on Daily. This
-// file drops all of that OB cost so IFVG alone can be verified on Daily
-// without needing to upgrade plans.
-//
-// Diagnostic only -- not a replacement for the main indicator. Once IFVG
-// is confirmed correct here, it already exists exactly as implemented in
-// ICT_Full_OB_v24.pine; nothing needs porting back.
+// Why this exists as a separate script: on Daily, the main indicator's
+// OB-picking loops (best-candle scan per leg, AOB reference-validity scan)
+// run once per exceedance event across the ENTIRE loaded history -- and
+// Daily bars go back decades (far more total bars than 5m/1h, which
+// TradingView caps to a much shorter rolling intraday window on most
+// plans). That adds up past TradingView's 20s script-execution limit
+// (RE10110) on Daily. This script drops all of that OB cost, so anyone
+// who only wants IFVG/AFVG can run it on Daily without hitting the limit
+// or needing to upgrade plans.
 //@version=5
-indicator("ICT IFVG Diagnostic (FVG only)", overlay=true, max_labels_count=500, max_boxes_count=500, max_bars_back=5000)
+indicator("ICT Full FVG Indicator", overlay=true, max_labels_count=500, max_boxes_count=500, max_bars_back=5000)
 
 // ===================== INPUTS =====================
 InpMonthsBack  = input.int(6, "Months to display")
@@ -34,7 +28,6 @@ InpMaxLabelsPerCategory = input.int(150, "Max swing-high / swing-low / MSS label
 InpSwingLowGapATR = input.float(0.08, "Swing-low arrow / down-MSS gap below the low (x ATR14)", minval=0.0)
 InpMaxFvgPerCategory = input.int(150, "Max IFVG / AFVG boxes shown (each category, most recent by chart date)", minval=1, maxval=160)
 InpFvgFillTransparency = input.int(85, "IFVG fill transparency % (0=solid, 100=invisible)", minval=0, maxval=100)
-InpShowAfvgDebug = input.bool(true, "DEBUG: show AFVG hunt labels (fired/refViolated/range/gaps found)")
 
 // ===================== TYPE DEFINITIONS =====================
 type SwEv
@@ -67,28 +60,10 @@ type FvgZone
                           // rule applies even after state moves on to 2/3
     int   preSpentState
 
-// DEBUG ONLY: records every AFVG hunt attempt (fired or not) so we can see
-// exactly what the reference-validity gate and range computed, per event,
-// without reading raw OHLC by hand. Remove once AFVG is confirmed correct.
-type DbgEv
-    int   barIdx
-    bool  bullish       // true = bullish hunt (tryBullAFVG), false = bearish
-    int   pReg          // raw regime value at the moment this event fired,
-                          // captured directly from the outer scope (not
-                          // round-tripped through the function) -- 0=warmup,
-                          // 1=up, 2=down
-    int   armedIdx       // aobSWHi (bullish) or aobSWLi (bearish) passed in
-    bool  fired          // true if the pReg/aobSWx>=0 gate passed at all
-    bool  refViolated
-    int   lo
-    int   hi
-    int   gapsAdded
-
 // ===================== PERSISTENT STATE =====================
 var events     = array.new<SwEv>()
 var msses      = array.new<MssEv>()
 var fvgs       = array.new<FvgZone>()
-var dbgEvents  = array.new<DbgEv>()   // DEBUG ONLY
 var swHighs    = array.new<int>()
 var swLows     = array.new<int>()
 
@@ -120,17 +95,6 @@ var int   fvgBearScanUpto = -1   // same, bearish side
 
 // Guard: process each bar exactly once
 var int lastProcessedBI = -1
-
-// DEBUG ONLY, UNCONDITIONAL (no input gate at all -- bypasses any question
-// about whether InpShowAfvgDebug is actually true at runtime). Counts the
-// MID-ARM loop body running per swing event, the AFVG gate passing, and
-// gaps actually getting added -- so we can see exactly where the chain
-// breaks from a single always-on table, independent of any input widget.
-// Remove once AFVG is confirmed correct.
-var int dbgHuntCount  = 0   // # times MID-ARM loop body ran (any swing event, bull or bear)
-var int dbgFiredCount = 0   // # times the pReg/armedIdx gate passed
-var int dbgRefVCount  = 0   // # times it passed the gate but got refViolated
-var int dbgGapsTotal  = 0   // sum of gapsAdded across all fired+not-refViolated hunts
 
 // Drawing object arrays (for cleanup on redraw)
 var drawnLabels = array.new<label>()
@@ -167,9 +131,6 @@ addEv(int cIdx, int kind, int sIdx, float pr) =>
 
 addMss(int aIdx, int bIdx, float pr, bool up) =>
     array.push(msses, MssEv.new(aIdx, bIdx, pr, up))
-
-addDbg(int barIdx, bool bullish, int pReg, int armedIdx, bool fired, bool refViolated, int lo, int hi, int gapsAdded) =>  // DEBUG ONLY
-    array.push(dbgEvents, DbgEv.new(barIdx, bullish, pReg, armedIdx, fired, refViolated, lo, hi, gapsAdded))
 
 addFVG(int leftIdx, float zb, float zt, bool bull, int tK, int st) =>
     // st: 0=IFVG (delayed eligibility, far-side stranding later), 1=AFVG
@@ -233,44 +194,31 @@ tryCreateAFVGs(int lo, int hi, bool bullish, int triggerK, float guardPrice) =>
 
 // --- AFVG HUNT: Bullish -- mirrors tryBullAOB's range + reference-
 // validity gate one-for-one (the OB candle-picking parts aren't needed
-// here, this diagnostic has no OB). Returns debug info as a tuple:
-// [fired, refViolated, lo2, hi2, gapsAdded] -- see DEBUG type above.
+// here, this script has no OB).
 tryBullAFVG(int pReg, int aobSWHi, int newSwlI, float newSwlP, int k) =>
-    fired = pReg == 1 and aobSWHi >= 0
-    refViolated = false
-    lo2 = -1
-    hi2 = -1
-    gapsBefore = array.size(fvgs)
-    if fired
+    if pReg == 1 and aobSWHi >= 0
         armedSwhPrice = array.get(H_, aobSWHi)
+        refViolated = false
         for v = aobSWHi + 1 to newSwlI
             if array.get(H_, v) >= armedSwhPrice
                 refViolated := true
         if not refViolated
-            lo2 := math.max(0, math.min(aobSWHi - 1, newSwlI))
-            hi2 := math.max(aobSWHi - 1, newSwlI)
+            lo2 = math.max(0, math.min(aobSWHi - 1, newSwlI))
+            hi2 = math.max(aobSWHi - 1, newSwlI)
             tryCreateAFVGs(lo2, hi2, true, k, newSwlP)
-    gapsAdded = array.size(fvgs) - gapsBefore
-    [fired, refViolated, lo2, hi2, gapsAdded]
 
 // --- AFVG HUNT: Bearish -- mirrors tryBearAOB ---
 tryBearAFVG(int pReg, int aobSWLi, int newSwhI, float newSwhP, int k) =>
-    fired = pReg == 2 and aobSWLi >= 0
-    refViolated = false
-    lo2 = -1
-    hi2 = -1
-    gapsBefore = array.size(fvgs)
-    if fired
+    if pReg == 2 and aobSWLi >= 0
         armedSwlPrice = array.get(L_, aobSWLi)
+        refViolated = false
         for v = aobSWLi + 1 to newSwhI
             if array.get(L_, v) <= armedSwlPrice
                 refViolated := true
         if not refViolated
-            lo2 := math.max(0, math.min(aobSWLi - 1, newSwhI))
-            hi2 := math.max(aobSWLi - 1, newSwhI)
+            lo2 = math.max(0, math.min(aobSWLi - 1, newSwhI))
+            hi2 = math.max(aobSWLi - 1, newSwhI)
             tryCreateAFVGs(lo2, hi2, false, k, newSwhP)
-    gapsAdded = array.size(fvgs) - gapsBefore
-    [fired, refViolated, lo2, hi2, gapsAdded]
 
 // ===================== MAIN PROCESSING =====================
 // Process each bar exactly once
@@ -395,28 +343,12 @@ if not skipBar and bar_index != lastProcessedBI
                     haveSWH  := true
                     swhPrice := pEv2.price
                     swhIdx   := pEv2.swingIdx
-                    [firedB, refVB, loB, hiB, addedB] = tryBearAFVG(prevReg, aobSWLi, pEv2.swingIdx, pEv2.price, k)
-                    dbgHuntCount += 1
-                    if firedB
-                        dbgFiredCount += 1
-                        if refVB
-                            dbgRefVCount += 1
-                        dbgGapsTotal += addedB
-                    if InpShowAfvgDebug
-                        addDbg(k, false, prevReg, aobSWLi, firedB, refVB, loB, hiB, addedB)
+                    tryBearAFVG(prevReg, aobSWLi, pEv2.swingIdx, pEv2.price, k)
                 else
                     haveSWL  := true
                     swlPrice := pEv2.price
                     swlIdx   := pEv2.swingIdx
-                    [firedB, refVB, loB, hiB, addedB] = tryBullAFVG(prevReg, aobSWHi, pEv2.swingIdx, pEv2.price, k)
-                    dbgHuntCount += 1
-                    if firedB
-                        dbgFiredCount += 1
-                        if refVB
-                            dbgRefVCount += 1
-                        dbgGapsTotal += addedB
-                    if InpShowAfvgDebug
-                        addDbg(k, true, prevReg, aobSWHi, firedB, refVB, loB, hiB, addedB)
+                    tryBullAFVG(prevReg, aobSWHi, pEv2.swingIdx, pEv2.price, k)
                 peek2 += 1
 
             // Second break: SWL
@@ -460,28 +392,12 @@ if not skipBar and bar_index != lastProcessedBI
                     haveSWH  := true
                     swhPrice := pEv3.price
                     swhIdx   := pEv3.swingIdx
-                    [firedB, refVB, loB, hiB, addedB] = tryBearAFVG(prevReg, aobSWLi, pEv3.swingIdx, pEv3.price, k)
-                    dbgHuntCount += 1
-                    if firedB
-                        dbgFiredCount += 1
-                        if refVB
-                            dbgRefVCount += 1
-                        dbgGapsTotal += addedB
-                    if InpShowAfvgDebug
-                        addDbg(k, false, prevReg, aobSWLi, firedB, refVB, loB, hiB, addedB)
+                    tryBearAFVG(prevReg, aobSWLi, pEv3.swingIdx, pEv3.price, k)
                 else
                     haveSWL  := true
                     swlPrice := pEv3.price
                     swlIdx   := pEv3.swingIdx
-                    [firedB, refVB, loB, hiB, addedB] = tryBullAFVG(prevReg, aobSWHi, pEv3.swingIdx, pEv3.price, k)
-                    dbgHuntCount += 1
-                    if firedB
-                        dbgFiredCount += 1
-                        if refVB
-                            dbgRefVCount += 1
-                        dbgGapsTotal += addedB
-                    if InpShowAfvgDebug
-                        addDbg(k, true, prevReg, aobSWHi, firedB, refVB, loB, hiB, addedB)
+                    tryBullAFVG(prevReg, aobSWHi, pEv3.swingIdx, pEv3.price, k)
                 peek3 += 1
 
             // Second break: SWH
@@ -614,25 +530,6 @@ if not skipBar and bar_index != lastProcessedBI
                         fvgZ3.state := 2
                         array.set(fvgs, zf3, fvgZ3)
                         break
-
-// DEBUG ONLY, UNCONDITIONAL: always-on status table, no input gate, no
-// var-array involved -- proves whether the MID-ARM loop and AFVG gate are
-// actually executing, independent of InpShowAfvgDebug. Remove once AFVG is
-// confirmed correct.
-var table dbgTbl = table.new(position.top_right, 2, 6, bgcolor=color.new(color.black, 20), border_width=1, border_color=color.white)
-if barstate.islast
-    table.cell(dbgTbl, 0, 0, "hunts", text_color=color.white, text_size=size.small)
-    table.cell(dbgTbl, 1, 0, str.tostring(dbgHuntCount), text_color=color.white, text_size=size.small)
-    table.cell(dbgTbl, 0, 1, "fired", text_color=color.white, text_size=size.small)
-    table.cell(dbgTbl, 1, 1, str.tostring(dbgFiredCount), text_color=color.white, text_size=size.small)
-    table.cell(dbgTbl, 0, 2, "refViol", text_color=color.white, text_size=size.small)
-    table.cell(dbgTbl, 1, 2, str.tostring(dbgRefVCount), text_color=color.white, text_size=size.small)
-    table.cell(dbgTbl, 0, 3, "gapsAdded", text_color=color.white, text_size=size.small)
-    table.cell(dbgTbl, 1, 3, str.tostring(dbgGapsTotal), text_color=color.white, text_size=size.small)
-    table.cell(dbgTbl, 0, 4, "fvgs(all)", text_color=color.white, text_size=size.small)
-    table.cell(dbgTbl, 1, 4, str.tostring(array.size(fvgs)), text_color=color.white, text_size=size.small)
-    table.cell(dbgTbl, 0, 5, "regime", text_color=color.white, text_size=size.small)
-    table.cell(dbgTbl, 1, 5, str.tostring(regime), text_color=color.white, text_size=size.small)
 
 // ===================== DRAWING (last bar only) =====================
 if barstate.islast
@@ -782,36 +679,3 @@ if barstate.islast
         lnF = line.new(leftTF, midY, rightTF, midY, xloc=xloc.bar_time, color=color.gray,
                        style=line.style_dotted, width=1)
         array.push(drawnLines, lnF)
-
-    // --- DEBUG ONLY: one label for EVERY swing-confirmation event that
-    // could have started an AFVG hunt (not just ones that fired), showing
-    // the raw regime value at that moment. pR=prevReg (0=warmup, 1=up,
-    // 2=down -- the gate needs 1 for bullish hunts, 2 for bearish), aI=the
-    // armed swing index passed in, F=fired (did the pR/aI>=0 gate pass),
-    // R=refViolated, [lo-hi]=range scanned, +N=gaps added. Trimmed to the
-    // most recent InpMaxLabelsPerCategory like everything else. Remove
-    // this whole block once AFVG is confirmed correct.
-    if InpShowAfvgDebug
-        dbgSz = array.size(dbgEvents)
-        dbgStart = math.max(0, dbgSz - InpMaxLabelsPerCategory)
-        for dz = dbgStart to dbgSz - 1
-            if dz < 0 or dz >= dbgSz
-                continue
-            dEv = array.get(dbgEvents, dz)
-            if dEv.barIdx < 0 or dEv.barIdx >= nArr
-                continue
-            btD = array.get(BT, dEv.barIdx)
-            if btD < dispFrom
-                continue
-            txt = (dEv.bullish ? "AFVG bull " : "AFVG bear ") +
-                  "pR:" + str.tostring(dEv.pReg) +
-                  " aI:" + str.tostring(dEv.armedIdx) +
-                  " F:" + str.tostring(dEv.fired ? 1 : 0) +
-                  " R:" + str.tostring(dEv.refViolated ? 1 : 0) +
-                  " [" + str.tostring(dEv.lo) + "-" + str.tostring(dEv.hi) + "]" +
-                  " +" + str.tostring(dEv.gapsAdded)
-            yD = dEv.bullish ? array.get(L_, dEv.barIdx) : array.get(H_, dEv.barIdx)
-            styD = dEv.bullish ? label.style_label_up : label.style_label_down
-            lblD = label.new(btD, yD, txt, xloc=xloc.bar_time, yloc=yloc.price, style=styD,
-                             color=color.new(color.purple, 70), textcolor=color.white, size=size.tiny)
-            array.push(drawnLabels, lblD)
