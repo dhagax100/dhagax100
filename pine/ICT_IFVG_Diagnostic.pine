@@ -121,6 +121,17 @@ var int   fvgBearScanUpto = -1   // same, bearish side
 // Guard: process each bar exactly once
 var int lastProcessedBI = -1
 
+// DEBUG ONLY, UNCONDITIONAL (no input gate at all -- bypasses any question
+// about whether InpShowAfvgDebug is actually true at runtime). Counts the
+// MID-ARM loop body running per swing event, the AFVG gate passing, and
+// gaps actually getting added -- so we can see exactly where the chain
+// breaks from a single always-on table, independent of any input widget.
+// Remove once AFVG is confirmed correct.
+var int dbgHuntCount  = 0   // # times MID-ARM loop body ran (any swing event, bull or bear)
+var int dbgFiredCount = 0   // # times the pReg/armedIdx gate passed
+var int dbgRefVCount  = 0   // # times it passed the gate but got refViolated
+var int dbgGapsTotal  = 0   // sum of gapsAdded across all fired+not-refViolated hunts
+
 // Drawing object arrays (for cleanup on redraw)
 var drawnLabels = array.new<label>()
 var drawnBoxes  = array.new<box>()
@@ -376,6 +387,12 @@ if not skipBar and bar_index != lastProcessedBI
                     swhPrice := pEv2.price
                     swhIdx   := pEv2.swingIdx
                     [firedB, refVB, loB, hiB, addedB] = tryBearAFVG(prevReg, aobSWLi, pEv2.swingIdx, pEv2.price, k)
+                    dbgHuntCount += 1
+                    if firedB
+                        dbgFiredCount += 1
+                        if refVB
+                            dbgRefVCount += 1
+                        dbgGapsTotal += addedB
                     if InpShowAfvgDebug
                         addDbg(k, false, prevReg, aobSWLi, firedB, refVB, loB, hiB, addedB)
                 else
@@ -383,6 +400,12 @@ if not skipBar and bar_index != lastProcessedBI
                     swlPrice := pEv2.price
                     swlIdx   := pEv2.swingIdx
                     [firedB, refVB, loB, hiB, addedB] = tryBullAFVG(prevReg, aobSWHi, pEv2.swingIdx, pEv2.price, k)
+                    dbgHuntCount += 1
+                    if firedB
+                        dbgFiredCount += 1
+                        if refVB
+                            dbgRefVCount += 1
+                        dbgGapsTotal += addedB
                     if InpShowAfvgDebug
                         addDbg(k, true, prevReg, aobSWHi, firedB, refVB, loB, hiB, addedB)
                 peek2 += 1
@@ -429,6 +452,12 @@ if not skipBar and bar_index != lastProcessedBI
                     swhPrice := pEv3.price
                     swhIdx   := pEv3.swingIdx
                     [firedB, refVB, loB, hiB, addedB] = tryBearAFVG(prevReg, aobSWLi, pEv3.swingIdx, pEv3.price, k)
+                    dbgHuntCount += 1
+                    if firedB
+                        dbgFiredCount += 1
+                        if refVB
+                            dbgRefVCount += 1
+                        dbgGapsTotal += addedB
                     if InpShowAfvgDebug
                         addDbg(k, false, prevReg, aobSWLi, firedB, refVB, loB, hiB, addedB)
                 else
@@ -436,6 +465,12 @@ if not skipBar and bar_index != lastProcessedBI
                     swlPrice := pEv3.price
                     swlIdx   := pEv3.swingIdx
                     [firedB, refVB, loB, hiB, addedB] = tryBullAFVG(prevReg, aobSWHi, pEv3.swingIdx, pEv3.price, k)
+                    dbgHuntCount += 1
+                    if firedB
+                        dbgFiredCount += 1
+                        if refVB
+                            dbgRefVCount += 1
+                        dbgGapsTotal += addedB
                     if InpShowAfvgDebug
                         addDbg(k, true, prevReg, aobSWHi, firedB, refVB, loB, hiB, addedB)
                 peek3 += 1
@@ -570,6 +605,25 @@ if not skipBar and bar_index != lastProcessedBI
                         fvgZ3.state := 2
                         array.set(fvgs, zf3, fvgZ3)
                         break
+
+// DEBUG ONLY, UNCONDITIONAL: always-on status table, no input gate, no
+// var-array involved -- proves whether the MID-ARM loop and AFVG gate are
+// actually executing, independent of InpShowAfvgDebug. Remove once AFVG is
+// confirmed correct.
+var table dbgTbl = table.new(position.top_right, 2, 6, bgcolor=color.new(color.black, 20), border_width=1, border_color=color.white)
+if barstate.islast
+    table.cell(dbgTbl, 0, 0, "hunts", text_color=color.white, text_size=size.small)
+    table.cell(dbgTbl, 1, 0, str.tostring(dbgHuntCount), text_color=color.white, text_size=size.small)
+    table.cell(dbgTbl, 0, 1, "fired", text_color=color.white, text_size=size.small)
+    table.cell(dbgTbl, 1, 1, str.tostring(dbgFiredCount), text_color=color.white, text_size=size.small)
+    table.cell(dbgTbl, 0, 2, "refViol", text_color=color.white, text_size=size.small)
+    table.cell(dbgTbl, 1, 2, str.tostring(dbgRefVCount), text_color=color.white, text_size=size.small)
+    table.cell(dbgTbl, 0, 3, "gapsAdded", text_color=color.white, text_size=size.small)
+    table.cell(dbgTbl, 1, 3, str.tostring(dbgGapsTotal), text_color=color.white, text_size=size.small)
+    table.cell(dbgTbl, 0, 4, "fvgs(all)", text_color=color.white, text_size=size.small)
+    table.cell(dbgTbl, 1, 4, str.tostring(array.size(fvgs)), text_color=color.white, text_size=size.small)
+    table.cell(dbgTbl, 0, 5, "regime", text_color=color.white, text_size=size.small)
+    table.cell(dbgTbl, 1, 5, str.tostring(regime), text_color=color.white, text_size=size.small)
 
 // ===================== DRAWING (last bar only) =====================
 if barstate.islast
