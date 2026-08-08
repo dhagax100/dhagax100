@@ -1959,17 +1959,6 @@ var fillSLs    = array.new<float>()
 var fillTPs    = array.new<float>()
 var fillBulls  = array.new<bool>()
 
-clearEntryLevel() =>
-    if not na(entryLine)
-        line.delete(entryLine)
-        entryLine := na
-    if not na(slLine)
-        line.delete(slLine)
-        slLine := na
-    if not na(tpLine)
-        line.delete(tpLine)
-        tpLine := na
-
 // ===================== CASCADE HELPERS (one per POI type; reused for bias & confirm) =====================
 // "Halal" check: kill condition 1 = a candle BODY closes inside the zone;
 // kill condition 2 = the matching-direction swing confirms after entry.
@@ -2074,7 +2063,15 @@ if wNewBar
             entryStage := 0
             entryEnteredIdx := -1
             entrySwingPrice := na
-            clearEntryLevel()
+            if not na(entryLine)
+                line.delete(entryLine)
+                entryLine := na
+            if not na(slLine)
+                line.delete(slLine)
+                slLine := na
+            if not na(tpLine)
+                line.delete(tpLine)
+                tpLine := na
 
     if biasIdx == -1
         tOBw = findTouchOB(wObs, wH, wL, wBT, lcW, 0, false, false)
@@ -2111,7 +2108,15 @@ if wNewBar
             entryStage := 0
             entryEnteredIdx := -1
             entrySwingPrice := na
-            clearEntryLevel()
+            if not na(entryLine)
+                line.delete(entryLine)
+                entryLine := na
+            if not na(slLine)
+                line.delete(slLine)
+                slLine := na
+            if not na(tpLine)
+                line.delete(tpLine)
+                tpLine := na
 
 // ===================== S1 CASCADE: TIER 2 — confirm (4H) =====================
 if h4NewBar
@@ -2122,7 +2127,15 @@ if h4NewBar
             entryStage := 0
             entryEnteredIdx := -1
             entrySwingPrice := na
-            clearEntryLevel()
+            if not na(entryLine)
+                line.delete(entryLine)
+                entryLine := na
+            if not na(slLine)
+                line.delete(slLine)
+                slLine := na
+            if not na(tpLine)
+                line.delete(tpLine)
+                tpLine := na
     else
         lc4 = array.size(h4O) - 1
         if confirmIdx != -1
@@ -2133,7 +2146,15 @@ if h4NewBar
                 entryStage := 0
                 entryEnteredIdx := -1
                 entrySwingPrice := na
-                clearEntryLevel()
+                if not na(entryLine)
+                    line.delete(entryLine)
+                    entryLine := na
+                if not na(slLine)
+                    line.delete(slLine)
+                    slLine := na
+                if not na(tpLine)
+                    line.delete(tpLine)
+                    tpLine := na
 
         wantBullH4 = biasKind == 0 ? array.get(wObs, biasIdx).bullish : biasKind == 1 ? array.get(wFvgs, biasIdx).bullish : array.get(wRbs, biasIdx).bullish
 
@@ -2181,7 +2202,15 @@ if h4NewBar
                     entryWatchStart := array.get(h4BT, lc4)
                     entryEnteredIdx := -1
                     entrySwingPrice := na
-                    clearEntryLevel()
+                    if not na(entryLine)
+                        line.delete(entryLine)
+                        entryLine := na
+                    if not na(slLine)
+                        line.delete(slLine)
+                        slLine := na
+                    if not na(tpLine)
+                        line.delete(tpLine)
+                        tpLine := na
 
 // ===================== S1 CASCADE: TIER 3 — entry (5M) =====================
 if m5NewBar
@@ -2194,7 +2223,15 @@ if m5NewBar
         sessionOk5 = inLondon5 or inNY5
 
         if not sessionOk5
-            clearEntryLevel()
+            if not na(entryLine)
+                line.delete(entryLine)
+                entryLine := na
+            if not na(slLine)
+                line.delete(slLine)
+                slLine := na
+            if not na(tpLine)
+                line.delete(tpLine)
+                tpLine := na
             entryEnteredIdx := -1
             entrySwingPrice := na
         else
@@ -2230,7 +2267,15 @@ if m5NewBar
                             entrySwingPrice := price5
                             x1_5 = array.get(m5BT, lc5)
                             x2_5 = x1_5 + 40 * timeframe.in_seconds() * 1000
-                            clearEntryLevel()
+                            if not na(entryLine)
+                                line.delete(entryLine)
+                                entryLine := na
+                            if not na(slLine)
+                                line.delete(slLine)
+                                slLine := na
+                            if not na(tpLine)
+                                line.delete(tpLine)
+                                tpLine := na
                             entryLine := line.new(x1_5, price5, x2_5, price5, xloc = xloc.bar_time, color = color.orange, width = 2, extend = extend.right)
                             slLine := line.new(x1_5, sl5, x2_5, sl5, xloc = xloc.bar_time, color = color.red, style = line.style_dashed, extend = extend.right)
                             tpLine := line.new(x1_5, tp5, x2_5, tp5, xloc = xloc.bar_time, color = color.green, style = line.style_dashed, extend = extend.right)
@@ -2244,7 +2289,15 @@ if m5NewBar
                             array.push(fillBulls, confirmBull)
                             entryEnteredIdx := -1
                             entrySwingPrice := na
-                            clearEntryLevel()
+                            if not na(entryLine)
+                                line.delete(entryLine)
+                                entryLine := na
+                            if not na(slLine)
+                                line.delete(slLine)
+                                slLine := na
+                            if not na(tpLine)
+                                line.delete(tpLine)
+                                tpLine := na
 
 // ===================== DRAWING: one tier's swings/MSS/OB/FVG/RB =====================
 // Same palette/behavior as ICT_Full_OB_v24.pine, parameterized so it's
