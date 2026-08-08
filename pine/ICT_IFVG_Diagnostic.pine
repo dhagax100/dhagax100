@@ -197,30 +197,39 @@ tryCreateIFVGs(int lo, int hi, bool bullish, int triggerK) =>
                     addFVG(c1, h3, l1, false, triggerK, 0)
 
 // Scans [lo,hi] -- the SAME range an AOB is picked from -- for EVERY
-// qualifying 3-candle gap, mirroring tryCreateIFVGs, plus a per-gap
-// version of AOB's near-side straddle guard: a gap is dropped if EITHER
-// boundary candle's wick already reaches guardPrice (the price of the
-// swing that triggered this hunt), since either edge could be the candle
-// straddling the pivot -- AOB only has one picked candle to check, a gap
-// has two edges that both need to clear it.
+// qualifying 3-candle gap left by the retracement leg ITSELF continuing
+// in its own direction (NOT a counter-trend wiggle -- that's what AOB
+// picks, this deliberately does the opposite, confirmed by user request).
+// A bullish hunt (uptrend, down-pullback) scans for the falling-shape gap
+// (low[c1] > high[c3]) that an ordinary down-leg leaves behind; a bearish
+// hunt (downtrend, up-pullback) scans for the rising-shape gap
+// (high[c1] < low[c3]) an ordinary up-leg leaves behind. Both still get
+// classified by hunt direction (bull hunt -> bullish zone), since the
+// zone's job downstream (support once price returns, stranding side,
+// etc.) is about the trend being hunted, not the raw candle shape.
+// Per-gap version of AOB's near-side straddle guard still applies: a gap
+// is dropped if EITHER boundary candle's wick already reaches guardPrice
+// (the price of the swing that triggered this hunt), since either edge
+// could be the candle straddling the pivot -- AOB only has one picked
+// candle to check, a gap has two edges that both need to clear it.
 tryCreateAFVGs(int lo, int hi, bool bullish, int triggerK, float guardPrice) =>
     if hi >= lo + 2
         for c3 = lo + 2 to hi
             c1 = c3 - 2
             if bullish
-                h1 = array.get(H_, c1)
-                l3 = array.get(L_, c3)
-                if h1 < l3
-                    l1 = array.get(L_, c1)
-                    if l1 > guardPrice and l3 > guardPrice
-                        addFVG(c1, h1, l3, true, triggerK, 1)
-            else
                 l1 = array.get(L_, c1)
                 h3 = array.get(H_, c3)
                 if l1 > h3
-                    h1 = array.get(H_, c1)
+                    l3 = array.get(L_, c3)
+                    if l1 > guardPrice and l3 > guardPrice
+                        addFVG(c1, h3, l1, true, triggerK, 1)
+            else
+                h1 = array.get(H_, c1)
+                l3 = array.get(L_, c3)
+                if h1 < l3
+                    h3 = array.get(H_, c3)
                     if h1 < guardPrice and h3 < guardPrice
-                        addFVG(c1, h3, l1, false, triggerK, 1)
+                        addFVG(c1, h1, l3, false, triggerK, 1)
 
 // --- AFVG HUNT: Bullish -- mirrors tryBullAOB's range + reference-
 // validity gate one-for-one (the OB candle-picking parts aren't needed
