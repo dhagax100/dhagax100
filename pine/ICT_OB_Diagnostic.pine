@@ -761,5 +761,5 @@ if barstate.islast
         // compare them to each other, not to the chart's date axis.
         if InpDebugValues
             dbgTxt = "state=" + str.tostring(obD.state) + " orig=" + str.tostring(obD.origState) + "\ntrigK=" + str.tostring(obD.triggerK) + " eligK=" + str.tostring(obD.eligibleK) + " stopK=" + str.tostring(obD.stopK)
-            dbgLbl = label.new(leftT, obD.bullish ? obD.zt : obD.zb, dbgTxt, xloc=xloc.bar_time, yloc=yloc.price, style=obD.bullish ? label.style_label_up : label.style_label_down, color=color.new(color.purple, 80), textcolor=color.purple, size=size.tiny)
+            dbgLbl = label.new(leftT, obD.bullish ? obD.zt : obD.zb, dbgTxt, xloc=xloc.bar_time, yloc=yloc.price, style=obD.bullish ? label.style_label_up : label.style_label_down, color=color.new(color.purple, 10), textcolor=color.white, size=size.normal)
             array.push(drawnLabels, dbgLbl)
