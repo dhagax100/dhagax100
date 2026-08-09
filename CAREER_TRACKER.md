@@ -70,12 +70,27 @@ Full comparison dashboard (money, tax, citizenship speed, weather, visa ease, sp
 
 ---
 
-## 6. Next Actions
+## 6. Application Files Prepared (2026-08-09)
 
-- [ ] User to pick 1–3 countries to actively pursue from the Opportunity Map
-- [ ] Search real, live vacancies in chosen countries and start tailored CV/cover letter drafts
-- [ ] Confirm MSc thesis defense / final graduation date with KFUPM
-- [ ] Decide whether to widen search further (e.g. Netherlands, Portugal)
+Not narrowing to countries — pursuing every real, apply-ready match at once, per user decision. Graduation confirmed: December 2026.
+
+| Target | Docs prepared | Status |
+|---|---|---|
+| Equinix — Slough, UK (Electrical & Mechanical Facilities Engineer) | Master CV + tailored cover letter | Ready to submit via careers.equinix.com |
+| Equinix — Manchester, UK (same role type) | Master CV + tailored cover letter | Ready to submit via careers.equinix.com |
+| Verne Global — Keflavík, Iceland | Master CV + tailored cover letter (generic — exact open role title unconfirmed, user must check careers.letsverne.com/jobs) | Ready, pending role confirmation |
+| NTT Global Data Centers — DACH region (Frankfurt/Munich/Zurich) | Master CV + tailored cover letter (raises the German-language question directly) | Ready to submit |
+| IDCORE EngD, Offshore Renewable Energy — Edinburgh | Statement of Purpose | Ready — apply via Edinburgh degree finder; note: UK doctorates start Sept, not Jan |
+| AirTrunk — Sydney/Melbourne | **Dropped** — role requires 8 yrs experience (5 in data centres), a hard structural mismatch, not a fit role | Not pursuing; keep as a future target company only |
+
+**Correction logged:** user does not want "avoid academic," only "prefer industry over academic" — IDCORE stays fully in play. Also corrected: don't manufacture soft gaps (e.g. UK driving licence) as disqualifiers in cover letters — only real, hard-blocking requirements (like AirTrunk's 8-year minimum) should exclude a role.
+
+## 7. Next Actions
+
+- [ ] User to actually submit the 5 prepared applications (Equinix x2, Verne, NTT, IDCORE)
+- [ ] Confirm exact open role title at Verne Global before submitting
+- [ ] Continue finding more real, apply-ready roles (Canada, Australia, Netherlands, Italy, Scotland/Wales graduate schemes)
+- [ ] Broaden the Mon/Thu Routine to actively rescan for new postings, not just review this file
 - [ ] Get real KFUPM figures (housing cost, tuition sticker price) to tighten the financial baseline estimate
 
 ---
