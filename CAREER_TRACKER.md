@@ -55,12 +55,18 @@ Full comparison dashboard (money, tax, citizenship speed, weather, visa ease, sp
 
 ### 3a. Key Dates — confirmed by user
 
-| Opportunity | Application opens | Interview | Notes |
+| Opportunity | Application opens / closes | Interview | Notes |
 |---|---|---|---|
-| IDCORE EngD (Edinburgh, Offshore Renewable Energy) | **30 Nov 2026** | **Jan 2027** (user wrote "Jan 2026" — almost certainly a typo, since that's before the application even opens; treating as Jan 2027 until confirmed) | SOP already prepared and sent |
+| **🔴 LiU — PhD Student, AI-Based Flow Control for Hydropower** (Linköping, Sweden) | **Closes 31 Aug 2026** | TBD | URGENT — 22 days from discovery. Fully funded. Contacts: Saeed Salehi (main supervisor, saeed.salehi@liu.se), Roland Gårdhagen (head of division, roland.gardhagen@liu.se). Apply: https://liu.se/en/work-at-liu/vacancies/29533. Academic CV + motivation letter prepared and sent. |
+| **🔴 Western University — PhD, CFD for Advanced Oxidation** (London, Ontario, Canada) | **Rolling basis, posted closure 1 Sept 2026** — reviewed as applications arrive, so early submission matters | TBD, only shortlisted candidates contacted | URGENT. Fully funded. Apply by **emailing CV directly** to Dr. Domenico Santoro, Adjunct Research Professor, Western University — santoro.office@gmail.com — mention "CFD Jobs Database record #20098". Academic CV + application email prepared. |
+| IDCORE EngD (Edinburgh, Offshore Renewable Energy) | Applications open **30 Nov 2026** | **Jan 2027** (user wrote "Jan 2026" — almost certainly a typo, since that's before the application even opens; treating as Jan 2027 until confirmed) | SOP already prepared and sent |
 | HBKU — PhD in Sustainable Energy (Qatar) | **Nov 2026 – Feb 2027** window | TBD | Requires IELTS + GRE — user does not have these yet, needs to prepare soon |
 
-**Action needed now (Aug–Nov 2026):** IELTS and GRE both take real lead time — registration, prep, and results turnaround. With the HBKU window opening in ~3 months, booking test dates should start soon, not in November.
+**Action needed now (Aug–Nov 2026):**
+1. Submit LiU and Western University applications ASAP — both are live and time-sensitive right now.
+2. IELTS and GRE both take real lead time — registration, prep, results turnaround. With the HBKU window opening in ~3 months, booking test dates should start soon, not in November.
+
+**Source note:** both LiU and Western University roles were found by the user directly on cfd-online.com/Jobs — worth the user checking that board personally on a regular basis; it surfaces roles I can't browse into myself in this sandbox.
 
 ## 4. Known Conflict / Open Question
 
