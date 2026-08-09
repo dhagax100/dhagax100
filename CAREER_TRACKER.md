@@ -53,6 +53,15 @@ Full comparison dashboard (money, tax, citizenship speed, weather, visa ease, sp
 | UK | ~$3,400–3,600 (if sponsored) | 5yrs now, may become 10 (Autumn 2026 risk) | Yes, full | Fresh-grad sponsorship barrier — watch, don't lead with |
 | Qatar | ~$1,900–3,850 | **Never** | Only with her own permit | Good money, fails nationality condition |
 
+### 3a. Key Dates — confirmed by user
+
+| Opportunity | Application opens | Interview | Notes |
+|---|---|---|---|
+| IDCORE EngD (Edinburgh, Offshore Renewable Energy) | **30 Nov 2026** | **Jan 2027** (user wrote "Jan 2026" — almost certainly a typo, since that's before the application even opens; treating as Jan 2027 until confirmed) | SOP already prepared and sent |
+| HBKU — PhD in Sustainable Energy (Qatar) | **Nov 2026 – Feb 2027** window | TBD | Requires IELTS + GRE — user does not have these yet, needs to prepare soon |
+
+**Action needed now (Aug–Nov 2026):** IELTS and GRE both take real lead time — registration, prep, and results turnaround. With the HBKU window opening in ~3 months, booking test dates should start soon, not in November.
+
 ## 4. Known Conflict / Open Question
 
 - ~~Hormuud role would collide with PhD start date~~ — resolved: Hormuud dropped.
@@ -92,6 +101,10 @@ Not narrowing to countries — pursuing every real, apply-ready match at once, p
 - [ ] Continue finding more real, apply-ready roles (Canada, Australia, Netherlands, Italy, Scotland/Wales graduate schemes)
 - [ ] Broaden the Mon/Thu Routine to actively rescan for new postings, not just review this file
 - [ ] Get real KFUPM figures (housing cost, tuition sticker price) to tighten the financial baseline estimate
+- [ ] **Confirm IDCORE interview month** — user wrote "Jan 2026," likely means Jan 2027
+- [ ] Book IELTS test date (needed for HBKU Sustainable Energy PhD application, window opens Nov 2026)
+- [ ] Book GRE test date (same requirement, same deadline pressure)
+- [ ] Prepare HBKU Sustainable Energy PhD application materials once test scores are in hand
 
 ---
 
