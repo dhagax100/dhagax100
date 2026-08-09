@@ -352,6 +352,7 @@ if not skipBar and bar_index != lastProcessedBI
                     obRef = array.get(obs, pendBullAifob)
                     obRef.state     := 0
                     obRef.origState := 0
+                    obRef.eligibleK := -1  // was AIFOB's immediate eligibility -- now a real IFOB, must wait for a fresh same-direction swing
                     array.set(obs, pendBullAifob, obRef)
                     pendBullAifob := -1
                 else if lastSWLidx >= 0
@@ -415,6 +416,7 @@ if not skipBar and bar_index != lastProcessedBI
                     obRef2 = array.get(obs, pendBearAifob)
                     obRef2.state     := 0
                     obRef2.origState := 0
+                    obRef2.eligibleK := -1  // was AIFOB's immediate eligibility -- now a real IFOB, must wait for a fresh same-direction swing
                     array.set(obs, pendBearAifob, obRef2)
                     pendBearAifob := -1
                 else if lastSWHidx >= 0
@@ -451,6 +453,7 @@ if not skipBar and bar_index != lastProcessedBI
                     obRef3 = array.get(obs, pendBearAifob)
                     obRef3.state     := 0
                     obRef3.origState := 0
+                    obRef3.eligibleK := -1  // was AIFOB's immediate eligibility -- now a real IFOB, must wait for a fresh same-direction swing
                     array.set(obs, pendBearAifob, obRef3)
                     pendBearAifob := -1
                 else if lastSWHidx >= 0
@@ -514,6 +517,7 @@ if not skipBar and bar_index != lastProcessedBI
                     obRef4 = array.get(obs, pendBullAifob)
                     obRef4.state     := 0
                     obRef4.origState := 0
+                    obRef4.eligibleK := -1  // was AIFOB's immediate eligibility -- now a real IFOB, must wait for a fresh same-direction swing
                     array.set(obs, pendBullAifob, obRef4)
                     pendBullAifob := -1
                 else if lastSWLidx >= 0
