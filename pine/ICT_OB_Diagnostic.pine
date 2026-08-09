@@ -20,6 +20,7 @@ useDisplayFrom = input.bool(true, "Use exact display-from date (else use months)
 InpReplayUpTo  = input.time(0, "Replay up to date (0=show all)")
 useReplay      = input.bool(false, "Enable replay mode")
 InpFocusOB     = input.int(0, "Focus OB (0=show all in window, N=Nth from end)")
+InpDebugValues = input.bool(false, "DEBUG: show trigger/eligible/stop bar numbers + state on each box")
 InpMaxLabelsPerCategory = input.int(150, "Max swing-high / swing-low / MSS labels shown (each, most recent kept)", minval=1, maxval=160)
 InpSwingLowGapATR = input.float(0.08, "Swing-low arrow / down-MSS gap below the low (x ATR14)", minval=0.0)
 
@@ -752,3 +753,13 @@ if barstate.islast
 
         bx = box.new(leftT, obD.zt, rightT, obD.zb, border_color=col, border_width=1, bgcolor=na, xloc=xloc.bar_time)
         array.push(drawnBoxes, bx)
+
+        // DEBUG: raw internal numbers for this exact box, so we can see
+        // WHY it died instead of guessing. state: 0=IFOB 1=AOB 2=OOB
+        // 3=SPENT 4=AIFOB. trigK/eligK/stopK are our own array indices
+        // (position among processed bars, not TradingView bar_index) --
+        // compare them to each other, not to the chart's date axis.
+        if InpDebugValues
+            dbgTxt = "state=" + str.tostring(obD.state) + " orig=" + str.tostring(obD.origState) + "\ntrigK=" + str.tostring(obD.triggerK) + " eligK=" + str.tostring(obD.eligibleK) + " stopK=" + str.tostring(obD.stopK)
+            dbgLbl = label.new(leftT, obD.bullish ? obD.zt : obD.zb, dbgTxt, xloc=xloc.bar_time, yloc=yloc.price, style=obD.bullish ? label.style_label_up : label.style_label_down, color=color.new(color.purple, 80), textcolor=color.purple, size=size.tiny)
+            array.push(drawnLabels, dbgLbl)
