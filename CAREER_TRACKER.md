@@ -30,28 +30,52 @@ Use this to judge whether any other opportunity is actually worth it.
 | Opportunity | Status | Key dates | Next action |
 |---|---|---|---|
 | **KFUPM PhD** (Mechanical Engineering) | Admitted, scholarship confirmed | MSc graduation: Dec 2026. PhD starts: Jan 2027 | None — on track |
-| **Hormuud Telecom — Data Center Operations Engineer** (Mogadishu, Somalia) | Applied — CV + cover letter prepared | **Deadline: Aug 9, 2026 (TODAY)** | Confirm application was submitted via "Apply Now" form; inquiry email drafted (not yet confirmed sent) |
+| **International exit search** (Ireland, Canada, Australia, NZ, Germany, Iceland, UK, Qatar) | Research complete — see full dashboard | Target start: **Jan 2027**, right after leaving KFUPM | User to pick 1–3 countries to pursue; then draft tailored CV/cover letter per real vacancy |
 
-## 3. Known Conflict / Open Question
+~~Hormuud Telecom — Data Center Operations Engineer (Mogadishu)~~ — **dropped** per user decision (2026-08-09), not pursuing further.
 
-- Hormuud role would need someone starting well before Jan 2027 — this **collides** with the PhD start date. Not yet resolved: is Hormuud a genuine alternative to the PhD, a fallback if the PhD falls through, or something to negotiate a later start date for? **Needs a decision.**
+## 3. International Opportunity Search (started 2026-08-09)
+
+Full comparison dashboard (money, tax, citizenship speed, weather, visa ease, spouse work rights, per-country job market signal, sources): **[Exit Plan — Opportunity Map](https://claude.ai/code/artifact/9e961089-9361-479d-968e-d7af7c55f3c1)**
+
+**Search criteria (user-set):** money first; nationality-granting countries preferred; low tax preferred; good weather preferred; fastest path to citizenship preferred; easy/clear visa process preferred; industry roles over academic/research; must check if spouse (no degree/skill) gets a visa + work rights; not limited to the 6 named countries.
+
+**Quick summary — take-home/month estimate vs. PhD baseline ($2,000–2,050/mo):**
+
+| Country | Est. take-home/mo (USD) | Citizenship | Spouse can work | Verdict |
+|---|---|---|---|---|
+| Ireland (DC specialist, 2-3yrs in) | ~$4,500–5,000 | 5 yrs (full labor market at 21mo) | Yes, full | **Top pick — best industry fit** |
+| New Zealand | ~$2,900–3,600 | 5 yrs, PR instant | Yes, open rights | **Top pick — easiest process** |
+| Canada | ~$3,000–3,300 | 4–5 yrs | Yes (2026 rules tightened) | Strong pick |
+| Iceland | ~$4,000–4,400 | 7–9 yrs (slowest) | Yes, automatic | High pay, slow citizenship |
+| Australia | ~$3,000–3,200 | 4 yrs | Yes, full | Solid all-around |
+| Germany | ~$2,500–2,700 | PR in 21-27mo, citizenship 5yrs | Yes, full | Fastest PR, high tax |
+| UK | ~$3,400–3,600 (if sponsored) | 5yrs now, may become 10 (Autumn 2026 risk) | Yes, full | Fresh-grad sponsorship barrier — watch, don't lead with |
+| Qatar | ~$1,900–3,850 | **Never** | Only with her own permit | Good money, fails nationality condition |
+
+## 4. Known Conflict / Open Question
+
+- ~~Hormuud role would collide with PhD start date~~ — resolved: Hormuud dropped.
+- **Open:** which 1–3 countries to actively pursue? Waiting on user decision.
 
 ---
 
-## 4. Decisions Log
+## 5. Decisions Log
 
 | Date | Decision |
 |---|---|
 | 2026-08 | Tailored CV and cover letter completed for Hormuud application, using DEMA data-center workshop + ISO 50001 training to offset lack of direct data-center work experience |
 | 2026-08 | Established $2,000/month living-standard baseline to evaluate future opportunities against |
+| 2026-08-09 | Dropped Hormuud from active pursuit; launched full international opportunity search (money-first, nationality-preferred, industry roles) across 8 countries, not limited to original 6 |
 
 ---
 
-## 5. Next Actions
+## 6. Next Actions
 
-- [ ] Confirm Hormuud application was actually submitted (not just drafted)
-- [ ] Decide: is Hormuud pursued as PhD-alternative, fallback, or deferred-start negotiation?
-- [ ] Resolve the PhD start date vs. Hormuud start date conflict
+- [ ] User to pick 1–3 countries to actively pursue from the Opportunity Map
+- [ ] Search real, live vacancies in chosen countries and start tailored CV/cover letter drafts
+- [ ] Confirm MSc thesis defense / final graduation date with KFUPM
+- [ ] Decide whether to widen search further (e.g. Netherlands, Portugal)
 - [ ] Get real KFUPM figures (housing cost, tuition sticker price) to tighten the financial baseline estimate
 
 ---
