@@ -106,7 +106,8 @@ Not narrowing to countries — pursuing every real, apply-ready match at once, p
 
 ## 7. Next Actions
 
-- [ ] User to actually submit the 5 prepared applications (Equinix x2, Verne, NTT, IDCORE)
+- [ ] **⭐ PRIORITY — Submit the University of Calgary hypersonic PhD application** (CV + cover letter + transcripts + English test) by email to artem.korobenko@ucalgary.ca — documents ready and sent to user on 2026-08-10, not yet confirmed submitted. Remind user every check-in until confirmed sent.
+- [ ] User to actually submit the 5 prepared industry applications (Equinix x2, Verne, NTT, IDCORE)
 - [ ] Confirm exact open role title at Verne Global before submitting
 - [ ] Continue finding more real, apply-ready roles (Canada, Australia, Netherlands, Italy, Scotland/Wales graduate schemes)
 - [ ] Broaden the Mon/Thu Routine to actively rescan for new postings, not just review this file
