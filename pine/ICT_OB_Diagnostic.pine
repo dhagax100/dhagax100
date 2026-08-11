@@ -734,12 +734,9 @@ if barstate.islast
 
         // Color
         dSt = obD.state == 3 ? obD.preSpentState : obD.state
-        // AIFOB display disabled by request (matches main indicator's own
-        // convention) -- creation/promotion/eligibility/lifecycle logic
-        // above is untouched, this only skips drawing a box for zones
-        // still classified as AIFOB (dSt==4).
-        if dSt == 4
-            continue
+        // AIFOB display RE-ENABLED (was hidden before) -- we're actively
+        // verifying its creation/promotion logic now, need to see it drawn.
+        // Orange = still-pending AIFOB (dSt==4, not yet promoted to IFOB).
         // OOB display disabled by request on 5m/1h/4h.
         if dSt == 2 and hideOOBHere
             continue
