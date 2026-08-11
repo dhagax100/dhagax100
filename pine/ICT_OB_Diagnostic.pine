@@ -126,6 +126,23 @@ addOB(int cand, float zb, float zt, bool bull, int tK, int st) =>
     eK = (st == 1) ? tK : -1
     array.push(obs, ObZone.new(cand, zb, zt, bull, tK, eK, -1, st, st, st))
 
+// Is this exact candle already the origin of an existing zone (any state,
+// any origin, alive or dead)? A fresh backward-scan can independently land
+// on the same "best candle" a second time (e.g. once for the original
+// AIFOB, again later for its promotion/fresh-scan fallback) -- this stops
+// a second zone from being stacked on top of one that already claimed it.
+candleClaimed(int cand, bool bull) =>
+    found = false
+    n = array.size(obs)
+    for z = 0 to n - 1
+        if z < 0 or z >= n
+            continue
+        if not found
+            zz = array.get(obs, z)
+            if zz.candle == cand and zz.bullish == bull
+                found := true
+    found
+
 // A zone that was ever born as AIFOB keeps origState==4 forever (even after
 // promotion to IFOB, or after dying). Used to skip the fresh-scan fallback
 // when an AIFOB already exists for this exact setup -- one swing high and
@@ -230,7 +247,7 @@ tryBullAIFOB(int pReg, bool pHaveSWH, int pSwhI, int pLastSWLi, int newSwlI, int
                     okB := cX < array.get(C_, best)
             if okB
                 best := x
-        if best != -1
+        if best != -1 and not candleClaimed(best, true)
             oB = array.get(O_, best)
             cB = array.get(C_, best)
             addOB(best, math.min(oB, cB), math.max(oB, cB), true, k, 4)
@@ -257,7 +274,7 @@ tryBearAIFOB(int pReg, bool pHaveSWL, int pSwlI, int pLastSWHi, int newSwhI, int
                     okB := cX > array.get(C_, best)
             if okB
                 best := x
-        if best != -1
+        if best != -1 and not candleClaimed(best, false)
             oB = array.get(O_, best)
             cB = array.get(C_, best)
             addOB(best, math.min(oB, cB), math.max(oB, cB), false, k, 4)
@@ -401,7 +418,7 @@ if not skipBar and bar_index != lastProcessedBI
                                     okB := cX < array.get(C_, best)
                             if okB
                                 best := x
-                        if best != -1
+                        if best != -1 and not candleClaimed(best, true)
                             oB = array.get(O_, best)
                             cB = array.get(C_, best)
                             addOB(best, math.min(oB, cB), math.max(oB, cB), true, k, 0)
@@ -471,7 +488,7 @@ if not skipBar and bar_index != lastProcessedBI
                                     okB2 := cX > array.get(C_, best2)
                             if okB2
                                 best2 := x
-                        if best2 != -1
+                        if best2 != -1 and not candleClaimed(best2, false)
                             oB = array.get(O_, best2)
                             cB = array.get(C_, best2)
                             addOB(best2, math.min(oB, cB), math.max(oB, cB), false, k, 0)
@@ -514,7 +531,7 @@ if not skipBar and bar_index != lastProcessedBI
                                     okB3 := cX > array.get(C_, best3)
                             if okB3
                                 best3 := x
-                        if best3 != -1
+                        if best3 != -1 and not candleClaimed(best3, false)
                             oB = array.get(O_, best3)
                             cB = array.get(C_, best3)
                             addOB(best3, math.min(oB, cB), math.max(oB, cB), false, k, 0)
@@ -584,7 +601,7 @@ if not skipBar and bar_index != lastProcessedBI
                                     okB4 := cX < array.get(C_, best4)
                             if okB4
                                 best4 := x
-                        if best4 != -1
+                        if best4 != -1 and not candleClaimed(best4, true)
                             oB = array.get(O_, best4)
                             cB = array.get(C_, best4)
                             addOB(best4, math.min(oB, cB), math.max(oB, cB), true, k, 0)
