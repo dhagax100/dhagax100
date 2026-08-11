@@ -347,15 +347,24 @@ if not skipBar and bar_index != lastProcessedBI
                 else if regime == 2
                     regime := 1
                     addMss(k, swhIdx, swhPrice, true)
-                // IFOB or promote AIFOB
+                // IFOB or promote AIFOB -- but only promote if the pending
+                // AIFOB is still ALIVE (state==4). If it already died (real
+                // impact touched it before this break confirmed), leave that
+                // record alone -- do NOT resurrect it -- and fall through to
+                // a fresh scan so this now-confirmed break gets its own IFOB.
+                pendStillAlive = false
                 if pendBullAifob != -1
+                    pendStillAlive := array.get(obs, pendBullAifob).state == 4
+                if pendStillAlive
                     obRef = array.get(obs, pendBullAifob)
                     obRef.state     := 0
                     obRef.origState := 0
                     obRef.eligibleK := -1  // was AIFOB's immediate eligibility -- now a real IFOB, must wait for a fresh same-direction swing
                     array.set(obs, pendBullAifob, obRef)
                     pendBullAifob := -1
-                else if lastSWLidx >= 0
+                else
+                    pendBullAifob := -1
+                if not pendStillAlive and lastSWLidx >= 0
                     lo = math.min(math.min(lastSWLidx, k), swhIdx)
                     hi = math.max(math.max(lastSWLidx, k), swhIdx)
                     best = -1
@@ -412,14 +421,19 @@ if not skipBar and bar_index != lastProcessedBI
                 else if regime == 1
                     regime := 2
                     addMss(k, swlIdx, swlPrice, false)
+                pendStillAlive2 = false
                 if pendBearAifob != -1
+                    pendStillAlive2 := array.get(obs, pendBearAifob).state == 4
+                if pendStillAlive2
                     obRef2 = array.get(obs, pendBearAifob)
                     obRef2.state     := 0
                     obRef2.origState := 0
                     obRef2.eligibleK := -1  // was AIFOB's immediate eligibility -- now a real IFOB, must wait for a fresh same-direction swing
                     array.set(obs, pendBearAifob, obRef2)
                     pendBearAifob := -1
-                else if lastSWHidx >= 0
+                else
+                    pendBearAifob := -1
+                if not pendStillAlive2 and lastSWHidx >= 0
                     lo2 = math.min(math.min(lastSWHidx, k), swlIdx)
                     hi2 = math.max(math.max(lastSWHidx, k), swlIdx)
                     best2 = -1
@@ -449,14 +463,19 @@ if not skipBar and bar_index != lastProcessedBI
                 else if regime == 1
                     regime := 2
                     addMss(k, swlIdx, swlPrice, false)
+                pendStillAlive3 = false
                 if pendBearAifob != -1
+                    pendStillAlive3 := array.get(obs, pendBearAifob).state == 4
+                if pendStillAlive3
                     obRef3 = array.get(obs, pendBearAifob)
                     obRef3.state     := 0
                     obRef3.origState := 0
                     obRef3.eligibleK := -1  // was AIFOB's immediate eligibility -- now a real IFOB, must wait for a fresh same-direction swing
                     array.set(obs, pendBearAifob, obRef3)
                     pendBearAifob := -1
-                else if lastSWHidx >= 0
+                else
+                    pendBearAifob := -1
+                if not pendStillAlive3 and lastSWHidx >= 0
                     lo3 = math.min(math.min(lastSWHidx, k), swlIdx)
                     hi3 = math.max(math.max(lastSWHidx, k), swlIdx)
                     best3 = -1
@@ -513,14 +532,19 @@ if not skipBar and bar_index != lastProcessedBI
                 else if regime == 2
                     regime := 1
                     addMss(k, swhIdx, swhPrice, true)
+                pendStillAlive4 = false
                 if pendBullAifob != -1
+                    pendStillAlive4 := array.get(obs, pendBullAifob).state == 4
+                if pendStillAlive4
                     obRef4 = array.get(obs, pendBullAifob)
                     obRef4.state     := 0
                     obRef4.origState := 0
                     obRef4.eligibleK := -1  // was AIFOB's immediate eligibility -- now a real IFOB, must wait for a fresh same-direction swing
                     array.set(obs, pendBullAifob, obRef4)
                     pendBullAifob := -1
-                else if lastSWLidx >= 0
+                else
+                    pendBullAifob := -1
+                if not pendStillAlive4 and lastSWLidx >= 0
                     lo4 = math.min(math.min(lastSWLidx, k), swhIdx)
                     hi4 = math.max(math.max(lastSWLidx, k), swhIdx)
                     best4 = -1
