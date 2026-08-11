@@ -13,7 +13,7 @@ CFD-based thesis: heat transfer enhancement in a parabolic trough solar collecto
 - **Study design locked:** 5 factors × 3 levels → Taguchi L27 = 27 CFD runs
 - **Workflow plan sent to advisor**, who gave green light and expects weekly updates
 - **Validation phase in progress:** reproducing smooth-tube results against Dudley et al. (SAND94-1884) LS-2 dataset
-- **Mesh independence study planned:** 3 hex mesh levels, y+ ≈ 1 at highest Re, Nu and f as monitors, <1% threshold
+- **Mesh independence study planned:** 3 hex mesh levels, y+ ≈ 1 at highest Re, Nu and f as monitors, <1% threshold — **CONFLICT (Aug 2026): `docs/Proposal_Last.pdf` Section 3.6 specifies unstructured tetrahedral mesh with inflation, not hex. Unresolved — see decision_log.md.**
 - **Geometry work in SpaceClaim:** partially complete, annotation done independently after Claude's UI instructions proved wrong
 - **Learning roadmap:** 6-phase, 11-week plan exists as a Word doc
 
