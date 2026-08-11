@@ -119,7 +119,11 @@ addMss(int aIdx, int bIdx, float pr, bool up) =>
     array.push(msses, MssEv.new(aIdx, bIdx, pr, up))
 
 addOB(int cand, float zb, float zt, bool bull, int tK, int st) =>
-    eK = (st == 1 or st == 4) ? tK : -1
+    // AIFOB (st==4) no longer gets immediate eligibility -- it's just a
+    // candidate until its own matching-direction swing actually confirms
+    // (armed below in STEP 2, same gate IFOB uses). Only AOB (st==1) stays
+    // immediate.
+    eK = (st == 1) ? tK : -1
     array.push(obs, ObZone.new(cand, zb, zt, bull, tK, eK, -1, st, st, st))
 
 // --- AOB HUNT: Bullish ---
@@ -582,7 +586,7 @@ if not skipBar and bar_index != lastProcessedBI
                     if z < 0 or z >= obSz
                         continue
                     obZ = array.get(obs, z)
-                    if obZ.bullish and obZ.state == 0 and obZ.eligibleK == -1 and k > obZ.triggerK
+                    if obZ.bullish and (obZ.state == 0 or obZ.state == 4) and obZ.eligibleK == -1 and k > obZ.triggerK
                         obZ.eligibleK := k
                         array.set(obs, z, obZ)
             else
@@ -596,7 +600,7 @@ if not skipBar and bar_index != lastProcessedBI
                     if z < 0 or z >= obSz2
                         continue
                     obZ2 = array.get(obs, z)
-                    if not obZ2.bullish and obZ2.state == 0 and obZ2.eligibleK == -1 and k > obZ2.triggerK
+                    if not obZ2.bullish and (obZ2.state == 0 or obZ2.state == 4) and obZ2.eligibleK == -1 and k > obZ2.triggerK
                         obZ2.eligibleK := k
                         array.set(obs, z, obZ2)
             ei += 1
