@@ -126,6 +126,23 @@ addOB(int cand, float zb, float zt, bool bull, int tK, int st) =>
     eK = (st == 1) ? tK : -1
     array.push(obs, ObZone.new(cand, zb, zt, bull, tK, eK, -1, st, st, st))
 
+// A zone that was ever born as AIFOB keeps origState==4 forever (even after
+// promotion to IFOB, or after dying). Used to skip the fresh-scan fallback
+// when an AIFOB already exists for this exact setup -- one swing high and
+// one swing low already existed before the break, so a second, separate
+// IFOB in the same candle range would just be a duplicate.
+existsAifobInRange(int lo, int hi, bool bull) =>
+    found = false
+    n = array.size(obs)
+    for z = 0 to n - 1
+        if z < 0 or z >= n
+            continue
+        if not found
+            zz = array.get(obs, z)
+            if zz.origState == 4 and zz.bullish == bull and zz.candle >= lo and zz.candle <= hi
+                found := true
+    found
+
 // --- AOB HUNT: Bullish ---
 tryBullAOB(int pReg, int aobSWHi, int newSwlI, float newSwlP, int k) =>
     if pReg == 1 and aobSWHi >= 0
@@ -371,22 +388,23 @@ if not skipBar and bar_index != lastProcessedBI
                 if not pendStillAlive and lastSWLidx >= 0
                     lo = math.min(math.min(lastSWLidx, k), swhIdx)
                     hi = math.max(math.max(lastSWLidx, k), swhIdx)
-                    best = -1
-                    for x = lo to hi
-                        cX = array.get(C_, x)
-                        oX = array.get(O_, x)
-                        okB = false
-                        if cX < oX
-                            if best == -1
-                                okB := true
-                            else
-                                okB := cX < array.get(C_, best)
-                        if okB
-                            best := x
-                    if best != -1
-                        oB = array.get(O_, best)
-                        cB = array.get(C_, best)
-                        addOB(best, math.min(oB, cB), math.max(oB, cB), true, k, 0)
+                    if not existsAifobInRange(lo, hi, true)
+                        best = -1
+                        for x = lo to hi
+                            cX = array.get(C_, x)
+                            oX = array.get(O_, x)
+                            okB = false
+                            if cX < oX
+                                if best == -1
+                                    okB := true
+                                else
+                                    okB := cX < array.get(C_, best)
+                            if okB
+                                best := x
+                        if best != -1
+                            oB = array.get(O_, best)
+                            cB = array.get(C_, best)
+                            addOB(best, math.min(oB, cB), math.max(oB, cB), true, k, 0)
                 haveSWH := false
                 swhCons := true
 
@@ -440,22 +458,23 @@ if not skipBar and bar_index != lastProcessedBI
                 if not pendStillAlive2 and lastSWHidx >= 0
                     lo2 = math.min(math.min(lastSWHidx, k), swlIdx)
                     hi2 = math.max(math.max(lastSWHidx, k), swlIdx)
-                    best2 = -1
-                    for x = lo2 to hi2
-                        cX = array.get(C_, x)
-                        oX = array.get(O_, x)
-                        okB2 = false
-                        if cX > oX
-                            if best2 == -1
-                                okB2 := true
-                            else
-                                okB2 := cX > array.get(C_, best2)
-                        if okB2
-                            best2 := x
-                    if best2 != -1
-                        oB = array.get(O_, best2)
-                        cB = array.get(C_, best2)
-                        addOB(best2, math.min(oB, cB), math.max(oB, cB), false, k, 0)
+                    if not existsAifobInRange(lo2, hi2, false)
+                        best2 = -1
+                        for x = lo2 to hi2
+                            cX = array.get(C_, x)
+                            oX = array.get(O_, x)
+                            okB2 = false
+                            if cX > oX
+                                if best2 == -1
+                                    okB2 := true
+                                else
+                                    okB2 := cX > array.get(C_, best2)
+                            if okB2
+                                best2 := x
+                        if best2 != -1
+                            oB = array.get(O_, best2)
+                            cB = array.get(C_, best2)
+                            addOB(best2, math.min(oB, cB), math.max(oB, cB), false, k, 0)
                 haveSWL := false
                 swlCons := true
 
@@ -482,22 +501,23 @@ if not skipBar and bar_index != lastProcessedBI
                 if not pendStillAlive3 and lastSWHidx >= 0
                     lo3 = math.min(math.min(lastSWHidx, k), swlIdx)
                     hi3 = math.max(math.max(lastSWHidx, k), swlIdx)
-                    best3 = -1
-                    for x = lo3 to hi3
-                        cX = array.get(C_, x)
-                        oX = array.get(O_, x)
-                        okB3 = false
-                        if cX > oX
-                            if best3 == -1
-                                okB3 := true
-                            else
-                                okB3 := cX > array.get(C_, best3)
-                        if okB3
-                            best3 := x
-                    if best3 != -1
-                        oB = array.get(O_, best3)
-                        cB = array.get(C_, best3)
-                        addOB(best3, math.min(oB, cB), math.max(oB, cB), false, k, 0)
+                    if not existsAifobInRange(lo3, hi3, false)
+                        best3 = -1
+                        for x = lo3 to hi3
+                            cX = array.get(C_, x)
+                            oX = array.get(O_, x)
+                            okB3 = false
+                            if cX > oX
+                                if best3 == -1
+                                    okB3 := true
+                                else
+                                    okB3 := cX > array.get(C_, best3)
+                            if okB3
+                                best3 := x
+                        if best3 != -1
+                            oB = array.get(O_, best3)
+                            cB = array.get(C_, best3)
+                            addOB(best3, math.min(oB, cB), math.max(oB, cB), false, k, 0)
                 haveSWL := false
                 swlCons := true
 
@@ -551,22 +571,23 @@ if not skipBar and bar_index != lastProcessedBI
                 if not pendStillAlive4 and lastSWLidx >= 0
                     lo4 = math.min(math.min(lastSWLidx, k), swhIdx)
                     hi4 = math.max(math.max(lastSWLidx, k), swhIdx)
-                    best4 = -1
-                    for x = lo4 to hi4
-                        cX = array.get(C_, x)
-                        oX = array.get(O_, x)
-                        okB4 = false
-                        if cX < oX
-                            if best4 == -1
-                                okB4 := true
-                            else
-                                okB4 := cX < array.get(C_, best4)
-                        if okB4
-                            best4 := x
-                    if best4 != -1
-                        oB = array.get(O_, best4)
-                        cB = array.get(C_, best4)
-                        addOB(best4, math.min(oB, cB), math.max(oB, cB), true, k, 0)
+                    if not existsAifobInRange(lo4, hi4, true)
+                        best4 = -1
+                        for x = lo4 to hi4
+                            cX = array.get(C_, x)
+                            oX = array.get(O_, x)
+                            okB4 = false
+                            if cX < oX
+                                if best4 == -1
+                                    okB4 := true
+                                else
+                                    okB4 := cX < array.get(C_, best4)
+                            if okB4
+                                best4 := x
+                        if best4 != -1
+                            oB = array.get(O_, best4)
+                            cB = array.get(C_, best4)
+                            addOB(best4, math.min(oB, cB), math.max(oB, cB), true, k, 0)
                 haveSWH := false
                 swhCons := true
 
