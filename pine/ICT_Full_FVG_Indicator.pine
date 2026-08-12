@@ -28,6 +28,8 @@ InpMaxLabelsPerCategory = input.int(150, "Max swing-high / swing-low / MSS label
 InpSwingLowGapATR = input.float(0.08, "Swing-low arrow / down-MSS gap below the low (x ATR14)", minval=0.0)
 InpMaxFvgPerCategory = input.int(150, "Max IFVG / AFVG boxes shown (each category, most recent by chart date)", minval=1, maxval=160)
 InpFvgFillTransparency = input.int(85, "IFVG fill transparency % (0=solid, 100=invisible)", minval=0, maxval=100)
+InpDebugValues = input.bool(false, "Show debug labels on FVG zones (state/origin/trigger/eligible/stop)")
+InpFocusFvg    = input.int(0, "Focus Nth FVG zone from end (0=all)", minval=0)
 
 // ===================== TYPE DEFINITIONS =====================
 type SwEv
@@ -698,3 +700,18 @@ if barstate.islast
         lnF = line.new(leftTF, midY, rightTF, midY, xloc=xloc.bar_time, color=color.gray,
                        style=line.style_dotted, width=1)
         array.push(drawnLines, lnF)
+
+        // Opt-in debug label: shows this zone's actual internal state so
+        // real behavior (creation, eligibility, stop) can be verified
+        // against the chart instead of hand-traced. InpFocusFvg isolates
+        // one zone (counting from the end of the array, most recent
+        // first) to declutter when several zones overlap on screen.
+        if InpDebugValues
+            focusIdxF = fvgSzD - InpFocusFvg
+            if InpFocusFvg == 0 or zf == focusIdxF
+                dbgTxtF = "state=" + str.tostring(fvD.state) + " orig=" + str.tostring(fvD.origin) +
+                          "\nleftIdx=" + str.tostring(fvD.leftIdx) + " trigK=" + str.tostring(fvD.triggerK) +
+                          " eligK=" + str.tostring(fvD.eligibleK) + " stopK=" + str.tostring(fvD.stopK)
+                lblF = label.new(leftTF, fvD.zt, dbgTxtF, xloc=xloc.bar_time, yloc=yloc.price,
+                                 style=label.style_label_down, color=color.purple, textcolor=color.white, size=size.small)
+                array.push(drawnLabels, lblF)
