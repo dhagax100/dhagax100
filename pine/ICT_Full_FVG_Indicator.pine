@@ -195,6 +195,16 @@ tryCreateAFVGs(int lo, int hi, bool bullish, int triggerK, float guardPrice) =>
 // --- AFVG HUNT: Bullish -- mirrors tryBullAOB's range + reference-
 // validity gate one-for-one (the OB candle-picking parts aren't needed
 // here, this script has no OB).
+// Range upper bound is newSwlI + 1, not newSwlI: the classic 3-candle
+// gap left by an impulsive swing very often has its CLOSING candle sit
+// right after the swing point itself (swing point = the displacement/
+// impulse candle in the middle of the 3), not before or on it. Capping
+// the scan at newSwlI alone made that closing candle structurally
+// unreachable as a candidate3, so a real, visible gap could never be
+// picked up. Stopping at +1 (not all the way to k, the confirming bar)
+// deliberately avoids letting the scan reach the same bar that fires
+// this hunt -- that bar's own wick shouldn't be allowed to both trigger
+// and immediately consume a zone it just created.
 tryBullAFVG(int pReg, int aobSWHi, int newSwlI, float newSwlP, int k) =>
     if pReg == 1 and aobSWHi >= 0
         armedSwhPrice = array.get(H_, aobSWHi)
@@ -203,11 +213,12 @@ tryBullAFVG(int pReg, int aobSWHi, int newSwlI, float newSwlP, int k) =>
             if array.get(H_, v) >= armedSwhPrice
                 refViolated := true
         if not refViolated
-            lo2 = math.max(0, math.min(aobSWHi - 1, newSwlI))
-            hi2 = math.max(aobSWHi - 1, newSwlI)
+            lo2 = math.max(0, math.min(aobSWHi - 1, newSwlI + 1))
+            hi2 = math.max(aobSWHi - 1, newSwlI + 1)
             tryCreateAFVGs(lo2, hi2, true, k, newSwlP)
 
-// --- AFVG HUNT: Bearish -- mirrors tryBearAOB ---
+// --- AFVG HUNT: Bearish -- mirrors tryBearAOB --- (same +1 reasoning
+// as tryBullAFVG above, mirrored for the swing-high pivot.)
 tryBearAFVG(int pReg, int aobSWLi, int newSwhI, float newSwhP, int k) =>
     if pReg == 2 and aobSWLi >= 0
         armedSwlPrice = array.get(L_, aobSWLi)
@@ -216,8 +227,8 @@ tryBearAFVG(int pReg, int aobSWLi, int newSwhI, float newSwhP, int k) =>
             if array.get(L_, v) <= armedSwlPrice
                 refViolated := true
         if not refViolated
-            lo2 = math.max(0, math.min(aobSWLi - 1, newSwhI))
-            hi2 = math.max(aobSWLi - 1, newSwhI)
+            lo2 = math.max(0, math.min(aobSWLi - 1, newSwhI + 1))
+            hi2 = math.max(aobSWLi - 1, newSwhI + 1)
             tryCreateAFVGs(lo2, hi2, false, k, newSwhP)
 
 // ===================== MAIN PROCESSING =====================
