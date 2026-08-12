@@ -217,11 +217,13 @@ tryBearARB(int pReg, int aobSWLi, int newSwhI, float newSwhP, int k) =>
         if not refViolated
             addRBFromSwing(aobSWLi, false, k, 1)
 
-// Is this exact swing-pivot index already the anchor of an existing RB
-// zone (any state, alive or dead)? Mirrors candleClaimed from the OB
-// engine -- stops a second zone from stacking on the same wick. Only
-// used by the AIRB path below -- ARB above is untouched and never
-// checks this.
+// Is this exact swing-pivot index already the anchor of an existing
+// AIRB/IRB zone (any state, alive or dead)? Mirrors candleClaimed from
+// the OB engine -- stops a second AIRB/IRB from stacking on the same
+// wick. Deliberately EXCLUDES origin==1 (ARB) -- ARB and AIRB are
+// SUPPOSED to coexist on the same wick (they fire from the same event,
+// same as AOB and AIFOB both existing in the OB engine), so ARB must
+// never count as "claiming" a wick against AIRB.
 rbClaimed(int idx, bool bull) =>
     found = false
     n = array.size(rbs)
@@ -230,7 +232,7 @@ rbClaimed(int idx, bool bull) =>
             continue
         if not found
             zz = array.get(rbs, z)
-            if zz.leftIdx == idx and zz.bullish == bull
+            if zz.leftIdx == idx and zz.bullish == bull and zz.origin != 1
                 found := true
     found
 
