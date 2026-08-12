@@ -56,6 +56,7 @@ useReplay      = input.bool(false, "Enable replay mode")
 InpMaxLabelsPerCategory = input.int(150, "Max swing-high / swing-low / MSS labels shown (each, most recent kept)", minval=1, maxval=160)
 InpSwingLowGapATR = input.float(0.08, "Swing-low arrow / down-MSS gap below the low (x ATR14)", minval=0.0)
 InpMaxRbPerCategory = input.int(150, "Max IRB / ARB boxes shown (each category, most recent by chart date)", minval=1, maxval=160)
+InpDebugValues = input.bool(false, "DEBUG: show trigger/eligible/stop bar numbers + state on each box")
 
 // ===================== TYPE DEFINITIONS =====================
 type SwEv
@@ -706,3 +707,13 @@ if barstate.islast
         bxR = box.new(leftTR, rbD.zt, rightTR, rbD.zb, border_color=colR, border_width=1,
                       border_style=line.style_dashed, bgcolor=na, xloc=xloc.bar_time)
         array.push(drawnBoxes, bxR)
+
+        // DEBUG: raw internal numbers for this exact box. state: 0=IRB
+        // 1=ARB(retired) 2=ORB 3=SPENT 4=AIRB. leftIdx/trigK/eligK/stopK
+        // are our own array indices (position among processed bars, not
+        // TradingView bar_index) -- compare them to each other, not to
+        // the chart's date axis.
+        if InpDebugValues
+            dbgTxtR = "state=" + str.tostring(rbD.state) + " orig=" + str.tostring(rbD.origin) + "\nleftIdx=" + str.tostring(rbD.leftIdx) + " trigK=" + str.tostring(rbD.triggerK) + " eligK=" + str.tostring(rbD.eligibleK) + " stopK=" + str.tostring(rbD.stopK)
+            dbgLblR = label.new(leftTR, rbD.bullish ? rbD.zt : rbD.zb, dbgTxtR, xloc=xloc.bar_time, yloc=yloc.price, style=rbD.bullish ? label.style_label_up : label.style_label_down, color=color.new(color.purple, 10), textcolor=color.white, size=size.normal)
+            array.push(drawnLabels, dbgLblR)
