@@ -423,9 +423,13 @@ if not skipBar and bar_index != lastProcessedBI
                     pendBullAirb := -1
                 if not pendStillAliveRb and lastSWLidx >= 0
                     // IRB: opposite reference (swing LOW) is the far swing
-                    // relative to the high that just broke.
-                    if not rbClaimed(lastSWLidx, true)
-                        addRBFromSwing(lastSWLidx, false, k, 0)
+                    // relative to the high that just broke. Unconditional,
+                    // no rbClaimed guard -- IRB is a fixed anchor, not a
+                    // scan, so there's no alternative candle to fall back
+                    // to. Blocking it on a claim would just delete a real
+                    // IRB with nothing to replace it (that's the "legit
+                    // IRB removed" bug).
+                    addRBFromSwing(lastSWLidx, false, k, 0)
                 haveSWH := false
                 swhCons := true
 
@@ -481,8 +485,9 @@ if not skipBar and bar_index != lastProcessedBI
                 else
                     pendBearAirb := -1
                 if not pendStillAliveRb2 and lastSWHidx >= 0
-                    if not rbClaimed(lastSWHidx, false)
-                        addRBFromSwing(lastSWHidx, true, k, 0)
+                    // Unconditional -- see the comment at the SWH-break
+                    // IRB site above for why rbClaimed doesn't belong here.
+                    addRBFromSwing(lastSWHidx, true, k, 0)
                 haveSWL := false
                 swlCons := true
 
@@ -507,8 +512,10 @@ if not skipBar and bar_index != lastProcessedBI
                 else
                     pendBearAirb := -1
                 if not pendStillAliveRb3 and lastSWHidx >= 0
-                    if not rbClaimed(lastSWHidx, false)
-                        addRBFromSwing(lastSWHidx, true, k, 0)
+                    // Unconditional -- see the comment at the first
+                    // SWH-break IRB site for why rbClaimed doesn't belong
+                    // here.
+                    addRBFromSwing(lastSWHidx, true, k, 0)
                 haveSWL := false
                 swlCons := true
 
@@ -560,8 +567,10 @@ if not skipBar and bar_index != lastProcessedBI
                 else
                     pendBullAirb := -1
                 if not pendStillAliveRb4 and lastSWLidx >= 0
-                    if not rbClaimed(lastSWLidx, true)
-                        addRBFromSwing(lastSWLidx, false, k, 0)
+                    // Unconditional -- see the comment at the first
+                    // SWH-break IRB site for why rbClaimed doesn't belong
+                    // here.
+                    addRBFromSwing(lastSWLidx, false, k, 0)
                 haveSWH := false
                 swhCons := true
 
