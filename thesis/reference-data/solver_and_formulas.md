@@ -189,5 +189,5 @@ a, b = morphology-dependent coefficients. **For brick-shaped nanoparticles: a = 
 (Al₂O₃, MWCNT, Ag, MgO property data not yet in the proposal — still needed for the other two hybrid pairs before their UDFs can be written.)
 
 ## Open Items / Unresolved
-- **Mesh type conflict:** proposal Section 3.6 specifies unstructured tetrahedral mesh with inflation layers; CLAUDE.md's original plan said "3 hex mesh levels." Needs a decision before Module 4 (mesh) production work.
+- ~~Mesh type conflict~~ **RESOLVED (Aug 2026):** unstructured tetrahedral mesh with inflation layers, per proposal Section 3.6 — used consistently for the smooth-tube baseline and every enhanced geometry so Ns/PEC comparisons aren't contaminated by a meshing-method difference. Supersedes CLAUDE.md's earlier "3 hex mesh levels" plan.
 - Proposal's own grid-independence (Table 13) and validation figures (Figs 6–9) contain specific numbers that do not reconcile with the smooth-tube GCI numbers already in `mesh-validation/Mesh_and_Validation_Workbook.xlsx`. Not yet resolved whether the proposal's numbers are completed results or template values adapted from Mohammed et al. (2022).
