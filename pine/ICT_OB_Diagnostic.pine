@@ -230,7 +230,14 @@ tryBearAOB(int pReg, int aobSWLi, int newSwhI, float newSwhP, int k) =>
 // --- AIFOB HUNT: Bullish (returns obs[] index or -1) ---
 tryBullAIFOB(int pReg, bool pHaveSWH, int pSwhI, int pLastSWLi, int newSwlI, int k) =>
     result = -1
-    if pReg == 1 and pHaveSWH and pSwhI >= 0 and pLastSWLi >= 0
+    // Exception: the confirming candle (k) can, in the same bar, ALSO break
+    // below the swing low it just confirmed (newSwlI) -- an outside/engulfing
+    // bar. That means we're not continuing bullish, we're reversing down in
+    // the same breath (the "Second break: SWL" check right after this will
+    // catch the regime flip). Don't create a bullish candidate on a premise
+    // this same candle already broke.
+    alreadyBrokeIt = array.get(L_, k) < array.get(L_, newSwlI)
+    if pReg == 1 and pHaveSWH and pSwhI >= 0 and pLastSWLi >= 0 and not alreadyBrokeIt
         lo = math.max(0, math.min(math.min(pLastSWLi, newSwlI), pSwhI - 1))
         hi = math.max(math.max(pLastSWLi, newSwlI), pSwhI - 1)
         best = -1
@@ -257,7 +264,12 @@ tryBullAIFOB(int pReg, bool pHaveSWH, int pSwhI, int pLastSWLi, int newSwlI, int
 // --- AIFOB HUNT: Bearish (returns obs[] index or -1) ---
 tryBearAIFOB(int pReg, bool pHaveSWL, int pSwlI, int pLastSWHi, int newSwhI, int k) =>
     result = -1
-    if pReg == 2 and pHaveSWL and pSwlI >= 0 and pLastSWHi >= 0
+    // Mirror of the bullish exception: don't create a bearish candidate if
+    // this same confirming candle already broke ABOVE the swing high it
+    // just confirmed -- that's reversing up in the same breath, not
+    // continuing down.
+    alreadyBrokeIt2 = array.get(H_, k) > array.get(H_, newSwhI)
+    if pReg == 2 and pHaveSWL and pSwlI >= 0 and pLastSWHi >= 0 and not alreadyBrokeIt2
         lo = math.max(0, math.min(math.min(pLastSWHi, newSwhI), pSwlI - 1))
         hi = math.max(math.max(pLastSWHi, newSwhI), pSwlI - 1)
         best = -1
