@@ -29,7 +29,7 @@ InpSwingLowGapATR = input.float(0.08, "Swing-low arrow / down-MSS gap below the 
 InpMaxFvgPerCategory = input.int(150, "Max IFVG / AFVG boxes shown (each category, most recent by chart date)", minval=1, maxval=160)
 InpFvgFillTransparency = input.int(85, "IFVG fill transparency % (0=solid, 100=invisible)", minval=0, maxval=100)
 InpDebugValues = input.bool(false, "Show debug labels on FVG zones (state/origin/trigger/eligible/stop)")
-InpFocusFvg    = input.int(0, "Focus Nth FVG zone from end (0=all)", minval=0)
+InpFocusFvgDate = input.time(timestamp("2025-07-31"), "Debug label: only show for the FVG zone whose leftIdx candle is nearest this date")
 
 // ===================== TYPE DEFINITIONS =====================
 type SwEv
@@ -701,17 +701,36 @@ if barstate.islast
                        style=line.style_dotted, width=1)
         array.push(drawnLines, lnF)
 
-        // Opt-in debug label: shows this zone's actual internal state so
-        // real behavior (creation, eligibility, stop) can be verified
-        // against the chart instead of hand-traced. InpFocusFvg isolates
-        // one zone (counting from the end of the array, most recent
-        // first) to declutter when several zones overlap on screen.
-        if InpDebugValues
-            focusIdxF = fvgSzD - InpFocusFvg
-            if InpFocusFvg == 0 or zf == focusIdxF
-                dbgTxtF = "state=" + str.tostring(fvD.state) + " orig=" + str.tostring(fvD.origin) +
-                          "\nleftIdx=" + str.tostring(fvD.leftIdx) + " trigK=" + str.tostring(fvD.triggerK) +
-                          " eligK=" + str.tostring(fvD.eligibleK) + " stopK=" + str.tostring(fvD.stopK)
-                lblF = label.new(leftTF, fvD.zt, dbgTxtF, xloc=xloc.bar_time, yloc=yloc.price,
-                                 style=label.style_label_down, color=color.purple, textcolor=color.white, size=size.small)
-                array.push(drawnLabels, lblF)
+    // Opt-in debug label: shows the SINGLE zone whose leftIdx candle is
+    // nearest InpFocusFvgDate -- its actual internal state (creation,
+    // eligibility, stop), verified against the chart instead of
+    // hand-traced. Deliberately a standalone scan, not part of the loop
+    // above: this script already carries thousands of fvgs entries from
+    // the continuous per-bar gap scan, and drawing a label for every one
+    // of them hit the 20s script-execution limit. This scan is cheap
+    // (no label/string work per entry, just a numeric compare) and
+    // always creates at most one label, regardless of how much history
+    // has piled up -- also bypasses the on-chart category cap and
+    // display-from cutoff, since a zone worth debugging might otherwise
+    // be pruned from the visible boxes entirely.
+    if InpDebugValues
+        nearestZf = -1
+        nearestDiff = -1
+        for zfN = 0 to fvgSzD - 1
+            fvN = array.get(fvgs, zfN)
+            idxN = fvN.leftIdx
+            if idxN < 0 or idxN >= nArr
+                continue
+            diffN = math.abs(array.get(BT, idxN) - InpFocusFvgDate)
+            if nearestZf == -1 or diffN < nearestDiff
+                nearestZf := zfN
+                nearestDiff := diffN
+        if nearestZf != -1
+            fvNear = array.get(fvgs, nearestZf)
+            btNear = array.get(BT, fvNear.leftIdx)
+            dbgTxtF = "state=" + str.tostring(fvNear.state) + " orig=" + str.tostring(fvNear.origin) +
+                      "\nleftIdx=" + str.tostring(fvNear.leftIdx) + " trigK=" + str.tostring(fvNear.triggerK) +
+                      " eligK=" + str.tostring(fvNear.eligibleK) + " stopK=" + str.tostring(fvNear.stopK)
+            lblF = label.new(btNear, fvNear.zt, dbgTxtF, xloc=xloc.bar_time, yloc=yloc.price,
+                             style=label.style_label_down, color=color.purple, textcolor=color.white, size=size.small)
+            array.push(drawnLabels, lblF)
