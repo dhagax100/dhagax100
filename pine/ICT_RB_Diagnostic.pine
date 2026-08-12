@@ -62,6 +62,7 @@ InpMaxLabelsPerCategory = input.int(150, "Max swing-high / swing-low / MSS label
 InpSwingLowGapATR = input.float(0.08, "Swing-low arrow / down-MSS gap below the low (x ATR14)", minval=0.0)
 InpMaxRbPerCategory = input.int(150, "Max IRB / ARB boxes shown (each category, most recent by chart date)", minval=1, maxval=160)
 InpDebugValues = input.bool(false, "DEBUG: show trigger/eligible/stop bar numbers + state on each box")
+InpFocusRB = input.int(0, "Focus RB (0=show all in window, N=Nth from end)")
 
 // ===================== TYPE DEFINITIONS =====================
 type SwEv
@@ -727,9 +728,16 @@ if barstate.islast
         idxR = rbD.leftIdx
         if idxR < 0 or idxR >= nArr
             continue
-        catCutoffR = rbD.origin == 1 ? arbCutoff : irbCutoff
-        if idxR < catCutoffR
-            continue
+
+        // Focus filter -- isolate a single zone (Nth from end, by rbs[]
+        // insertion order) so its debug label isn't buried under others.
+        if InpFocusRB > 0
+            if rbSzD - zr != InpFocusRB
+                continue
+        else
+            catCutoffR = rbD.origin == 1 ? arbCutoff : irbCutoff
+            if idxR < catCutoffR
+                continue
 
         btR = array.get(BT, idxR)
         if btR < dispFrom
