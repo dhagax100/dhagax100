@@ -182,8 +182,46 @@ addMss(int aIdx, int bIdx, float pr, bool up) =>
     array.push(msses, MssEv.new(aIdx, bIdx, pr, up))
 
 addOB(int cand, float zb, float zt, bool bull, int tK, int st) =>
-    eK = (st == 1 or st == 4) ? tK : -1
+    // AIFOB (st==4) no longer gets immediate eligibility -- it's just a
+    // candidate until its own matching-direction swing actually confirms
+    // (armed below in STEP 2, same gate IFOB uses). Only AOB (st==1) stays
+    // immediate.
+    eK = (st == 1) ? tK : -1
     array.push(obs, ObZone.new(cand, zb, zt, bull, tK, eK, -1, st, st, st))
+
+// Is this exact candle already the origin of an existing zone (any state,
+// any origin, alive or dead)? A fresh backward-scan can independently land
+// on the same "best candle" a second time (e.g. once for the original
+// AIFOB, again later for its promotion/fresh-scan fallback) -- this stops
+// a second zone from being stacked on top of one that already claimed it.
+candleClaimed(int cand, bool bull) =>
+    found = false
+    n = array.size(obs)
+    for z = 0 to n - 1
+        if z < 0 or z >= n
+            continue
+        if not found
+            zz = array.get(obs, z)
+            if zz.candle == cand and zz.bullish == bull
+                found := true
+    found
+
+// A zone that was ever born as AIFOB keeps origState==4 forever (even after
+// promotion to IFOB, or after dying). Used to skip the fresh-scan fallback
+// when an AIFOB already exists for this exact setup -- one swing high and
+// one swing low already existed before the break, so a second, separate
+// IFOB in the same candle range would just be a duplicate.
+existsAifobInRange(int lo, int hi, bool bull) =>
+    found = false
+    n = array.size(obs)
+    for z = 0 to n - 1
+        if z < 0 or z >= n
+            continue
+        if not found
+            zz = array.get(obs, z)
+            if zz.origState == 4 and zz.bullish == bull and zz.candle >= lo and zz.candle <= hi
+                found := true
+    found
 
 addFVG(int leftIdx, float zb, float zt, bool bull, int tK, int st) =>
     // st: 0=IFVG (delayed eligibility, far-side stranding later), 1=AFVG
@@ -399,7 +437,14 @@ tryBearARB(int pReg, int aobSWLi, int newSwhI, float newSwhP, int k) =>
 // --- AIFOB HUNT: Bullish (returns obs[] index or -1) ---
 tryBullAIFOB(int pReg, bool pHaveSWH, int pSwhI, int pLastSWLi, int newSwlI, int k) =>
     result = -1
-    if pReg == 1 and pHaveSWH and pSwhI >= 0 and pLastSWLi >= 0
+    // Exception: the confirming candle (k) can, in the same bar, ALSO break
+    // below the swing low it just confirmed (newSwlI) -- an outside/engulfing
+    // bar. That means we're not continuing bullish, we're reversing down in
+    // the same breath (the "Second break: SWL" check right after this will
+    // catch the regime flip). Don't create a bullish candidate on a premise
+    // this same candle already broke.
+    alreadyBrokeIt = array.get(L_, k) < array.get(L_, newSwlI)
+    if pReg == 1 and pHaveSWH and pSwhI >= 0 and pLastSWLi >= 0 and not alreadyBrokeIt
         lo = math.max(0, math.min(math.min(pLastSWLi, newSwlI), pSwhI - 1))
         hi = math.max(math.max(pLastSWLi, newSwlI), pSwhI - 1)
         best = -1
@@ -416,7 +461,7 @@ tryBullAIFOB(int pReg, bool pHaveSWH, int pSwhI, int pLastSWLi, int newSwlI, int
                     okB := cX < array.get(C_, best)
             if okB
                 best := x
-        if best != -1
+        if best != -1 and not candleClaimed(best, true)
             oB = array.get(O_, best)
             cB = array.get(C_, best)
             addOB(best, math.min(oB, cB), math.max(oB, cB), true, k, 4)
@@ -426,7 +471,12 @@ tryBullAIFOB(int pReg, bool pHaveSWH, int pSwhI, int pLastSWLi, int newSwlI, int
 // --- AIFOB HUNT: Bearish (returns obs[] index or -1) ---
 tryBearAIFOB(int pReg, bool pHaveSWL, int pSwlI, int pLastSWHi, int newSwhI, int k) =>
     result = -1
-    if pReg == 2 and pHaveSWL and pSwlI >= 0 and pLastSWHi >= 0
+    // Mirror of the bullish exception: don't create a bearish candidate if
+    // this same confirming candle already broke ABOVE the swing high it
+    // just confirmed -- that's reversing up in the same breath, not
+    // continuing down.
+    alreadyBrokeIt2 = array.get(H_, k) > array.get(H_, newSwhI)
+    if pReg == 2 and pHaveSWL and pSwlI >= 0 and pLastSWHi >= 0 and not alreadyBrokeIt2
         lo = math.max(0, math.min(math.min(pLastSWHi, newSwhI), pSwlI - 1))
         hi = math.max(math.max(pLastSWHi, newSwhI), pSwlI - 1)
         best = -1
@@ -443,7 +493,7 @@ tryBearAIFOB(int pReg, bool pHaveSWL, int pSwlI, int pLastSWHi, int newSwhI, int
                     okB := cX > array.get(C_, best)
             if okB
                 best := x
-        if best != -1
+        if best != -1 and not candleClaimed(best, false)
             oB = array.get(O_, best)
             cB = array.get(C_, best)
             addOB(best, math.min(oB, cB), math.max(oB, cB), false, k, 4)
@@ -473,15 +523,29 @@ if not skipBar and bar_index != lastProcessedBI
         brkL     = array.get(L_, i) < array.get(L_, i - 1)
         dualAct  = brkH and brkL
 
-        // detect previous dual-action
+        // prevDual: the previous candle confirmed BOTH a swing high and a
+        // swing low in one bar (a dual-action/outside-bar candle). We keep
+        // the (kind, swingIdx) of BOTH of those events -- not just a plain
+        // yes/no flag -- so we can tell a genuine duplicate (this candle
+        // re-confirming the EXACT same point again) apart from a totally
+        // different, legitimate confirmation that just happens to land the
+        // bar right after a dual-action candle (e.g. that same candle's
+        // high separately qualifying as its own swing high later).
         prevDual = false
+        pdKind1 = -1
+        pdIdx1 = -1
+        pdKind2 = -1
+        pdIdx2 = -1
         eCnt = array.size(events)
         if eCnt >= 2
             ev1 = array.get(events, eCnt - 1)
             ev2 = array.get(events, eCnt - 2)
-            prevDual := (ev1.kind != ev2.kind) and (ev1.confirmIdx == ev2.confirmIdx) and (ev1.confirmIdx == i - 1)
-
-        blockPD = prevDual and not dualAct
+            if (ev1.kind != ev2.kind) and (ev1.confirmIdx == ev2.confirmIdx) and (ev1.confirmIdx == i - 1)
+                prevDual := true
+                pdKind1 := ev1.kind
+                pdIdx1 := ev1.swingIdx
+                pdKind2 := ev2.kind
+                pdIdx2 := ev2.swingIdx
 
         evBeforeSwing = array.size(events)  // save for STEP 3
 
@@ -491,7 +555,11 @@ if not skipBar and bar_index != lastProcessedBI
                 peakIdx_ := i
             if brkH
                 lk = array.size(events) > 0 ? array.get(events, array.size(events) - 1).kind : -1
-                if lk != 1 and not blockPD
+                // Would this re-confirm troughIdx_ as a swing LOW when the
+                // dual-action candle already confirmed that exact (kind=1,
+                // idx) pair? Only block that exact duplicate.
+                blockDup = prevDual and not dualAct and ((pdKind1 == 1 and pdIdx1 == troughIdx_) or (pdKind2 == 1 and pdIdx2 == troughIdx_))
+                if lk != 1 and not blockDup
                     addSL(troughIdx_)
                     addEv(i, 1, troughIdx_, array.get(L_, troughIdx_))
                     peakIdx_ := i
@@ -499,7 +567,8 @@ if not skipBar and bar_index != lastProcessedBI
                 troughIdx_ := i
             if brkL
                 lk2 = array.size(events) > 0 ? array.get(events, array.size(events) - 1).kind : -1
-                if lk2 != 0 and not blockPD
+                blockDup2 = prevDual and not dualAct and ((pdKind1 == 0 and pdIdx1 == peakIdx_) or (pdKind2 == 0 and pdIdx2 == peakIdx_))
+                if lk2 != 0 and not blockDup2
                     addSH(peakIdx_)
                     addEv(i, 0, peakIdx_, array.get(H_, peakIdx_))
                     troughIdx_ := i
@@ -509,7 +578,8 @@ if not skipBar and bar_index != lastProcessedBI
                 troughIdx_ := i
             if brkL
                 lk3 = array.size(events) > 0 ? array.get(events, array.size(events) - 1).kind : -1
-                if lk3 != 0 and not blockPD
+                blockDup3 = prevDual and not dualAct and ((pdKind1 == 0 and pdIdx1 == peakIdx_) or (pdKind2 == 0 and pdIdx2 == peakIdx_))
+                if lk3 != 0 and not blockDup3
                     addSH(peakIdx_)
                     addEv(i, 0, peakIdx_, array.get(H_, peakIdx_))
                     troughIdx_ := i
@@ -517,7 +587,8 @@ if not skipBar and bar_index != lastProcessedBI
                 peakIdx_ := i
             if brkH
                 lk4 = array.size(events) > 0 ? array.get(events, array.size(events) - 1).kind : -1
-                if lk4 != 1 and not blockPD
+                blockDup4 = prevDual and not dualAct and ((pdKind1 == 1 and pdIdx1 == troughIdx_) or (pdKind2 == 1 and pdIdx2 == troughIdx_))
+                if lk4 != 1 and not blockDup4
                     addSL(troughIdx_)
                     addEv(i, 1, troughIdx_, array.get(L_, troughIdx_))
                     peakIdx_ := i
@@ -555,34 +626,45 @@ if not skipBar and bar_index != lastProcessedBI
                 else if regime == 2
                     regime := 1
                     addMss(k, swhIdx, swhPrice, true)
-                // IFOB or promote AIFOB
+                // IFOB or promote AIFOB -- but only promote if the pending
+                // AIFOB is still ALIVE (state==4). If it already died (real
+                // impact touched it before this break confirmed), leave that
+                // record alone -- do NOT resurrect it -- and fall through to
+                // a fresh scan so this now-confirmed break gets its own IFOB.
+                pendStillAlive = false
                 if pendBullAifob != -1
+                    pendStillAlive := array.get(obs, pendBullAifob).state == 4
+                if pendStillAlive
                     obRef = array.get(obs, pendBullAifob)
                     obRef.state     := 0
                     obRef.origState := 0
+                    obRef.eligibleK := -1  // was AIFOB's immediate eligibility -- now a real IFOB, must wait for a fresh same-direction swing
                     array.set(obs, pendBullAifob, obRef)
                     pendBullAifob := -1
-                else if lastSWLidx >= 0
+                else
+                    pendBullAifob := -1
+                if not pendStillAlive and lastSWLidx >= 0
                     lo = math.min(math.min(lastSWLidx, k), swhIdx)
                     hi = math.max(math.max(lastSWLidx, k), swhIdx)
                     tryCreateIFVGs(lo, hi, true, k)
                     fvgBullScanUpto := hi
-                    best = -1
-                    for x = lo to hi
-                        cX = array.get(C_, x)
-                        oX = array.get(O_, x)
-                        okB = false
-                        if cX < oX
-                            if best == -1
-                                okB := true
-                            else
-                                okB := cX < array.get(C_, best)
-                        if okB
-                            best := x
-                    if best != -1
-                        oB = array.get(O_, best)
-                        cB = array.get(C_, best)
-                        addOB(best, math.min(oB, cB), math.max(oB, cB), true, k, 0)
+                    if not existsAifobInRange(lo, hi, true)
+                        best = -1
+                        for x = lo to hi
+                            cX = array.get(C_, x)
+                            oX = array.get(O_, x)
+                            okB = false
+                            if cX < oX
+                                if best == -1
+                                    okB := true
+                                else
+                                    okB := cX < array.get(C_, best)
+                            if okB
+                                best := x
+                        if best != -1 and not candleClaimed(best, true)
+                            oB = array.get(O_, best)
+                            cB = array.get(C_, best)
+                            addOB(best, math.min(oB, cB), math.max(oB, cB), true, k, 0)
                 if lastSWLidx >= 0
                     // IRB: opposite reference (swing LOW) is the far swing
                     // relative to the high that just broke. Independent of
@@ -631,33 +713,40 @@ if not skipBar and bar_index != lastProcessedBI
                 else if regime == 1
                     regime := 2
                     addMss(k, swlIdx, swlPrice, false)
+                pendStillAlive2 = false
                 if pendBearAifob != -1
+                    pendStillAlive2 := array.get(obs, pendBearAifob).state == 4
+                if pendStillAlive2
                     obRef2 = array.get(obs, pendBearAifob)
                     obRef2.state     := 0
                     obRef2.origState := 0
+                    obRef2.eligibleK := -1  // was AIFOB's immediate eligibility -- now a real IFOB, must wait for a fresh same-direction swing
                     array.set(obs, pendBearAifob, obRef2)
                     pendBearAifob := -1
-                else if lastSWHidx >= 0
+                else
+                    pendBearAifob := -1
+                if not pendStillAlive2 and lastSWHidx >= 0
                     lo2 = math.min(math.min(lastSWHidx, k), swlIdx)
                     hi2 = math.max(math.max(lastSWHidx, k), swlIdx)
                     tryCreateIFVGs(lo2, hi2, false, k)
                     fvgBearScanUpto := hi2
-                    best2 = -1
-                    for x = lo2 to hi2
-                        cX = array.get(C_, x)
-                        oX = array.get(O_, x)
-                        okB2 = false
-                        if cX > oX
-                            if best2 == -1
-                                okB2 := true
-                            else
-                                okB2 := cX > array.get(C_, best2)
-                        if okB2
-                            best2 := x
-                    if best2 != -1
-                        oB = array.get(O_, best2)
-                        cB = array.get(C_, best2)
-                        addOB(best2, math.min(oB, cB), math.max(oB, cB), false, k, 0)
+                    if not existsAifobInRange(lo2, hi2, false)
+                        best2 = -1
+                        for x = lo2 to hi2
+                            cX = array.get(C_, x)
+                            oX = array.get(O_, x)
+                            okB2 = false
+                            if cX > oX
+                                if best2 == -1
+                                    okB2 := true
+                                else
+                                    okB2 := cX > array.get(C_, best2)
+                            if okB2
+                                best2 := x
+                        if best2 != -1 and not candleClaimed(best2, false)
+                            oB = array.get(O_, best2)
+                            cB = array.get(C_, best2)
+                            addOB(best2, math.min(oB, cB), math.max(oB, cB), false, k, 0)
                 if lastSWHidx >= 0
                     addRBFromSwing(lastSWHidx, true, k, 0)
                 haveSWL := false
@@ -671,33 +760,40 @@ if not skipBar and bar_index != lastProcessedBI
                 else if regime == 1
                     regime := 2
                     addMss(k, swlIdx, swlPrice, false)
+                pendStillAlive3 = false
                 if pendBearAifob != -1
+                    pendStillAlive3 := array.get(obs, pendBearAifob).state == 4
+                if pendStillAlive3
                     obRef3 = array.get(obs, pendBearAifob)
                     obRef3.state     := 0
                     obRef3.origState := 0
+                    obRef3.eligibleK := -1  // was AIFOB's immediate eligibility -- now a real IFOB, must wait for a fresh same-direction swing
                     array.set(obs, pendBearAifob, obRef3)
                     pendBearAifob := -1
-                else if lastSWHidx >= 0
+                else
+                    pendBearAifob := -1
+                if not pendStillAlive3 and lastSWHidx >= 0
                     lo3 = math.min(math.min(lastSWHidx, k), swlIdx)
                     hi3 = math.max(math.max(lastSWHidx, k), swlIdx)
                     tryCreateIFVGs(lo3, hi3, false, k)
                     fvgBearScanUpto := hi3
-                    best3 = -1
-                    for x = lo3 to hi3
-                        cX = array.get(C_, x)
-                        oX = array.get(O_, x)
-                        okB3 = false
-                        if cX > oX
-                            if best3 == -1
-                                okB3 := true
-                            else
-                                okB3 := cX > array.get(C_, best3)
-                        if okB3
-                            best3 := x
-                    if best3 != -1
-                        oB = array.get(O_, best3)
-                        cB = array.get(C_, best3)
-                        addOB(best3, math.min(oB, cB), math.max(oB, cB), false, k, 0)
+                    if not existsAifobInRange(lo3, hi3, false)
+                        best3 = -1
+                        for x = lo3 to hi3
+                            cX = array.get(C_, x)
+                            oX = array.get(O_, x)
+                            okB3 = false
+                            if cX > oX
+                                if best3 == -1
+                                    okB3 := true
+                                else
+                                    okB3 := cX > array.get(C_, best3)
+                            if okB3
+                                best3 := x
+                        if best3 != -1 and not candleClaimed(best3, false)
+                            oB = array.get(O_, best3)
+                            cB = array.get(C_, best3)
+                            addOB(best3, math.min(oB, cB), math.max(oB, cB), false, k, 0)
                 if lastSWHidx >= 0
                     addRBFromSwing(lastSWHidx, true, k, 0)
                 haveSWL := false
@@ -742,33 +838,40 @@ if not skipBar and bar_index != lastProcessedBI
                 else if regime == 2
                     regime := 1
                     addMss(k, swhIdx, swhPrice, true)
+                pendStillAlive4 = false
                 if pendBullAifob != -1
+                    pendStillAlive4 := array.get(obs, pendBullAifob).state == 4
+                if pendStillAlive4
                     obRef4 = array.get(obs, pendBullAifob)
                     obRef4.state     := 0
                     obRef4.origState := 0
+                    obRef4.eligibleK := -1  // was AIFOB's immediate eligibility -- now a real IFOB, must wait for a fresh same-direction swing
                     array.set(obs, pendBullAifob, obRef4)
                     pendBullAifob := -1
-                else if lastSWLidx >= 0
+                else
+                    pendBullAifob := -1
+                if not pendStillAlive4 and lastSWLidx >= 0
                     lo4 = math.min(math.min(lastSWLidx, k), swhIdx)
                     hi4 = math.max(math.max(lastSWLidx, k), swhIdx)
                     tryCreateIFVGs(lo4, hi4, true, k)
                     fvgBullScanUpto := hi4
-                    best4 = -1
-                    for x = lo4 to hi4
-                        cX = array.get(C_, x)
-                        oX = array.get(O_, x)
-                        okB4 = false
-                        if cX < oX
-                            if best4 == -1
-                                okB4 := true
-                            else
-                                okB4 := cX < array.get(C_, best4)
-                        if okB4
-                            best4 := x
-                    if best4 != -1
-                        oB = array.get(O_, best4)
-                        cB = array.get(C_, best4)
-                        addOB(best4, math.min(oB, cB), math.max(oB, cB), true, k, 0)
+                    if not existsAifobInRange(lo4, hi4, true)
+                        best4 = -1
+                        for x = lo4 to hi4
+                            cX = array.get(C_, x)
+                            oX = array.get(O_, x)
+                            okB4 = false
+                            if cX < oX
+                                if best4 == -1
+                                    okB4 := true
+                                else
+                                    okB4 := cX < array.get(C_, best4)
+                            if okB4
+                                best4 := x
+                        if best4 != -1 and not candleClaimed(best4, true)
+                            oB = array.get(O_, best4)
+                            cB = array.get(C_, best4)
+                            addOB(best4, math.min(oB, cB), math.max(oB, cB), true, k, 0)
                 if lastSWLidx >= 0
                     addRBFromSwing(lastSWLidx, false, k, 0)
                 haveSWH := false
@@ -814,7 +917,7 @@ if not skipBar and bar_index != lastProcessedBI
                     if z < 0 or z >= obSz
                         continue
                     obZ = array.get(obs, z)
-                    if obZ.bullish and obZ.state == 0 and obZ.eligibleK == -1 and k > obZ.triggerK
+                    if obZ.bullish and (obZ.state == 0 or obZ.state == 4) and obZ.eligibleK == -1 and k > obZ.triggerK
                         obZ.eligibleK := k
                         array.set(obs, z, obZ)
                 fvgSz = array.size(fvgs)
@@ -844,7 +947,7 @@ if not skipBar and bar_index != lastProcessedBI
                     if z < 0 or z >= obSz2
                         continue
                     obZ2 = array.get(obs, z)
-                    if not obZ2.bullish and obZ2.state == 0 and obZ2.eligibleK == -1 and k > obZ2.triggerK
+                    if not obZ2.bullish and (obZ2.state == 0 or obZ2.state == 4) and obZ2.eligibleK == -1 and k > obZ2.triggerK
                         obZ2.eligibleK := k
                         array.set(obs, z, obZ2)
                 fvgSz2 = array.size(fvgs)
@@ -1172,14 +1275,9 @@ if barstate.islast
 
         // Color
         dSt = obD.state == 3 ? obD.preSpentState : obD.state
-        // AIFOB display disabled by request -- creation/promotion/eligibility/
-        // lifecycle logic above is untouched (a pending AIFOB still tracks its
-        // armed swing and still promotes to a real IFOB, state 0, the same as
-        // before); this only skips drawing a box for zones still classified
-        // as AIFOB (dSt==4) whether live or SPENT-while-still-AIFOB. Once a
-        // zone promotes to IFOB it draws normally again, unaffected.
-        if dSt == 4
-            continue
+        // AIFOB display RE-ENABLED (matches ICT_OB_Diagnostic.pine) -- we're
+        // actively verifying its creation/promotion logic now, need to see
+        // it drawn. Orange = still-pending AIFOB (dSt==4, not yet promoted).
         // OOB display disabled by request on 5m/1h/4h -- never used at those
         // timeframes per the trading cascade (docs/trading_logic.md), so hide
         // the clutter there. Stranding detection/lifecycle above (a zone can
