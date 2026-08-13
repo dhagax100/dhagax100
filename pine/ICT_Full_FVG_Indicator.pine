@@ -552,9 +552,19 @@ if not skipBar and bar_index != lastProcessedBI
                     array.set(fvgs, zf3, fvgZ3)
                     becameSpent := true
 
-            // CLOSE-THROUGH INVALIDATION -- applies to any live zone (IFVG
-            // or AFVG), not just IFVG.
-            if not becameSpent and (fvgZ3.state == 0 or fvgZ3.state == 1) and fvgZ3.eligibleK != -1 and k >= fvgZ3.eligibleK
+            // CLOSE-THROUGH INVALIDATION -- IFVG only (origin 0). An IFVG
+            // gap is left behind WHILE price is still moving in the gap's
+            // own direction, so price starts out on the "correct" side of
+            // it -- a close back through the far edge later means the
+            // continuation genuinely failed, a real signal. An AFVG gap
+            // (origin 1) is the opposite: price has already moved AWAY
+            // from it by design, waiting to come back, so it starts out
+            // already on the "wrong" side -- this same check would fire
+            // the instant it becomes eligible, every time, regardless of
+            // whether price ever comes back. AFVG's "left behind for
+            // good" signal is STRANDING below (a genuine new opposing
+            // swing), not this.
+            if not becameSpent and fvgZ3.origin != 1 and fvgZ3.state == 0 and fvgZ3.eligibleK != -1 and k >= fvgZ3.eligibleK
                 cK = array.get(C_, k)
                 closedThrough = bullf ? cK < zbf : cK > ztf
                 if closedThrough
