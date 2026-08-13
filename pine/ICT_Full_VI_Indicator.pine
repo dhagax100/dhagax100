@@ -30,6 +30,13 @@
 //   regardless of what defines the zone's own boundary. Flagged for the
 //   user to confirm this is what they want; easy to switch to close/open
 //   if not.
+// - SAME-CANDLE FILL GUARD: candle2 (the one that opens the gap) is still
+//   a live candle with its own close. If candle2's own close ends up back
+//   at or through candle1's close before candle2 even finishes forming,
+//   the gap got round-tripped within the same candle that created it --
+//   disqualified from being marked at all, in both directions, not
+//   created-then-marked-filled. Confirmed with the user; applied at all
+//   three creation sites (tryCreateIVIs, tryCreateAVIs, STEP 1b).
 //
 // Lessons from the FVG/RB build applied here from day one, instead of
 // found later the hard way:
@@ -195,17 +202,28 @@ addVI(int leftIdx, float zb, float zt, bool bull, int tK, int st) =>
 // at each break-check site, using the same lo/hi/direction/triggerK an
 // IFOB-equivalent break would use. Shape-based: the "bullish" param IS the
 // raw gap shape here (matches IFVG's own convention), not hunt intent.
+//
+// SAME-CANDLE FILL GUARD: candle2 is the one that OPENS the gap, but it's
+// still a live candle with its own high/low/close -- if candle2's own
+// close ends up back at or through candle1's close before candle2 even
+// finishes, that means candle2's own price action already round-tripped
+// the entire gap within the same candle that created it. That's not a
+// surviving imbalance -- it's disqualified from ever being marked at
+// all, not created-then-filled. Confirmed with the user (both directions
+// mirror this: rising gap needs candle2's close to hold ABOVE candle1's
+// close; falling gap needs it to hold BELOW).
 tryCreateIVIs(int lo, int hi, bool bullish, int triggerK) =>
     if hi >= lo + 1
         for c2 = lo + 1 to hi
             c1 = c2 - 1
             cl1 = array.get(C_, c1)
             op2 = array.get(O_, c2)
+            cl2 = array.get(C_, c2)
             if bullish
-                if cl1 < op2
+                if cl1 < op2 and cl2 > cl1
                     addVI(c1, cl1, op2, true, triggerK, 0)
             else
-                if cl1 > op2
+                if cl1 > op2 and cl2 < cl1
                     addVI(c1, op2, cl1, false, triggerK, 0)
 
 // Scans [lo,hi] -- the SAME range an AOB/AFVG is picked/scanned from --
@@ -220,20 +238,23 @@ tryCreateIVIs(int lo, int hi, bool bullish, int triggerK) =>
 // for why wicks, not close/open, even though the zone itself is
 // close/open) -- either edge candle's wick already reaching the guard
 // price disqualifies the gap, same straddle logic as AFVG's guard.
+// Same same-candle fill guard as tryCreateIVIs above -- see that comment
+// for the full reasoning.
 tryCreateAVIs(int lo, int hi, bool bullish, int triggerK, float guardPrice) =>
     if hi >= lo + 1
         for c2 = lo + 1 to hi
             c1 = c2 - 1
             cl1 = array.get(C_, c1)
             op2 = array.get(O_, c2)
+            cl2 = array.get(C_, c2)
             if bullish
-                if cl1 > op2
+                if cl1 > op2 and cl2 < cl1
                     l1 = array.get(L_, c1)
                     l2 = array.get(L_, c2)
                     if l1 > guardPrice and l2 > guardPrice
                         addVI(c1, op2, cl1, true, triggerK, 1)
             else
-                if cl1 < op2
+                if cl1 < op2 and cl2 > cl1
                     h1 = array.get(H_, c1)
                     h2 = array.get(H_, c2)
                     if h1 < guardPrice and h2 < guardPrice
@@ -490,16 +511,19 @@ if not skipBar and bar_index != lastProcessedBI
         // window every bar for as long as the current regime persists, not
         // just once at the exceedance moment. 2-candle version of FVG's
         // STEP 1b (close[k-1] vs open[k] instead of high[k-2] vs low[k]).
+        // Same same-candle fill guard as tryCreateIVIs/tryCreateAVIs above.
         if regime == 1 and k >= 1 and k > viBullScanUpto
             cl1c = array.get(C_, k - 1)
             op2c = array.get(O_, k)
-            if cl1c < op2c
+            cl2c = array.get(C_, k)
+            if cl1c < op2c and cl2c > cl1c
                 addVI(k - 1, cl1c, op2c, true, k, 0)
             viBullScanUpto := k
         if regime == 2 and k >= 1 and k > viBearScanUpto
             cl1d = array.get(C_, k - 1)
             op2d = array.get(O_, k)
-            if cl1d > op2d
+            cl2d = array.get(C_, k)
+            if cl1d > op2d and cl2d < cl1d
                 addVI(k - 1, op2d, cl1d, false, k, 0)
             viBearScanUpto := k
 
