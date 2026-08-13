@@ -129,6 +129,7 @@ namespace cAlgo.Robots.ICT_S1
 
         private void DrainWeeklySide()
         {
+            _weeklyTracker.Update();
             var poiEvents = _weeklyTracker.DrainEvents();
             foreach (var ev in poiEvents)
             {
@@ -143,6 +144,7 @@ namespace cAlgo.Robots.ICT_S1
 
         private void DrainH4Side()
         {
+            _h4Tracker.Update();
             var poiEvents = _h4Tracker.DrainEvents();
             foreach (var ev in poiEvents)
             {
