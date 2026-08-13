@@ -44,7 +44,7 @@ namespace cAlgo.Robots.ICT_S1
         private const string EventLogHeader = "Timestamp,Symbol,Timeframe,EventType,Direction,WeeklyOpportunityID,PoiClusterID,POIID,H4SetupID,M5AttemptID,TradeID,Price,POITop,POIBottom,PreviousState,NewState,Reason,Notes";
 
         private const string TradeSummaryHeader = "StrategyVersion,Symbol,TradeID,PositionID,WeeklyOpportunityID,PoiClusterID,H4SetupID,M5AttemptID,AttemptNumber," +
-            "TradeDirection,WeeklyOpportunityDirection," +
+            "TradeDirection,WeeklyOpportunityDirection,WeeklyPOITop,WeeklyPOIBottom," +
             "H4Route,H4ProtectedSwingType,H4ProtectedSwingPrice,H4ProtectedSwingTime,WeeklyRetouchNumber," +
             "M5EntrySwingType,M5EntrySwingPrice,M5EntrySwingTime,M5StopSwingType,M5StopSwingPrice,M5StopSwingTime," +
             "PendingOrderCreatedTime,PendingOrderModificationCount,EntryTime,RequestedEntryPrice,ActualFillPrice," +
@@ -102,18 +102,29 @@ namespace cAlgo.Robots.ICT_S1
                 "", "", "", "", h.Status.ToString(), ev.Note, "");
         }
 
-        public void LogOrderEvent(M5Attempt attempt, string eventType, string note)
+        // `time` is the actual simulated event time (Server.Time from the
+        // caller) -- not DateTime.UtcNow (audit section 32).
+        public void LogOrderEvent(M5Attempt attempt, string eventType, string note, DateTime time)
         {
-            WriteEventRow(DateTime.UtcNow, "M5", eventType, attempt.Direction.ToString(),
+            WriteEventRow(time, "M5", eventType, attempt.Direction.ToString(),
                 "", "", "", attempt.H4SetupId, attempt.M5AttemptId, "",
                 attempt.RequestedEntryPrice, "", "", "", attempt.Status.ToString(), note, "");
         }
 
-        public void LogManualIntervention(M5Attempt attempt, string detail)
+        public void LogManualIntervention(M5Attempt attempt, string detail, DateTime time)
         {
-            WriteEventRow(DateTime.UtcNow, "M5", "MANUAL_INTERVENTION_DETECTED", attempt.Direction.ToString(),
+            WriteEventRow(time, "M5", "MANUAL_INTERVENTION_DETECTED", attempt.Direction.ToString(),
                 "", "", "", attempt.H4SetupId, attempt.M5AttemptId, "",
                 "", "", "", "", attempt.Status.ToString(), detail, "");
+        }
+
+        // Audit section 28 -- proves the EA is filtering correctly, not
+        // just showing what it accepted. One row per rejected candidate.
+        public void LogRejection(RejectionEvent rej)
+        {
+            WriteEventRow(rej.Time, "H4", rej.Code.ToString(), rej.Direction.ToString(),
+                "", "", rej.PoiId, "", "", "",
+                "", "", "", "", "REJECTED", rej.Note, "");
         }
 
         private void WriteEventRow(DateTime time, string timeframe, string eventType, string direction,
@@ -134,11 +145,27 @@ namespace cAlgo.Robots.ICT_S1
         // ---------------- Trade Summary ----------------
         public void LogTradeClosed(M5Attempt attempt, H4Setup setup, WeeklyOpportunity weekly)
         {
+            // Weekly zone bounding box across all supporting cluster members
+            // -- lets the trade be checked directly against the chart
+            // without needing to cross-reference the POI event log.
+            string weeklyTop = "", weeklyBottom = "";
+            if (weekly?.SupportingCluster?.Members != null && weekly.SupportingCluster.Members.Count > 0)
+            {
+                double top = double.MinValue, bottom = double.MaxValue;
+                foreach (var m in weekly.SupportingCluster.Members)
+                {
+                    if (m.Zt > top) top = m.Zt;
+                    if (m.Zb < bottom) bottom = m.Zb;
+                }
+                weeklyTop = top.ToString();
+                weeklyBottom = bottom.ToString();
+            }
+
             var row = string.Join(",", new[]
             {
                 Csv(StrategyVersion), Csv(SymbolName), Csv(IdGenerator.NextTradeId()), Csv(""),
                 Csv(weekly?.WeeklyOpportunityId), Csv(setup?.SupportingCluster?.PoiClusterId), Csv(setup?.H4SetupId), Csv(attempt.M5AttemptId), Csv(attempt.AttemptNumber.ToString()),
-                Csv(attempt.Direction.ToString()), Csv(weekly?.Direction.ToString()),
+                Csv(attempt.Direction.ToString()), Csv(weekly?.Direction.ToString()), Csv(weeklyTop), Csv(weeklyBottom),
                 Csv(setup?.Route.ToString()), Csv(setup?.ProtectedSwingType.ToString()), Csv(setup?.ProtectedSwingPrice.ToString()), Csv(setup?.ProtectedSwingTime.ToString("O")), Csv(setup?.WeeklyRetouchNumber.ToString()),
                 Csv(attempt.EntrySwingType.ToString()), Csv(attempt.EntrySwingPrice.ToString()), Csv(attempt.EntrySwingTime.ToString("O")), Csv(attempt.StopSwingType.ToString()), Csv(attempt.StopSwingPrice.ToString()), Csv(attempt.StopSwingTime.ToString("O")),
                 Csv(attempt.PendingOrderCreatedTime?.ToString("O")), Csv(attempt.PendingOrderModificationCount.ToString()), Csv(attempt.EntryTime?.ToString("O")), Csv(attempt.RequestedEntryPrice.ToString()), Csv(attempt.ActualFillPrice?.ToString()),

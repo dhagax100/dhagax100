@@ -164,6 +164,7 @@ namespace cAlgo.Robots.ICT_S1
         public DateTime? RelevantReactionSwingConfirmationTime;
 
         public string InvalidationReason;
+        public DateTime? InvalidationTime;
         public string RetirementReason;
         public DateTime? RetirementTime;
 
@@ -222,10 +223,37 @@ namespace cAlgo.Robots.ICT_S1
         // SupportingCluster, which supports the ORIGINAL direction.
         public PoiCluster ContestingCluster;
 
+        // Explicit reverse link (Finding 9 fix): set on THIS opportunity
+        // when it was itself created as a counter-direction POI's own
+        // narrative, pointing at the opposite-direction opportunity it is
+        // contesting for control. Established once, at creation time, from
+        // a real geometric relationship (zone overlap) -- never inferred
+        // later by recency. Control transitions on retirement look this up
+        // directly instead of guessing "most recently activated opposite."
+        public string ContestingOfWeeklyOpportunityId;
+
         public DateTime? TerminationTime;
         public string TerminationReason;
 
         public int RetouchCounter = 0; // WeeklyRetouchNumber source
+    }
+
+    public enum RejectionCode
+    {
+        H4_POI_REJECTED_NO_WEEKLY_PARENT,
+        H4_POI_REJECTED_NARRATIVE_NOT_IN_CONTROL,
+        H4_POI_REJECTED_NO_PROTECTED_SWING
+    }
+
+    // Suppression/rejection journaling (audit section 28) -- proves the EA
+    // is filtering correctly, not just showing what it accepted.
+    public class RejectionEvent
+    {
+        public RejectionCode Code;
+        public DateTime Time;
+        public Direction Direction;
+        public string PoiId;
+        public string Note;
     }
 
     public class H4Setup

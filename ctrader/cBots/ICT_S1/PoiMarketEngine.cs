@@ -173,13 +173,47 @@ namespace cAlgo.Robots.ICT_S1
         // Call frequently (e.g. every OnTick). Internally detects and
         // processes any newly-closed bars on this engine's own Bars series
         // since the last call -- each engine instance tracks its own
-        // progress independently, so the caller doesn't need per-timeframe
-        // event wiring.
+        // progress independently.
+        //
+        // CRITICAL 1 FIX (audit 2026-08-13): this is now built on
+        // ProcessOneBar()/PeekNextBarTime() rather than a private bar loop,
+        // so the SAME stepwise primitives are used both here (simple
+        // catch-up, fine for live ticking where cross-timeframe ordering at
+        // sub-bar granularity rarely matters) and in the Robot's
+        // chronological multi-timeframe scheduler (mandatory during
+        // history backfill, where processing one timeframe's entire history
+        // before another would let e.g. an H4 bar see completed FUTURE
+        // Weekly state -- a real look-ahead bug the audit caught).
         public void Update()
         {
-            int closedUpTo = _bars.Count - 2; // last fully-closed bar's index
-            for (int idx = _lastProcessedIndex + 1; idx <= closedUpTo; idx++)
-                ProcessBar(idx);
+            while (ProcessOneBar()) { }
+        }
+
+        // Returns the open time of the NEXT bar that would be processed, or
+        // null if none is available yet (nothing new closed). Lets a caller
+        // decide, across several PoiMarketEngine instances, which one's next
+        // bar is chronologically earliest -- the basis of the causality fix.
+        public DateTime? PeekNextBarTime()
+        {
+            int next = _lastProcessedIndex + 1;
+            int closedUpTo = _bars.Count - 2;
+            if (next > closedUpTo) return null;
+            return _bars.OpenTimes[next];
+        }
+
+        // Processes exactly one more bar if one is available (a fully
+        // closed bar this engine hasn't processed yet). Returns whether it
+        // advanced. This is the single-step primitive the chronological
+        // scheduler drives one timeframe at a time, in time order, across
+        // Weekly/H4/M5 -- never letting one timeframe run ahead of another
+        // in wall-clock/market terms.
+        public bool ProcessOneBar()
+        {
+            int next = _lastProcessedIndex + 1;
+            int closedUpTo = _bars.Count - 2;
+            if (next > closedUpTo) return false;
+            ProcessBar(next);
+            return true;
         }
 
         private void ProcessBar(int srcIndex)

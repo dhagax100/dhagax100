@@ -247,17 +247,28 @@ namespace cAlgo.Robots.ICT_S1
             {
                 if (s.LifecycleState != S1PoiLifecycleState.ImpactedUnresolved) continue;
 
+                // CRITICAL invariant: no lifecycle event may be generated from
+                // a bar at or before this snapshot's own first qualifying
+                // impact. A single Update() call can process many bars at
+                // once (e.g. OnStart backfill) for snapshots frozen partway
+                // through that range -- without this guard, a snapshot frozen
+                // at bar 50 would still get checked against bars 0-49,
+                // "retouching" or invalidating on history that predates its
+                // own existence. `k != FirstImpactBarIndex` alone (the old
+                // check) let k < FirstImpactBarIndex straight through.
+                if (k <= s.FirstImpactBarIndex) continue;
+
                 bool bull = s.Direction == Direction.Buy;
 
                 // --- Retouch (informational; does not itself change state) ---
-                if (k != s.FirstImpactBarIndex && hK >= s.Zb && lK <= s.Zt)
+                if (hK >= s.Zb && lK <= s.Zt)
                 {
                     s.RetouchCount++;
                     _eventQueue.Enqueue(new PoiLifecycleEvent { Type = PoiEventType.Retouch, Snapshot = s, Time = t, Note = $"Retouch #{s.RetouchCount}" });
                 }
 
                 // --- Invalidation (family-specific) ---
-                bool invalidated = CheckInvalidation(s, k, bull, cK);
+                bool invalidated = CheckInvalidation(s, k, bull, cK, t);
                 if (invalidated) continue;
 
                 // --- Retirement (reaction swing confirmed) ---
@@ -265,7 +276,7 @@ namespace cAlgo.Robots.ICT_S1
             }
         }
 
-        private bool CheckInvalidation(S1PoiSnapshot s, int k, bool bull, double cK)
+        private bool CheckInvalidation(S1PoiSnapshot s, int k, bool bull, double cK, DateTime t)
         {
             // CLOSE-THROUGH -- FVG/VI, continuation-type only (OriginBucket != 1).
             if ((s.Family == PoiFamily.FVG || s.Family == PoiFamily.VI) && s.OriginBucket != 1)
@@ -273,7 +284,7 @@ namespace cAlgo.Robots.ICT_S1
                 bool closedThrough = bull ? cK < s.Zb : cK > s.Zt;
                 if (closedThrough)
                 {
-                    Invalidate(s, "close-through");
+                    Invalidate(s, "close-through", t);
                     return true;
                 }
             }
@@ -303,7 +314,7 @@ namespace cAlgo.Robots.ICT_S1
                 }
                 if (stranded)
                 {
-                    Invalidate(s, "structural stranding");
+                    Invalidate(s, "structural stranding", t);
                     return true;
                 }
             }
@@ -335,12 +346,13 @@ namespace cAlgo.Robots.ICT_S1
             }
         }
 
-        private void Invalidate(S1PoiSnapshot s, string reason)
+        private void Invalidate(S1PoiSnapshot s, string reason, DateTime t)
         {
             s.LifecycleState = S1PoiLifecycleState.Invalidated;
             s.InvalidationReason = reason;
+            s.InvalidationTime = t;
             _unresolved.Remove(s);
-            _eventQueue.Enqueue(new PoiLifecycleEvent { Type = PoiEventType.Invalidated, Snapshot = s, Time = _engine.BT[_engine.LastProcessedIndex], Note = reason });
+            _eventQueue.Enqueue(new PoiLifecycleEvent { Type = PoiEventType.Invalidated, Snapshot = s, Time = t, Note = reason });
         }
     }
 }

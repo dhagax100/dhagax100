@@ -1,36 +1,42 @@
 // ICT_S1 — H4SetupEngine. Spec: docs/s1_ea_specification.md section 7.
+// Repaired per the 2026-08-13 audit.
 //
-// TWO IMPLEMENTATION CHOICES DOCUMENTED HERE (mechanical derivations from
-// confirmed rules, not new strategy decisions -- flagged per the "explain
-// the derivation" instruction rather than re-asking):
+// CRITICAL 2 FIX — Weekly->H4 authorization was direction-only ("any active
+// same-direction Weekly opportunity"), with no temporal or control
+// constraint. That is the confirmed root cause of the 47-trade overtrading
+// found in the first backtest: an H4 POI anywhere on the chart, unrelated
+// to any real reaction near a specific Weekly zone, could still authorize
+// a trade as long as SOME same-direction Weekly opportunity happened to be
+// open. Fixed to require:
+//   1. Temporal validity: the Weekly opportunity must have been ACTIVE at
+//      or before this H4 POI's own impact time (defensive check per audit
+//      section 6, on top of the chronological-processing fix in the main
+//      Robot which should already guarantee this holds by construction).
+//   2. Control gating (Critical 3): the Weekly opportunity may only
+//      authorize a NEW H4Setup while its own Control currently matches its
+//      own base Direction -- a narrative that has lost control (Neutral or
+//      contested away) does not get to open fresh H4 activity, even though
+//      it's still "Active" as an object.
 //
-// 1. Protected-swing reconstruction. The confirmed rule is "the SAME swing
-//    reference the POI itself was created from internally." The raw engine
-//    (PoiMarketEngine) tracks exactly one 'current' swing low and one
-//    'current' swing high at any moment (_swlIdx/_swhIdx, _lastSWLidx/
-//    _lastSWHidx) -- every POI-creation function reads one of those same
-//    underlying values, just via different local parameter names
-//    (aobSWHi, pLastSWLi, swlIdx, etc. all resolve to the same tracked
-//    state at that instant). So instead of threading a new field through
-//    every Add*/Try* call site, this reconstructs it: for a BUY H4 POI,
-//    scan the H4 engine's own Events for the swing LOW with the latest
-//    ConfirmIdx at or before the POI's TriggerK bar -- that IS the swing
-//    reference in effect at creation time, by construction. Mirrored for
-//    SELL using swing HIGH.
+// BLOCKED STRATEGY DECISION (audit section 63 -- flagging rather than
+// inventing): when MULTIPLE same-direction Weekly opportunities are both
+// temporally valid AND currently in their own control at the same H4
+// impact moment, which one does that H4 POI actually belong to? Neither
+// the Pine source nor the S1 spec gives a geometric-proximity rule (a
+// price-distance threshold between the H4 POI and each Weekly zone would
+// be new, invented strategy logic). Until the strategy owner answers this,
+// the tie-break used below is "most recently activated among the temporally
+// valid, currently-in-control candidates" -- a documented, narrow
+// implementation choice, not a proven rule. This is the ONE remaining
+// authorization ambiguity; everything else in Critical 2 is a real fix.
 //
-// 2. H4Setup-per-WeeklyOpportunity exclusivity. The confirmed answer for
-//    simultaneously-valid H4 POIs was "cluster into one, look for one
-//    trade" -- this is applied continuously over time too: a Weekly
-//    opportunity has at most ONE live (non-terminated) H4Setup at a time;
-//    a fresh H4 POI impact either joins that live setup's cluster, or, if
-//    none is live, starts a new one (this is what "Retouch #1 -> H4Setup
-//    H001, Retouch #2 -> H4Setup H002" in the spec's retouch example
-//    actually requires -- H002 only starts once H001 has terminated).
+// FINDING 10 FIX — protected-swing reconstruction no longer falls back to
+// the POI's own Zb/Zt when no real swing reference is found. A wrong
+// protected swing can silently create false re-entries, so this now fails
+// safely: reject the setup, journal why, do not arm anything.
 //
-// Route derivation (fully mechanical, no ambiguity): IFOB/IFVG/IRB/IVI ->
-// RouteA_Confirmed; AOB/AFVG/ARB/AVI/AIFOB/AIRB -> RouteB_Aggressive
-// (AIFOB/AIRB are still-pending at the MID-ARM moment, same timing as the
-// Aggressive family, hence Route B if impacted before promotion).
+// FINDING 11 FIX — every created H4Setup is now added to
+// WeeklyOpportunity.H4Setups (was never populated before).
 
 using System;
 using System.Collections.Generic;
@@ -63,6 +69,7 @@ namespace cAlgo.Robots.ICT_S1
 
         public readonly List<H4Setup> Setups = new List<H4Setup>();
         private readonly Queue<H4SetupEvent> _eventQueue = new Queue<H4SetupEvent>();
+        private readonly Queue<RejectionEvent> _rejectionQueue = new Queue<RejectionEvent>();
 
         public H4SetupEngine(PoiMarketEngine h4Engine, PoiLifecycleTracker h4Tracker, WeeklyOpportunityEngine weeklyEngine, double pipSize)
         {
@@ -76,6 +83,13 @@ namespace cAlgo.Robots.ICT_S1
         {
             var list = new List<H4SetupEvent>(_eventQueue.Count);
             while (_eventQueue.Count > 0) list.Add(_eventQueue.Dequeue());
+            return list;
+        }
+
+        public List<RejectionEvent> DrainRejections()
+        {
+            var list = new List<RejectionEvent>(_rejectionQueue.Count);
+            while (_rejectionQueue.Count > 0) list.Add(_rejectionQueue.Dequeue());
             return list;
         }
 
@@ -102,9 +116,11 @@ namespace cAlgo.Robots.ICT_S1
             }
         }
 
-        // Call every tick with current quotes -- spec section 7/9: any live
-        // tick >=0.5 pip beyond the protected level, checked immediately.
-        public void CheckProtectedSwingViolations(double bid, double ask, double violationPips = 0.5)
+        // Call every tick with current quotes and the ACTUAL current time
+        // (Server.Time during backtest -- NOT DateTime.UtcNow, see audit
+        // section 32) -- spec section 7/9: any live tick >=0.5 pip beyond
+        // the protected level, checked immediately.
+        public void CheckProtectedSwingViolations(double bid, double ask, DateTime now, double violationPips = 0.5)
         {
             double violationDistance = violationPips * _pipSize;
             foreach (var setup in Setups)
@@ -117,15 +133,23 @@ namespace cAlgo.Robots.ICT_S1
                     violated = ask >= setup.ProtectedSwingPrice + violationDistance;
 
                 if (violated)
-                    Terminate(setup, "Protected swing violated (≥0.5 pip)", DateTime.UtcNow);
+                    Terminate(setup, "Protected swing violated (≥0.5 pip)", now);
             }
         }
 
         private void HandleNewImpact(PoiLifecycleEvent ev)
         {
             var snap = ev.Snapshot;
-            var weekly = FindArmingWeeklyOpportunity(snap.Direction);
-            if (weekly == null) return; // no valid Weekly opportunity authorizes this direction -- section 6/28
+
+            var (weekly, anyTemporallyValidCandidate) = FindArmingWeeklyOpportunity(snap.Direction, ev.Time);
+            if (weekly == null)
+            {
+                var code = anyTemporallyValidCandidate
+                    ? RejectionCode.H4_POI_REJECTED_NARRATIVE_NOT_IN_CONTROL
+                    : RejectionCode.H4_POI_REJECTED_NO_WEEKLY_PARENT;
+                _rejectionQueue.Enqueue(new RejectionEvent { Code = code, Time = ev.Time, Direction = snap.Direction, PoiId = snap.S1PoiId, Note = $"{snap.TypeAtActivation} impact at {ev.Time:O} has no authorizing Weekly narrative" });
+                return;
+            }
 
             snap.WeeklyOpportunityId = weekly.WeeklyOpportunityId;
 
@@ -138,12 +162,18 @@ namespace cAlgo.Robots.ICT_S1
                 return;
             }
 
+            var route = IsInFavorType(snap.TypeAtActivation) ? H4Route.RouteA_Confirmed : H4Route.RouteB_Aggressive;
+            var protectedSwing = ReconstructProtectedSwing(snap);
+            if (protectedSwing == null)
+            {
+                // Finding 10: fail safely, no fake fallback -- do not arm.
+                _rejectionQueue.Enqueue(new RejectionEvent { Code = RejectionCode.H4_POI_REJECTED_NO_PROTECTED_SWING, Time = ev.Time, Direction = snap.Direction, PoiId = snap.S1PoiId, Note = $"No real swing reference found before {snap.TypeAtActivation}'s trigger bar -- refusing to arm with a substituted level" });
+                return;
+            }
+
             var cluster = new PoiCluster { PoiClusterId = IdGenerator.NextPoiClusterId(), Direction = snap.Direction };
             cluster.Members.Add(snap);
             snap.PoiClusterId = cluster.PoiClusterId;
-
-            var route = IsInFavorType(snap.TypeAtActivation) ? H4Route.RouteA_Confirmed : H4Route.RouteB_Aggressive;
-            var (swingType, swingPrice, swingTime) = ReconstructProtectedSwing(snap);
 
             var setup = new H4Setup
             {
@@ -153,13 +183,14 @@ namespace cAlgo.Robots.ICT_S1
                 Route = route,
                 Status = H4SetupStatus.Impacted,
                 SupportingCluster = cluster,
-                ProtectedSwingType = swingType,
-                ProtectedSwingPrice = swingPrice,
-                ProtectedSwingTime = swingTime,
+                ProtectedSwingType = protectedSwing.Value.Item1,
+                ProtectedSwingPrice = protectedSwing.Value.Item2,
+                ProtectedSwingTime = protectedSwing.Value.Item3,
                 CreatedTime = ev.Time,
                 WeeklyRetouchNumber = weekly.RetouchCounter
             };
             Setups.Add(setup);
+            weekly.H4Setups.Add(setup); // Finding 11 fix
             _eventQueue.Enqueue(new H4SetupEvent { Type = H4SetupEventType.Impacted, Setup = setup, TriggeringPoi = snap, Time = ev.Time, Note = $"{route} via {snap.TypeAtActivation}" });
         }
 
@@ -167,8 +198,9 @@ namespace cAlgo.Robots.ICT_S1
             t == PoiTypeLabel.IFOB || t == PoiTypeLabel.IFVG || t == PoiTypeLabel.IRB || t == PoiTypeLabel.IVI;
 
         // Reconstruct the swing reference in effect at this POI's TriggerK
-        // -- see file header note 1.
-        private (SwingType, double, DateTime) ReconstructProtectedSwing(S1PoiSnapshot snap)
+        // -- see class header note 1 (H4SetupEngine's original derivation).
+        // Finding 10: returns null (no substitution) if none is found.
+        private (SwingType, double, DateTime)? ReconstructProtectedSwing(S1PoiSnapshot snap)
         {
             bool bull = snap.Direction == Direction.Buy;
             int wantKind = bull ? 1 : 0; // BUY protected by a swing LOW, SELL by a swing HIGH
@@ -179,24 +211,42 @@ namespace cAlgo.Robots.ICT_S1
                 if (e.ConfirmIdx > snap.FirstImpactBarIndex) continue;
                 if (best == null || e.ConfirmIdx > best.ConfirmIdx) best = e;
             }
-            if (best == null)
-                return (bull ? SwingType.Low : SwingType.High, bull ? snap.Zb : snap.Zt, snap.FirstImpactTime);
+            if (best == null) return null;
 
             var swingIdx = best.SwingIdx;
             var time = swingIdx >= 0 && swingIdx < _h4Engine.BT.Count ? _h4Engine.BT[swingIdx] : snap.FirstImpactTime;
             return (bull ? SwingType.Low : SwingType.High, best.Price, time);
         }
 
-        private WeeklyOpportunity FindArmingWeeklyOpportunity(Direction dir)
+        // CRITICAL 2 + CRITICAL 3: returns the authorizing Weekly opportunity,
+        // or null. The bool return tells the caller whether ANY temporally-
+        // valid same-direction candidate existed at all (for accurate
+        // rejection-code selection: NO_WEEKLY_PARENT vs NOT_IN_CONTROL).
+        private (WeeklyOpportunity, bool) FindArmingWeeklyOpportunity(Direction dir, DateTime h4EventTime)
         {
             WeeklyOpportunity chosen = null;
+            bool anyTemporallyValid = false;
+
             foreach (var opp in _weeklyEngine.Opportunities)
             {
-                if (opp.Status != WeeklyOpportunityStatus.Active) continue;
                 if (opp.Direction != dir) continue;
-                if (chosen == null || opp.ActivationTime > chosen.ActivationTime) chosen = opp;
+                // Temporal authorization guard (audit section 6): a Weekly
+                // opportunity activated AFTER this H4 event cannot author it,
+                // and one already terminated BEFORE this H4 event cannot
+                // either. Defensive on top of chronological processing.
+                if (opp.ActivationTime > h4EventTime) continue;
+                if (opp.Status == WeeklyOpportunityStatus.Terminated && opp.TerminationTime != null && opp.TerminationTime.Value <= h4EventTime) continue;
+                if (opp.Status != WeeklyOpportunityStatus.Active) continue;
+
+                anyTemporallyValid = true;
+
+                bool inOwnControl = (opp.Control == ControlState.BuyControl && opp.Direction == Direction.Buy)
+                                  || (opp.Control == ControlState.SellControl && opp.Direction == Direction.Sell);
+                if (!inOwnControl) continue; // Critical 3 gate: not currently in control of its own narrative
+
+                if (chosen == null || opp.ActivationTime > chosen.ActivationTime) chosen = opp; // documented tie-break, see class header BLOCKED note
             }
-            return chosen;
+            return (chosen, anyTemporallyValid);
         }
 
         private H4Setup FindLiveSetup(string weeklyOpportunityId)

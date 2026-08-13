@@ -9,6 +9,20 @@
 // than relying on whatever chart the cBot happens to be attached to --
 // robust regardless of the attached chart's own timeframe.
 //
+// CRITICAL 1 FIX (audit 2026-08-13): the previous OnStart processed the
+// ENTIRE Weekly history, then the ENTIRE H4 history, then the ENTIRE M5
+// history, each in one shot. That let an H4 bar from early in the backtest
+// see the fully-completed FUTURE Weekly state (opportunities that, in real
+// chronological time, hadn't activated yet at that H4 bar's moment) --
+// genuine look-ahead. AdvanceChronologically() below replaces that: it
+// repeatedly finds whichever of the three timeframes' NEXT unprocessed bar
+// is chronologically earliest, processes exactly that one bar, and
+// immediately propagates its downstream effects (Weekly/H4 opportunity and
+// setup engines) before moving to the next bar -- possibly on a different
+// timeframe. This is the same primitive used for both the OnStart backfill
+// and live OnTick processing, so backtest and live share one causally
+// correct code path (matches spec section 38's live/backtest consistency
+// requirement, now enforced structurally rather than by convention).
 // RESTART/RECONCILIATION (master prompt section 41): stable IDs are
 // generated fresh each run (IdGenerator is per-process, not persisted),
 // and cAlgo order labels carry the M5AttemptId. On a cBot restart mid-
@@ -91,17 +105,18 @@ namespace cAlgo.Robots.ICT_S1
 
             WireEvents();
 
-            // Backfill: process all history already available on each
-            // timeframe (deterministic, no look-ahead -- each engine only
-            // ever reads bar k using data up to and including bar k, same
-            // code path live and historical, per master prompt section 38).
-            _weeklyEngine.Update();
-            DrainWeeklySide();
-            _h4Engine.Update();
-            DrainH4Side();
-            _m5Engine.Update();
-            _m5ExecEngine.Update();
-            _h4SetupEngine.CheckProtectedSwingViolations(Symbol.Bid, Symbol.Ask, ViolationPips);
+            // Backfill: chronological, one bar at a time across all three
+            // timeframes, never one timeframe's completed future feeding
+            // another's past decision (Critical 1 fix -- see file header).
+            AdvanceChronologically();
+
+            // Live quotes are only meaningful once backfill has caught up to
+            // "now" -- checking protected-swing violations against current
+            // Bid/Ask DURING the historical catch-up loop would itself be a
+            // look-ahead bug (today's price against historically-old
+            // setups). One check here, after backfill completes and every
+            // surviving setup is genuinely current, is correct.
+            _h4SetupEngine.CheckProtectedSwingViolations(Symbol.Bid, Symbol.Ask, Server.Time, ViolationPips);
 
             _journal.Debug($"S1 started on {SymbolName}. Weekly bars={weeklyBars.Count}, H4 bars={h4Bars.Count}, M5 bars={m5Bars.Count}.");
             Print($"ICT_S1 started. Journal: {_journal.RunDirectory}");
@@ -109,16 +124,53 @@ namespace cAlgo.Robots.ICT_S1
 
         protected override void OnTick()
         {
-            _weeklyEngine.Update();
-            DrainWeeklySide();
+            AdvanceChronologically();
+            _h4SetupEngine.CheckProtectedSwingViolations(Symbol.Bid, Symbol.Ask, Server.Time, ViolationPips);
+        }
 
-            _h4Engine.Update();
-            DrainH4Side();
+        // The chronological scheduler (Critical 1 fix). Repeatedly advances
+        // whichever of Weekly/H4/M5 has the earliest next unprocessed bar,
+        // one bar at a time, propagating that bar's downstream effects
+        // immediately before considering the next bar on any timeframe.
+        // Weekly wins exact-timestamp ties over H4, H4 over M5 (higher
+        // timeframe causality resolved first) -- ties are rare (only at
+        // exactly-aligned bar-open boundaries) and the loop naturally
+        // revisits on the next iteration regardless.
+        private void AdvanceChronologically()
+        {
+            while (true)
+            {
+                DateTime? tW = _weeklyEngine.PeekNextBarTime();
+                DateTime? tH = _h4Engine.PeekNextBarTime();
+                DateTime? tM = _m5Engine.PeekNextBarTime();
+                if (tW == null && tH == null && tM == null) break;
 
-            _m5Engine.Update();
-            _m5ExecEngine.Update();
+                DateTime earliest = DateTime.MaxValue;
+                if (tW != null && tW.Value < earliest) earliest = tW.Value;
+                if (tH != null && tH.Value < earliest) earliest = tH.Value;
+                if (tM != null && tM.Value < earliest) earliest = tM.Value;
 
-            _h4SetupEngine.CheckProtectedSwingViolations(Symbol.Bid, Symbol.Ask, ViolationPips);
+                if (tW != null && tW.Value == earliest)
+                {
+                    _weeklyEngine.ProcessOneBar();
+                    DrainWeeklySide();
+                }
+                else if (tH != null && tH.Value == earliest)
+                {
+                    _h4Engine.ProcessOneBar();
+                    DrainH4Side();
+                }
+                else
+                {
+                    _m5Engine.ProcessOneBar();
+                }
+
+                // Re-evaluated after every single bar, on any timeframe --
+                // an H4 termination or a fresh H4 impact must be visible to
+                // M5 execution before the next bar (of any timeframe) is
+                // processed, not just after an M5 bar happens to close.
+                _m5ExecEngine.Update();
+            }
         }
 
         protected override void OnStop()
@@ -135,7 +187,7 @@ namespace cAlgo.Robots.ICT_S1
             {
                 _journal.LogPoiEvent(ev);
                 if (ev.Type == PoiEventType.NewImpact) _viz.DrawPoiImpact(ev.Snapshot);
-                else if (ev.Type == PoiEventType.Invalidated || ev.Type == PoiEventType.Retired) _viz.UpdatePoiTerminal(ev.Snapshot);
+                else if (ev.Type == PoiEventType.Invalidated || ev.Type == PoiEventType.Retired) _viz.UpdatePoiTerminal(ev.Snapshot, ev.Time);
             }
             _weeklyOppEngine.Update(poiEvents);
             foreach (var ev in _weeklyOppEngine.DrainEvents())
@@ -150,30 +202,32 @@ namespace cAlgo.Robots.ICT_S1
             {
                 _journal.LogPoiEvent(ev);
                 if (ev.Type == PoiEventType.NewImpact) _viz.DrawPoiImpact(ev.Snapshot);
-                else if (ev.Type == PoiEventType.Invalidated || ev.Type == PoiEventType.Retired) _viz.UpdatePoiTerminal(ev.Snapshot);
+                else if (ev.Type == PoiEventType.Invalidated || ev.Type == PoiEventType.Retired) _viz.UpdatePoiTerminal(ev.Snapshot, ev.Time);
             }
             _h4SetupEngine.Update(poiEvents);
             foreach (var ev in _h4SetupEngine.DrainEvents())
             {
                 _journal.LogH4SetupEvent(ev);
-                if (ev.Type == H4SetupEventType.Impacted) _viz.DrawProtectedSwing(ev.Setup);
+                if (ev.Type == H4SetupEventType.Impacted) _viz.DrawProtectedSwing(ev.Setup, ev.Time);
             }
+            foreach (var rej in _h4SetupEngine.DrainRejections())
+                _journal.LogRejection(rej);
         }
 
         private void WireEvents()
         {
-            _m5ExecEngine.OrderPlaced += a => { _journal.LogOrderEvent(a, "PENDING_ORDER_CREATED", $"@{a.RequestedEntryPrice}"); _viz.DrawAttemptOrder(a); };
-            _m5ExecEngine.OrderMoved += a => { _journal.LogOrderEvent(a, "PENDING_ORDER_MOVED", $"@{a.RequestedEntryPrice}"); _viz.DrawAttemptOrder(a); };
-            _m5ExecEngine.OrderCancelled += a => _journal.LogOrderEvent(a, "PENDING_ORDER_CANCELLED", "");
-            _m5ExecEngine.AttemptFilled += a => _journal.LogOrderEvent(a, "TRADE_ENTERED", $"fill={a.ActualFillPrice}");
+            _m5ExecEngine.OrderPlaced += a => { _journal.LogOrderEvent(a, "PENDING_ORDER_CREATED", $"@{a.RequestedEntryPrice}", Server.Time); _viz.DrawAttemptOrder(a, Server.Time); };
+            _m5ExecEngine.OrderMoved += a => { _journal.LogOrderEvent(a, "PENDING_ORDER_MOVED", $"@{a.RequestedEntryPrice}", Server.Time); _viz.DrawAttemptOrder(a, Server.Time); };
+            _m5ExecEngine.OrderCancelled += a => _journal.LogOrderEvent(a, "PENDING_ORDER_CANCELLED", "", Server.Time);
+            _m5ExecEngine.AttemptFilled += a => _journal.LogOrderEvent(a, "TRADE_ENTERED", $"fill={a.ActualFillPrice}", Server.Time);
             _m5ExecEngine.AttemptClosed += a =>
             {
                 var setup = FindSetup(a.H4SetupId);
                 var weekly = setup != null ? FindWeekly(setup.WeeklyOpportunityId) : null;
                 _journal.LogTradeClosed(a, setup, weekly);
-                _viz.DrawAttemptClosed(a);
+                _viz.DrawAttemptClosed(a, Server.Time);
             };
-            _tradeManager.ManualInterventionDetected += (a, detail) => _journal.LogManualIntervention(a, detail);
+            _tradeManager.ManualInterventionDetected += (a, detail) => _journal.LogManualIntervention(a, detail, Server.Time);
         }
 
         private H4Setup FindSetup(string id)

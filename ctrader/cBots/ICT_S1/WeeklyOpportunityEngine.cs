@@ -1,31 +1,35 @@
 // ICT_S1 — WeeklyOpportunityEngine. Spec: docs/s1_ea_specification.md
-// sections 3, 4, 6.
+// sections 3, 4, 6. Repaired per the 2026-08-13 audit (see repair notes
+// inline at each fix).
 //
-// IMPLEMENTATION NOTE ON DIRECTIONAL CONTROL (flagging this clearly since
-// it required resolving real tension between two confirmed rules rather
-// than reading straight off the spec):
+// DIRECTIONAL CONTROL — CORRECTED MODEL (audit Critical 3 / Findings 8,9):
+// Control is narrative-scoped, never global (Section 10/11 concurrency
+// stands). Within its OWN narrative it DOES have a real consequence: a
+// WeeklyOpportunity may only authorize NEW H4Setups while its own Control
+// currently matches its own base Direction (enforced in H4SetupEngine).
+// Existing already-open H4Setups/M5Attempts are not force-closed when
+// Control moves away -- they continue under their own independent rules.
+// This was previously implemented as journal-only (documented as a
+// deliberate reading at the time); the audit correctly identified that
+// reading as wrong given the doc's own NEUTRAL example ("SELL entries =
+// OFF and BUY entries = OFF for THAT narrative").
 //
-// The strategy owner confirmed Control is "scoped to the single narrative"
-// and that Section 10/11 concurrency (multiple independent, even opposite-
-// direction, WeeklyOpportunities trading simultaneously) "stands untouched."
-// Combined with the walkthrough's own Phase B (a SELL trade fires off a
-// bearish Old POI immediately on impact, BEFORE Control has shifted to
-// SELL), the only self-consistent reading is: Control does NOT gate
-// whether a WeeklyOpportunity may trade. Trading permission for every
-// WeeklyOpportunity comes purely from its own POI cluster's lifecycle
-// (section 2/6), independent of any other opportunity's state. Control is
-// implemented here as a DESCRIPTIVE/journaled field per WeeklyOpportunity
-// -- it records which direction currently "has the upper hand" in that
-// specific narrative for audit purposes (the ControlChanged events read
-// naturally in the journal, per the doc's own examples), but adds no
-// additional veto. If this read is wrong, it's a one-place fix (the
-// ComputeControlTransitions method below never touches Opportunity.Status).
-//
-// Two heuristics here are implementation choices, not stated rules --
-// flagged inline where they occur: (1) which opposite-direction opportunity
-// a given counter-POI's RETIRED event is "contesting" when several are
-// active at once (most-recently-activated wins), and (2) NEUTRAL detection
-// reuses the Weekly engine's own regime flip as the "phase ended" signal.
+// Two heuristics remain (now fixed AT CREATION TIME, not re-derived later):
+// (1) which opposite-direction opportunity a new counter-POI's own
+//     narrative is contesting -- decided once, when that counter narrative
+//     is created, and stored as ContestingOfWeeklyOpportunityId. Zone
+//     overlap can't be the test here (a counter-POI typically forms well
+//     away from the original zone after price has moved), so the tie-break
+//     is "whichever opposite-direction opportunity currently holds control
+//     in its own direction" -- still a documented implementation choice,
+//     but now fixed once instead of re-guessed by recency at retirement
+//     time (the actual defect).
+// (2) NEUTRAL detection no longer uses the raw Weekly regime flag (that
+//     heuristic is removed per Finding 8 -- Pine regime and S1 Control are
+//     NOT confirmed equivalent). It now directly follows the doc's own
+//     worked example: the current controlling direction's own next
+//     opposite-kind swing (SellControl ends on the next Weekly Swing Low,
+//     BuyControl ends on the next Weekly Swing High) ends that phase.
 
 using System;
 using System.Collections.Generic;
@@ -56,6 +60,10 @@ namespace cAlgo.Robots.ICT_S1
 
         public readonly List<WeeklyOpportunity> Opportunities = new List<WeeklyOpportunity>();
         private readonly Queue<WeeklyOpportunityEvent> _eventQueue = new Queue<WeeklyOpportunityEvent>();
+
+        // Cursor into _engine.Events for incremental Neutral-detection scans
+        // (Finding 8 fix) -- avoids rescanning all history every cycle.
+        private int _lastSwingCheckIdx = -1;
 
         public WeeklyOpportunityEngine(PoiMarketEngine weeklyEngine, PoiLifecycleTracker weeklyTracker)
         {
@@ -107,6 +115,7 @@ namespace cAlgo.Robots.ICT_S1
                 snap.WeeklyOpportunityId = joinable.WeeklyOpportunityId;
                 snap.PoiClusterId = joinable.SupportingCluster.PoiClusterId;
                 joinable.SupportingCluster.Members.Add(snap);
+                ReactivateFromNeutralIfDue(joinable, ev.Time);
                 _eventQueue.Enqueue(new WeeklyOpportunityEvent { Type = WeeklyOpportunityEventType.Retouched, Opportunity = joinable, TriggeringPoi = snap, Time = ev.Time, Note = $"Joined existing cluster ({snap.TypeAtActivation})" });
                 return;
             }
@@ -125,25 +134,62 @@ namespace cAlgo.Robots.ICT_S1
             snap.WeeklyOpportunityId = opp.WeeklyOpportunityId;
             snap.PoiClusterId = cluster.PoiClusterId;
 
+            // Finding 9 fix: establish the contesting relationship ONCE, now,
+            // explicitly -- not re-guessed later by recency at retirement.
+            LinkContestingNarrativeIfAny(opp, ev.Time);
+
             Opportunities.Add(opp);
             _eventQueue.Enqueue(new WeeklyOpportunityEvent { Type = WeeklyOpportunityEventType.Activated, Opportunity = opp, TriggeringPoi = snap, Time = ev.Time, Note = $"Activated by {snap.TypeAtActivation}" });
         }
 
-        // Clustering rule (spec section 4): any overlap, OR simultaneous
-        // validity under one direction even without overlap (derived by
-        // analogy to the confirmed H4-level answer -- flagged in the spec's
-        // decision log as unconfirmed-by-direct-question).
+        // Finding 4 fix: Weekly clustering requires GENUINE price overlap
+        // with at least one existing member of an active same-direction
+        // opportunity's cluster. The earlier "any active same-direction
+        // opportunity qualifies" rule was an unconfirmed extension of the
+        // H4-specific non-overlap rule -- that rule was never confirmed at
+        // Weekly level, so the safe default (independent opportunities
+        // supported explicitly by section 10) applies instead.
         private WeeklyOpportunity FindJoinableOpportunity(S1PoiSnapshot snap)
         {
             foreach (var opp in Opportunities)
             {
                 if (opp.Status != WeeklyOpportunityStatus.Active) continue;
                 if (opp.Direction != snap.Direction) continue;
-                // Any active same-direction opportunity qualifies -- overlap
-                // is not required (the "simultaneously valid" extension).
-                return opp;
+                foreach (var member in opp.SupportingCluster.Members)
+                {
+                    if (Math.Max(member.Zb, snap.Zb) <= Math.Min(member.Zt, snap.Zt))
+                        return opp;
+                }
             }
             return null;
+        }
+
+        // Finding 9: a counter-direction POI's zone typically does NOT
+        // overlap the original narrative's zone (price has already moved
+        // away by the time a counter-POI forms) -- so overlap can't be the
+        // contesting test. Instead: at the moment this counter-direction
+        // opportunity is created, link it to whichever ACTIVE opposite-
+        // direction opportunity currently holds control in its own
+        // direction (the one genuinely "in play" right now). This is a
+        // documented implementation choice, but fixed once at creation,
+        // not re-derived later.
+        private void LinkContestingNarrativeIfAny(WeeklyOpportunity newOpp, DateTime now)
+        {
+            var oppositeDir = newOpp.Direction == Direction.Buy ? Direction.Sell : Direction.Buy;
+            WeeklyOpportunity target = null;
+            foreach (var opp in Opportunities)
+            {
+                if (opp.Status != WeeklyOpportunityStatus.Active) continue;
+                if (opp.Direction != oppositeDir) continue;
+                bool inOwnControl = (opp.Control == ControlState.BuyControl && opp.Direction == Direction.Buy)
+                                  || (opp.Control == ControlState.SellControl && opp.Direction == Direction.Sell);
+                if (!inOwnControl) continue;
+                if (target == null || opp.ActivationTime > target.ActivationTime) target = opp;
+            }
+            if (target == null) return;
+
+            newOpp.ContestingOfWeeklyOpportunityId = target.WeeklyOpportunityId;
+            target.ContestingCluster = newOpp.SupportingCluster;
         }
 
         private void HandleRetouch(PoiLifecycleEvent ev)
@@ -151,7 +197,27 @@ namespace cAlgo.Robots.ICT_S1
             var opp = FindOwningOpportunity(ev.Snapshot);
             if (opp == null) return;
             opp.RetouchCounter++;
+            ReactivateFromNeutralIfDue(opp, ev.Time);
             _eventQueue.Enqueue(new WeeklyOpportunityEvent { Type = WeeklyOpportunityEventType.Retouched, Opportunity = opp, TriggeringPoi = ev.Snapshot, Time = ev.Time, Note = $"Weekly retouch #{opp.RetouchCounter}" });
+        }
+
+        // "Valid bullish/bearish location subsequently qualifies" (doc's own
+        // NEUTRAL -> BUY_CONTROL example) -- a fresh same-direction POI
+        // activity under THIS opportunity's own cluster is what ends a
+        // Neutral phase and restores control to this narrative's own
+        // direction.
+        private void ReactivateFromNeutralIfDue(WeeklyOpportunity opp, DateTime time)
+        {
+            if (opp.Control != ControlState.Neutral) return;
+            var restored = opp.Direction == Direction.Buy ? ControlState.BuyControl : ControlState.SellControl;
+            opp.Control = restored;
+            _eventQueue.Enqueue(new WeeklyOpportunityEvent
+            {
+                Type = WeeklyOpportunityEventType.ControlChanged,
+                Opportunity = opp,
+                Time = time,
+                Note = $"Control -> {restored} (valid own-direction location reached)"
+            });
         }
 
         private void HandleTerminal(PoiLifecycleEvent ev)
@@ -169,22 +235,16 @@ namespace cAlgo.Robots.ICT_S1
 
         // A counter-direction POI just RETIRED (respected + reaction swing
         // confirmed) -- per spec section 3, this establishes Control in its
-        // direction for whichever opposite-direction narrative it was
-        // contesting. Heuristic: the most-recently-activated ACTIVE
-        // opportunity of the opposite direction (documented above).
+        // direction for the narrative it was EXPLICITLY linked to at
+        // creation (Finding 9 fix -- no recency search here anymore).
         private void ComputeControlTransitionOnRetire(PoiLifecycleEvent ev)
         {
             var snap = ev.Snapshot;
-            var oppositeDir = snap.Direction == Direction.Buy ? Direction.Sell : Direction.Buy;
+            var owner = FindOwningOpportunity(snap);
+            if (owner?.ContestingOfWeeklyOpportunityId == null) return;
 
-            WeeklyOpportunity contested = null;
-            foreach (var opp in Opportunities)
-            {
-                if (opp.Status != WeeklyOpportunityStatus.Active) continue;
-                if (opp.Direction != oppositeDir) continue;
-                if (contested == null || opp.ActivationTime > contested.ActivationTime) contested = opp;
-            }
-            if (contested == null) return;
+            var contested = FindById(owner.ContestingOfWeeklyOpportunityId);
+            if (contested == null || contested.Status != WeeklyOpportunityStatus.Active) return;
 
             var newControl = snap.Direction == Direction.Buy ? ControlState.BuyControl : ControlState.SellControl;
             if (contested.Control == newControl) return;
@@ -205,43 +265,59 @@ namespace cAlgo.Robots.ICT_S1
             });
         }
 
-        // NEUTRAL detection (implementation choice, documented at file top):
-        // reuse the Weekly engine's own regime as the "controlling phase
-        // ended" signal -- when regime flips away from an opportunity's
-        // current Control direction and no fresh same-direction opportunity
-        // has taken over yet, Control -> Neutral.
+        // Finding 8 fix: NEUTRAL is no longer derived from the raw Weekly
+        // regime flag (Pine regime and S1 Control were never confirmed
+        // equivalent). Instead, directly follows the doc's own worked
+        // example: whichever direction currently controls a narrative ends
+        // that phase on ITS OWN next opposite-kind Weekly swing --
+        // SellControl ends on the next Weekly Swing Low, BuyControl ends on
+        // the next Weekly Swing High -- confirmed strictly after control was
+        // established. Incremental cursor scan, not a full rescan each call.
         private void ComputeNeutralTransitions()
         {
-            int regime = _engine.Regime; // 0=warmup,1=up,2=down
-            if (regime == 0) return;
-            var regimeDir = regime == 1 ? Direction.Buy : Direction.Sell;
-
-            foreach (var opp in Opportunities)
+            int total = _engine.Events.Count;
+            for (int i = _lastSwingCheckIdx + 1; i < total; i++)
             {
-                if (opp.Status != WeeklyOpportunityStatus.Active) continue;
-                bool controlMatchesRegime =
-                    (opp.Control == ControlState.BuyControl && regimeDir == Direction.Buy) ||
-                    (opp.Control == ControlState.SellControl && regimeDir == Direction.Sell);
-                if (controlMatchesRegime || opp.Control == ControlState.Neutral) continue;
+                var swingEv = _engine.Events[i];
+                DateTime evTime = swingEv.ConfirmIdx >= 0 && swingEv.ConfirmIdx < _engine.BT.Count
+                    ? _engine.BT[swingEv.ConfirmIdx]
+                    : default(DateTime);
 
-                // Regime has flipped away from this opportunity's current
-                // Control direction -- that phase is over.
-                opp.Control = ControlState.Neutral;
-                _eventQueue.Enqueue(new WeeklyOpportunityEvent
+                foreach (var opp in Opportunities)
                 {
-                    Type = WeeklyOpportunityEventType.ControlChanged,
-                    Opportunity = opp,
-                    TriggeringPoi = null,
-                    Time = _engine.BT.Count > 0 ? _engine.BT[_engine.BT.Count - 1] : default(DateTime),
-                    Note = "Control -> Neutral (regime reversed, no fresh opposite POI yet)"
-                });
+                    if (opp.Status != WeeklyOpportunityStatus.Active) continue;
+                    if (opp.Control == ControlState.Neutral) continue;
+
+                    int endingKind = opp.Control == ControlState.SellControl ? 1 : 0; // 1=Low ends Sell, 0=High ends Buy
+                    if (swingEv.Kind != endingKind) continue;
+
+                    DateTime controlSince = opp.ControlSwingTime ?? opp.ActivationTime;
+                    if (evTime <= controlSince) continue; // must be a NEW swing after control was established
+
+                    opp.Control = ControlState.Neutral;
+                    _eventQueue.Enqueue(new WeeklyOpportunityEvent
+                    {
+                        Type = WeeklyOpportunityEventType.ControlChanged,
+                        Opportunity = opp,
+                        Time = evTime,
+                        Note = $"Control -> Neutral ({(endingKind == 1 ? "Swing Low" : "Swing High")} confirmed @ {swingEv.Price}, no fresh own-direction POI yet)"
+                    });
+                }
             }
+            _lastSwingCheckIdx = total - 1;
         }
 
         private WeeklyOpportunity FindOwningOpportunity(S1PoiSnapshot snap)
         {
             foreach (var opp in Opportunities)
                 if (opp.WeeklyOpportunityId == snap.WeeklyOpportunityId) return opp;
+            return null;
+        }
+
+        private WeeklyOpportunity FindById(string id)
+        {
+            foreach (var opp in Opportunities)
+                if (opp.WeeklyOpportunityId == id) return opp;
             return null;
         }
     }

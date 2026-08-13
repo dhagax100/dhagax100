@@ -173,7 +173,13 @@ namespace cAlgo.Robots.ICT_S1
             attempt.SLPrice = sl;
             attempt.TPPrice = tp;
             attempt.PendingOrderId = orderId;
-            attempt.PendingOrderCreatedTime = attempt.PendingOrderCreatedTime ?? DateTime.UtcNow;
+            // Actual simulated bar time this order was placed at -- not
+            // DateTime.UtcNow (audit section 32: that's real wall-clock
+            // time, meaningless during a historical backtest replay).
+            attempt.PendingOrderCreatedTime = attempt.PendingOrderCreatedTime
+                ?? (_m5Engine.LastProcessedIndex >= 0 && _m5Engine.LastProcessedIndex < _m5Engine.BT.Count
+                    ? _m5Engine.BT[_m5Engine.LastProcessedIndex]
+                    : entryTime);
             attempt.Status = M5AttemptStatus.Pending;
             OrderPlaced?.Invoke(attempt);
         }
