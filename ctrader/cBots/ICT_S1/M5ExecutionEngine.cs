@@ -2,8 +2,10 @@
 //
 // M5 needs only Swing High/Low + dynamic stop-entry placement (master
 // prompt section 3 -- "Do not require an additional discretionary M5 POI
-// model"), so this reads directly off the M5 PoiMarketEngine's raw
-// SwHighs/SwLows -- no PoiLifecycleTracker involved at this timeframe.
+// model"), so this reads directly off the M5 PoiMarketEngine's raw swing-
+// confirmation Events (Round 2 fix: not the independent SwHighs/SwLows
+// tail-index lists -- see TryGetRelevantSwings) -- no PoiLifecycleTracker
+// involved at this timeframe.
 //
 // cAlgo API surface (order placement, fills, closes) is deliberately kept
 // out of this file -- ITradeExecutor is the seam. TradeManager implements
