@@ -279,7 +279,14 @@ namespace cAlgo.Robots.ICT_S1
     public class H4Setup
     {
         public string H4SetupId;
+        // Primary (first-authorizing) Weekly -- display/journal convenience
+        // ONLY, not an ownership decision. Full lineage is
+        // SupportingWeeklyOpportunityIds (strategy owner clarification,
+        // 2026-08-13): one physical H4 reaction is ONE H4Setup/execution
+        // stream no matter how many Weekly opportunities support it: every
+        // qualifying Weekly is recorded here for audit, none is "the owner".
         public string WeeklyOpportunityId;
+        public readonly List<string> SupportingWeeklyOpportunityIds = new List<string>();
         public Direction Direction;
         public H4Route Route;
         public H4SetupStatus Status = H4SetupStatus.Watching;

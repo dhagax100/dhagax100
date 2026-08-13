@@ -155,7 +155,8 @@ namespace cAlgo.Robots.ICT_S1
             if (_mode == VisualizationMode.Off) return;
             RedrawProtectedSwingLine(setup, asOf);
             var lblName = "PROT_" + setup.H4SetupId + "_lbl";
-            _chart.DrawText(lblName, $"{setup.H4SetupId} <- {setup.WeeklyOpportunityId} ({setup.Route}, swing#{setup.ProtectedSwingIdx})", setup.CreatedTime, setup.ProtectedSwingPrice, Color.Purple);
+            var weeklyLineage = string.Join("+", setup.SupportingWeeklyOpportunityIds);
+            _chart.DrawText(lblName, $"{setup.H4SetupId} <- [{weeklyLineage}] ({setup.Route}, swing#{setup.ProtectedSwingIdx})", setup.CreatedTime, setup.ProtectedSwingPrice, Color.Purple);
             Track(lblName);
         }
 

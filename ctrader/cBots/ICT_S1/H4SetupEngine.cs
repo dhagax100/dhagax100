@@ -20,18 +20,29 @@
 //
 // ROUND 2 FIX (audit sections 18-19) -- the "most recently activated"
 // tie-break for MULTIPLE simultaneously-qualifying same-direction Weekly
-// opportunities was REMOVED, replaced with "authorize/join every qualifying
-// narrative independently" (FindArmingWeeklyOpportunities/HandleNewImpact).
+// opportunities was REMOVED.
 //
-// COMMENT-ACCURACY CORRECTION (Part 28/29 of the 2026-08-13 final audit --
-// the prior wording here overclaimed this as a settled fix): "every
-// qualifying candidate" is ITSELF an unconfirmed strategy decision, exactly
-// as much a guess as "most recent" was, just a different one -- backtest
-// evidence shows ~42 cases of one physical H4 POI impact being cloned
-// across multiple WeeklyOpportunityID/H4SetupID pairs as a direct result.
-// This is NOT presented as resolved. See the current repair report's open
-// strategy question (Weekly->H4 ownership) -- BLOCKED pending the owner's
-// answer, not silently left as "all candidates" by default.
+// FOLLOW-UP STRATEGY CLARIFICATION (2026-08-13, final audit Parts 10-13):
+// the Round 2 replacement -- "authorize/join every qualifying narrative
+// independently" -- turned out to be ITSELF an unconfirmed decision, and
+// backtest evidence proved it: ~42 cases of one physical H4 POI impact
+// being cloned across multiple WeeklyOpportunityID/H4SetupID pairs, i.e.
+// duplicate trade streams from a single event. Asked the strategy owner
+// directly; RESOLVED: "Multiple independent valid Weekly opportunities may
+// simultaneously support the same physical H4 reaction, but they must NOT
+// create duplicate H4/M5 trade streams. The H4 reaction is the execution-
+// level object: one physical H4 reaction creates ONE H4Setup and ONE M5
+// execution stream, regardless of how many valid Weekly opportunities
+// support/authorize it. Preserve all qualifying WeeklyOpportunityIDs as
+// supporting lineage for journaling/audit, but deduplicate execution at
+// the H4 reaction level." Implemented: dedup key is the protected-swing
+// identity ALONE (see FindLiveSetupForSwing); every qualifying Weekly is
+// recorded in H4Setup.SupportingWeeklyOpportunityIds, not collapsed to a
+// single "owner" and not spawning duplicate setups either. The SAME
+// principle resolves WeeklyOpportunityEngine's analogous contesting-
+// narrative fan-out without any separate code change: Control changes
+// don't themselves create trades, and execution-level dedup now happens
+// here regardless of how many Weeklies are simultaneously eligible.
 //
 // FINDING 10 FIX — protected-swing reconstruction no longer falls back to
 // the POI's own Zb/Zt when no real swing reference is found. A wrong
@@ -58,9 +69,11 @@
 // with "same still-live setup under the same Weekly parent", with no
 // boundary condition for when a NEW reaction should begin. Resolved:
 // reaction identity is the EXACT protected H4 swing a POI is anchored to
-// (not time, not geometry) -- see AuthorizeOrJoin/FindLiveSetupForSwing.
+// (not time, not geometry) -- see HandleNewImpact/FindLiveSetupForSwing.
 // More than one H4Setup can now be simultaneously live under one Weekly
-// opportunity, one per distinct protected swing.
+// opportunity, one per distinct protected swing (and, per the follow-up
+// multiplicity clarification below, one H4Setup can now also be supported
+// by more than one Weekly opportunity at once).
 
 using System;
 using System.Collections.Generic;
@@ -161,6 +174,24 @@ namespace cAlgo.Robots.ICT_S1
             }
         }
 
+        // RESOLVED (strategy owner clarification, follow-up round, 2026-08-13
+        // -- supersedes the earlier fan-to-all reading): "Multiple independent
+        // valid Weekly opportunities may simultaneously support the same
+        // physical H4 reaction, but they must NOT create duplicate H4/M5
+        // trade streams. The H4 reaction is the execution-level object: one
+        // physical H4 reaction (per the confirmed protected-swing grouping
+        // rule) creates ONE H4Setup/H4Reaction and ONE M5 execution stream,
+        // regardless of how many valid same-direction Weekly opportunities
+        // support/authorize it. Preserve all qualifying WeeklyOpportunityIDs
+        // as supporting lineage for journaling/audit, but deduplicate
+        // execution at the H4 reaction level." Implemented below: dedup key
+        // is the protected-swing identity ALONE (H4Setup.ProtectedSwingIdx),
+        // not (Weekly, swing) -- so one physical impact anchored to one
+        // protected swing produces exactly one H4Setup no matter how many
+        // Weekly opportunities qualify for it. Every qualifying Weekly is
+        // recorded in H4Setup.SupportingWeeklyOpportunityIds (full lineage,
+        // no information lost) and gets the SAME shared setup object added
+        // to its own H4Setups list.
         private void HandleNewImpact(PoiLifecycleEvent ev)
         {
             var snap = ev.Snapshot;
@@ -175,44 +206,13 @@ namespace cAlgo.Robots.ICT_S1
                 return;
             }
 
-            // BLOCKED STRATEGY QUESTION, NOT A SETTLED FIX (final audit
-            // Parts 10-13/28-29): the "most recently activated" tie-break
-            // was REMOVED, but "authorize every qualifying narrative
-            // independently" is ITSELF an unconfirmed strategy decision --
-            // no more proven than the tie-break it replaced. Backtest
-            // evidence: ~42 cases of one physical H4 POI impact producing
-            // more than one WeeklyOpportunityID/H4SetupID. Left running
-            // as-is (not reverted to a single-owner guess either, per "do
-            // not choose merely because you cannot fan-out") while this is
-            // an open question to the strategy owner -- see the current
-            // repair report. snap.WeeklyOpportunityId/PoiClusterId (single-
-            // valued display fields) are set from the FIRST authorization
-            // only; the authoritative multi-owner relationship lives in
-            // each H4Setup's own SupportingCluster.Members (see
-            // FindOwningSetups, which every consumer of "this POI's setup"
-            // must use instead of assuming a single owner).
-            bool first = true;
-            foreach (var weekly in qualifying)
-            {
-                AuthorizeOrJoin(snap, weekly, ev, first);
-                first = false;
-            }
-        }
-
-        private void AuthorizeOrJoin(S1PoiSnapshot snap, WeeklyOpportunity weekly, PoiLifecycleEvent ev, bool isPrimary)
-        {
-            // Round 2 fix (audit section 25): the protected swing is now the
+            // Round 2 fix (audit section 25): the protected swing is the
             // EXACT structural swing PoiMarketEngine stamped on the raw zone
             // at creation (frozen onto the snapshot by PoiLifecycleTracker),
-            // not a reconstruction inferred from direction alone. Different
-            // POI types are armed off different swings (e.g. an aggressive
-            // continuation OB is armed off the broken opposite-side swing,
-            // not always "the same-direction swing") -- consuming the exact
-            // stored reference is what the audit requires; a direction-only
-            // "BUY always protected by a swing LOW" rule was itself the kind
-            // of reconstruction/approximation this fix removes. Needed here
-            // BEFORE the live-setup lookup too, since H4 reaction identity
-            // (below) is itself defined by this exact swing.
+            // not a reconstruction inferred from direction alone. Checked
+            // ONCE here (not per-qualifying-Weekly) since it's a property of
+            // the POI itself, and H4 reaction identity (below) is defined by
+            // this exact swing regardless of which Weekly(ies) support it.
             if (snap.SourceSwingType == null || snap.SourceSwingPrice == null || snap.SourceSwingConfirmationTime == null || snap.SourceSwingIdx < 0)
             {
                 // Finding 10: fail safely, no fake fallback -- do not arm.
@@ -222,23 +222,17 @@ namespace cAlgo.Robots.ICT_S1
 
             // H4 REACTION GROUPING RULE (strategy owner clarification,
             // 2026-08-13): H4 reaction identity is structural, not time-
-            // based and not geometric. Multiple H4 POIs belong to the SAME
-            // H4 reaction/H4Setup while they are anchored to the SAME
-            // relevant protected H4 swing. Geometric overlap is not
-            // required. A later qualifying H4 POI anchored to a newly
-            // confirmed protected swing DIFFERENT from a live setup's own
-            // starts a NEW H4 reaction/H4Setup, even if that earlier setup
-            // under the same Weekly narrative hasn't otherwise terminated.
-            // No elapsed-time, distance, or "most recent" heuristic --
-            // exact swing-identity match only. This also means more than
-            // one H4Setup can now be simultaneously live under one Weekly
-            // opportunity (one per distinct protected swing), which is why
-            // "live setup" below is scoped by swing identity, not just by
-            // WeeklyOpportunityId.
-            var live = FindLiveSetupForSwing(weekly.WeeklyOpportunityId, snap.SourceSwingIdx);
+            // based and not geometric -- anchored to the exact protected H4
+            // swing, no elapsed-time/distance/"most recent" heuristic. Live-
+            // setup lookup is scoped by swing identity ALONE (not by Weekly
+            // -- see the class comment above) so this dedupes correctly even
+            // when multiple Weeklies simultaneously qualify.
+            var live = FindLiveSetupForSwing(snap.SourceSwingIdx);
             if (live != null)
             {
-                if (isPrimary) { snap.WeeklyOpportunityId = weekly.WeeklyOpportunityId; snap.PoiClusterId = live.SupportingCluster.PoiClusterId; }
+                AttachQualifyingWeeklies(live, qualifying);
+                snap.WeeklyOpportunityId = live.WeeklyOpportunityId;
+                snap.PoiClusterId = live.SupportingCluster.PoiClusterId;
                 live.SupportingCluster.Members.Add(snap);
                 _eventQueue.Enqueue(new H4SetupEvent { Type = H4SetupEventType.Retouched, Setup = live, TriggeringPoi = snap, Time = ev.Time, Note = $"H4 POI joined live reaction -- same protected swing {snap.SourceSwingType}@{snap.SourceSwingPrice} ({snap.TypeAtActivation})" });
                 return;
@@ -248,12 +242,14 @@ namespace cAlgo.Robots.ICT_S1
 
             var cluster = new PoiCluster { PoiClusterId = IdGenerator.NextPoiClusterId(), Direction = snap.Direction };
             cluster.Members.Add(snap);
-            if (isPrimary) { snap.WeeklyOpportunityId = weekly.WeeklyOpportunityId; snap.PoiClusterId = cluster.PoiClusterId; }
+            var primary = qualifying[0];
+            snap.WeeklyOpportunityId = primary.WeeklyOpportunityId;
+            snap.PoiClusterId = cluster.PoiClusterId;
 
             var setup = new H4Setup
             {
                 H4SetupId = IdGenerator.NextH4SetupId(),
-                WeeklyOpportunityId = weekly.WeeklyOpportunityId,
+                WeeklyOpportunityId = primary.WeeklyOpportunityId, // primary = display convenience only, NOT an ownership decision -- full lineage is SupportingWeeklyOpportunityIds
                 Direction = snap.Direction,
                 Route = route,
                 Status = H4SetupStatus.Impacted,
@@ -263,11 +259,26 @@ namespace cAlgo.Robots.ICT_S1
                 ProtectedSwingTime = snap.SourceSwingConfirmationTime.Value,
                 ProtectedSwingIdx = snap.SourceSwingIdx,
                 CreatedTime = ev.Time,
-                WeeklyRetouchNumber = weekly.RetouchCounter
+                WeeklyRetouchNumber = primary.RetouchCounter
             };
             Setups.Add(setup);
-            weekly.H4Setups.Add(setup); // Finding 11 fix
-            _eventQueue.Enqueue(new H4SetupEvent { Type = H4SetupEventType.Impacted, Setup = setup, TriggeringPoi = snap, Time = ev.Time, Note = $"{route} via {snap.TypeAtActivation} -- new H4 reaction, protected swing {snap.SourceSwingType}@{snap.SourceSwingPrice}" });
+            AttachQualifyingWeeklies(setup, qualifying); // adds ALL qualifying Weeklies (including primary) to SupportingWeeklyOpportunityIds + their own H4Setups list
+            _eventQueue.Enqueue(new H4SetupEvent { Type = H4SetupEventType.Impacted, Setup = setup, TriggeringPoi = snap, Time = ev.Time, Note = $"{route} via {snap.TypeAtActivation} -- new H4 reaction, protected swing {snap.SourceSwingType}@{snap.SourceSwingPrice}, supported by {qualifying.Count} Weekly opportunit{(qualifying.Count == 1 ? "y" : "ies")}" });
+        }
+
+        // Merges any newly-qualifying Weekly opportunities into an existing
+        // (live or freshly created) H4Setup's supporting lineage -- a Weekly
+        // that didn't qualify at this setup's original creation can still
+        // become a legitimate supporter later (e.g. it just re-entered its
+        // own control) while the SAME physical H4 reaction is still live.
+        private void AttachQualifyingWeeklies(H4Setup setup, List<WeeklyOpportunity> qualifying)
+        {
+            foreach (var weekly in qualifying)
+            {
+                if (setup.SupportingWeeklyOpportunityIds.Contains(weekly.WeeklyOpportunityId)) continue;
+                setup.SupportingWeeklyOpportunityIds.Add(weekly.WeeklyOpportunityId);
+                weekly.H4Setups.Add(setup); // Finding 11 fix -- same shared setup object, not a copy
+            }
         }
 
         private static bool IsInFavorType(PoiTypeLabel t) =>
@@ -307,11 +318,18 @@ namespace cAlgo.Robots.ICT_S1
         }
 
         // RESOLVED (audit sections 7-9, 43 -- strategy owner clarification
-        // 2026-08-13, see AuthorizeOrJoin's H4 REACTION GROUPING RULE
+        // 2026-08-13, see HandleNewImpact's H4 REACTION GROUPING RULE
         // comment): "same reaction" = anchored to the same exact protected
         // H4 swing, not merely "same Weekly parent, still live". A live
         // setup only qualifies as the same reaction if its ProtectedSwing
         // identity matches exactly.
+        //
+        // Follow-up strategy clarification (2026-08-13): dedup is scoped by
+        // swing identity ALONE, NOT also by WeeklyOpportunityId -- one
+        // physical H4 reaction is ONE execution stream regardless of how
+        // many Weekly opportunities support it (see HandleNewImpact's
+        // class-level comment). Scoping by Weekly too would recreate the
+        // exact duplicate-H4Setup bug this resolves.
         //
         // Part 15 hardening: compare by ProtectedSwingIdx (the H4 engine's
         // own stable structural swing index -- the same int PoiMarketEngine
@@ -320,11 +338,10 @@ namespace cAlgo.Robots.ICT_S1
         // double top/bottom) while being genuinely different structural
         // points; the index can never collide that way. Type/Price/Time
         // stay on H4Setup purely for display/journaling.
-        private H4Setup FindLiveSetupForSwing(string weeklyOpportunityId, int protectedSwingIdx)
+        private H4Setup FindLiveSetupForSwing(int protectedSwingIdx)
         {
             foreach (var s in Setups)
             {
-                if (s.WeeklyOpportunityId != weeklyOpportunityId) continue;
                 if (s.Status == H4SetupStatus.Terminated) continue;
                 if (s.ProtectedSwingIdx == protectedSwingIdx)
                     return s;

@@ -21,7 +21,7 @@
 // visibility.
 //
 // H4 reaction grouping is now resolved (strategy owner clarification,
-// 2026-08-13 -- see H4SetupEngine.AuthorizeOrJoin) -- the existing
+// 2026-08-13 -- see H4SetupEngine.HandleNewImpact) -- the existing
 // H4_IMPACTED/H4_RETOUCHED EventLog rows (from LogH4SetupEvent) already
 // carry this distinction in their Notes field ("new H4 reaction, protected
 // swing X" vs "joined live reaction -- same protected swing X"), so no
@@ -75,7 +75,7 @@ namespace cAlgo.Robots.ICT_S1
         // identity (Part 15), M5ExecutionActivationTime is the swing-pairing
         // window boundary, and ExitPriceSource proves which of
         // HistoricalTrade/QuoteFallback actually supplied ExitPrice (Part 21).
-        private const string TradeSummaryHeader = "StrategyVersion,Symbol,TradeID,PositionID,WeeklyOpportunityID,WeeklyPoiIds,PoiClusterID,H4SetupID,H4PoiIds,H4ProtectedSwingIdx,M5AttemptID,AttemptNumber," +
+        private const string TradeSummaryHeader = "StrategyVersion,Symbol,TradeID,PositionID,WeeklyOpportunityID,SupportingWeeklyOpportunityIDs,WeeklyPoiIds,PoiClusterID,H4SetupID,H4PoiIds,H4ProtectedSwingIdx,M5AttemptID,AttemptNumber," +
             "TradeDirection,WeeklyOpportunityDirection,WeeklyActivationTime,WeeklyPOITop,WeeklyPOIBottom,ControlAtTradeTime,ControlSourcePoiId," +
             "H4Route,H4ProtectedSwingType,H4ProtectedSwingPrice,H4ProtectedSwingTime,WeeklyRetouchNumber," +
             "M5ExecutionActivationTime,M5EntrySwingType,M5EntrySwingPrice,M5EntrySwingTime,M5StopSwingType,M5StopSwingPrice,M5StopSwingTime," +
@@ -237,11 +237,15 @@ namespace cAlgo.Robots.ICT_S1
             // without cross-referencing the EventLog.
             string weeklyPoiIds = JoinPoiIds(weekly?.SupportingCluster?.Members);
             string h4PoiIds = JoinPoiIds(setup?.SupportingCluster?.Members);
+            // Part 22 + follow-up multiplicity clarification: full Weekly
+            // lineage -- every Weekly opportunity that supports this trade's
+            // H4 reaction, not just the display-primary one in WeeklyOpportunityID.
+            string supportingWeeklyIds = setup?.SupportingWeeklyOpportunityIds != null ? string.Join(";", setup.SupportingWeeklyOpportunityIds) : "";
 
             var row = string.Join(",", new[]
             {
                 Csv(StrategyVersion), Csv(SymbolName), Csv(tradeId), Csv(attempt.PositionId?.ToString()),
-                Csv(weekly?.WeeklyOpportunityId), Csv(weeklyPoiIds), Csv(setup?.SupportingCluster?.PoiClusterId), Csv(setup?.H4SetupId), Csv(h4PoiIds), Csv(setup?.ProtectedSwingIdx.ToString()),
+                Csv(weekly?.WeeklyOpportunityId), Csv(supportingWeeklyIds), Csv(weeklyPoiIds), Csv(setup?.SupportingCluster?.PoiClusterId), Csv(setup?.H4SetupId), Csv(h4PoiIds), Csv(setup?.ProtectedSwingIdx.ToString()),
                 Csv(attempt.M5AttemptId), Csv(attempt.AttemptNumber.ToString()),
                 Csv(attempt.Direction.ToString()), Csv(weekly?.Direction.ToString()), Csv(weekly?.ActivationTime.ToString("O")), Csv(weeklyTop), Csv(weeklyBottom),
                 Csv(weekly?.Control.ToString()), Csv(weekly?.ControlSourcePoiId),

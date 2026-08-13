@@ -15,22 +15,24 @@
 // OFF and BUY entries = OFF for THAT narrative").
 //
 // ROUND 2 (audit sections 21, 23):
-// (1) BLOCKED STRATEGY QUESTION, NOT A SETTLED FIX (final audit Part 14 --
-//     comment-accuracy corrected, was previously overclaimed as resolved
-//     here): which opposite-direction opportunity(ies) a new counter-POI's
-//     own narrative is contesting is decided once, at creation, and stored
-//     as ContestingOfWeeklyOpportunityIds. Zone overlap can't be the test
-//     (a counter-POI typically forms well away from the original zone
-//     after price has moved). The old "most recently activated opposite"
-//     TIE-BREAK IS REMOVED, but "link to every opposite-direction
-//     opportunity currently in its own control" is the SAME class of
-//     unconfirmed decision as H4SetupEngine's Weekly->H4 fan-out -- one
-//     bearish Old/Aggressive POI should affect exactly the narrative(s)
-//     whose price/control path actually encountered it, and "all
-//     currently-active candidates" doesn't structurally prove that. Left
-//     running as-is pending the same strategy-owner architectural answer
-//     as the H4 case (see current repair report); do not resolve this one
-//     independently with a different guess.
+// (1) RESOLVED via the same strategy-owner clarification that fixed
+//     H4SetupEngine's Weekly->H4 fan-out (see that file's header, follow-up
+//     round, 2026-08-13): which opposite-direction opportunity(ies) a new
+//     counter-POI's own narrative is contesting is decided once, at
+//     creation, and stored as ContestingOfWeeklyOpportunityIds. Zone
+//     overlap can't be the test (a counter-POI typically forms well away
+//     from the original zone after price has moved), and no confirmed rule
+//     picks a single opposite-direction "owner" among several simultaneously
+//     in control -- but this no longer needs one: the strategy owner's
+//     answer was "preserve lineage across every supporting narrative,
+//     dedupe execution at the H4 reaction level" -- and Control changes
+//     don't themselves execute trades, they only affect which Weeklies are
+//     ELIGIBLE to authorize a future H4Setup. Since H4SetupEngine now
+//     dedupes at the H4-reaction layer regardless of how many Weeklies are
+//     simultaneously eligible, linking a retiring counter-narrative's
+//     control handback to every opposite-direction opportunity it could
+//     apply to is exactly "preserving lineage without duplicating
+//     execution" -- no separate fix needed here.
 // (2) NEUTRAL detection no longer uses the raw Weekly regime flag (that
 //     heuristic is removed per Finding 8 -- Pine regime and S1 Control are
 //     NOT confirmed equivalent). It now directly follows the doc's own
@@ -185,16 +187,15 @@ namespace cAlgo.Robots.ICT_S1
         // direction opportunity currently holding control in its own
         // direction (the ones genuinely "in play" right now).
         //
-        // BLOCKED STRATEGY QUESTION, NOT A SETTLED FIX (final audit Part 14
-        // -- see file header): the old "most recently activated opposite"
-        // tie-break is REMOVED, but "link to every currently-qualifying
-        // opposite-direction opportunity" is not proven correct either --
-        // same open question as H4SetupEngine's Weekly->H4 fan-out. Left as
-        // multiplicity-preserving (this counter-narrative links to EVERY
-        // qualifying opposite-direction opportunity, and its own retirement
-        // hands control back to all of them -- see
-        // ComputeControlTransitionOnRetire) pending the strategy owner's
-        // answer, not because that's confirmed correct.
+        // RESOLVED (final audit Part 14 -- see file header): the old "most
+        // recently activated opposite" tie-break is REMOVED. Multiplicity
+        // is preserved (this counter-narrative links to EVERY qualifying
+        // opposite-direction opportunity, and its own retirement hands
+        // control back to all of them -- see ComputeControlTransitionOnRetire)
+        // -- correct per the strategy owner's clarification since Control
+        // handback isn't itself a trade; H4SetupEngine dedupes execution at
+        // the H4-reaction layer regardless of how many Weeklies are
+        // eligible.
         private void LinkContestingNarrativeIfAny(WeeklyOpportunity newOpp, DateTime now)
         {
             var oppositeDir = newOpp.Direction == Direction.Buy ? Direction.Sell : Direction.Buy;
