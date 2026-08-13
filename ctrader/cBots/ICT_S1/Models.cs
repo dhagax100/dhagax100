@@ -156,6 +156,14 @@ namespace cAlgo.Robots.ICT_S1
         // watching this (now SPENT) zone.
         public int OriginBucket;
 
+        // Exact structural swing this POI was created from, as stored by
+        // the engine at creation time (Round 2 fix -- consumed directly by
+        // H4SetupEngine as the protected swing; never reconstructed after
+        // the fact by scanning for "the nearest swing near this POI").
+        public SwingType? SourceSwingType;
+        public double? SourceSwingPrice;
+        public DateTime? SourceSwingConfirmationTime;
+
         public S1PoiLifecycleState LifecycleState = S1PoiLifecycleState.Available;
         public int RetouchCount = 0;
 
@@ -218,19 +226,27 @@ namespace cAlgo.Robots.ICT_S1
         public double? ControlSwingPrice;
         public DateTime? ControlSwingTime;
 
-        // The counter-direction cluster currently being contested for
+        // The counter-direction cluster(s) currently being contested for
         // control of this narrative (if any) -- separate from
-        // SupportingCluster, which supports the ORIGINAL direction.
-        public PoiCluster ContestingCluster;
+        // SupportingCluster, which supports the ORIGINAL direction. Round 2
+        // fix: plural, since more than one counter-narrative can contest
+        // the same opportunity over time (display/bookkeeping only -- not
+        // consumed by any control-transition decision).
+        public readonly List<PoiCluster> ContestingClusters = new List<PoiCluster>();
 
-        // Explicit reverse link (Finding 9 fix): set on THIS opportunity
-        // when it was itself created as a counter-direction POI's own
-        // narrative, pointing at the opposite-direction opportunity it is
-        // contesting for control. Established once, at creation time, from
-        // a real geometric relationship (zone overlap) -- never inferred
-        // later by recency. Control transitions on retirement look this up
-        // directly instead of guessing "most recently activated opposite."
-        public string ContestingOfWeeklyOpportunityId;
+        // Explicit reverse link(s) (Finding 9 fix; Round 2 multiplicity fix,
+        // audit section 21): set on THIS opportunity when it was itself
+        // created as a counter-direction POI's own narrative, pointing at
+        // EVERY opposite-direction opportunity that was genuinely in its
+        // own control at that moment. Established once, at creation time --
+        // never inferred later by recency. The old "most recently activated
+        // opposite" tie-break is REMOVED: if more than one opposite-direction
+        // narrative qualified, this counter-narrative is genuinely
+        // contesting ALL of them, and its own retirement/reaction-swing
+        // hands control back to every one of them independently (same
+        // multiplicity-preservation reasoning as H4SetupEngine's Weekly->H4
+        // authorization fix).
+        public readonly List<string> ContestingOfWeeklyOpportunityIds = new List<string>();
 
         public DateTime? TerminationTime;
         public string TerminationReason;
@@ -274,6 +290,15 @@ namespace cAlgo.Robots.ICT_S1
 
         public readonly List<M5Attempt> M5Attempts = new List<M5Attempt>();
 
+        // Round 2 fix (audit section 19): the M5 timeframe must only pair
+        // swings confirmed AFTER this window opens -- set/reset by
+        // M5ExecutionEngine.EnsureAttemptTracking each time a NEW tracking
+        // cycle begins for this setup (first impact, and again on every
+        // SL re-entry), so a fresh attempt can never be authorized by a
+        // stale swing pair left over from before this cycle (e.g. the very
+        // swing pair that just stopped out the previous attempt).
+        public DateTime? M5ExecutionActivationTime;
+
         public DateTime CreatedTime;
         public DateTime? TerminatedTime;
         public string TerminationReason;
@@ -308,7 +333,34 @@ namespace cAlgo.Robots.ICT_S1
         public double StopSwingPrice;
         public DateTime StopSwingTime;
 
+        // Transient -- set by M5ExecutionEngine.TryMoveOrder immediately
+        // before it overwrites Entry/StopSwing* with the new pairing, so
+        // the ORDER_MOVED journal row can state exactly which swing pairing
+        // was replaced by which (audit section 3/27).
+        public SwingType? PreviousEntrySwingType;
+        public double? PreviousEntrySwingPrice;
+        public DateTime? PreviousEntrySwingTime;
+        public SwingType? PreviousStopSwingType;
+        public double? PreviousStopSwingPrice;
+        public DateTime? PreviousStopSwingTime;
+
         public string PendingOrderId;
+        public string LastCancellationReason; // set immediately before OrderCancelled fires (e.g. "Parent H4Setup terminated")
+
+        // Round 2 fix (audit section 3): FirstPendingOrderCreatedTime is
+        // set exactly once and never changes -- "when this attempt's order
+        // first went live". PendingOrderCreatedTime is the CURRENT live
+        // order's own placement/replace time, and DOES update on every
+        // move -- so it always matches whichever EntrySwingTime/StopSwingTime
+        // pairing is currently live. Journaling the two separately (plus an
+        // explicit ORDER_MOVED_FROM_SWING_A_TO_SWING_B event, see
+        // M5ExecutionEngine.TryMoveOrder) is what makes "order timestamp
+        // precedes its authorizing swing" stop being ambiguous in the CSV:
+        // the FIRST timestamp can legitimately precede a LATER swing that
+        // caused a later move: that's not a bug, that's the order having
+        // been moved. Only PendingOrderCreatedTime (current) needs to be
+        // >= the CURRENT EntrySwingTime/StopSwingTime for a given row.
+        public DateTime? FirstPendingOrderCreatedTime;
         public DateTime? PendingOrderCreatedTime;
         public int PendingOrderModificationCount = 0;
 
@@ -320,6 +372,11 @@ namespace cAlgo.Robots.ICT_S1
         public double TPPrice;
 
         public long? PositionId;
+        public double? PositionVolume;
+
+        // Assigned once, at fill time (Round 2 fix, audit section 29) --
+        // never regenerated later at close/journal time.
+        public string TradeId;
 
         public DateTime? ExitTime;
         public double? ExitPrice;

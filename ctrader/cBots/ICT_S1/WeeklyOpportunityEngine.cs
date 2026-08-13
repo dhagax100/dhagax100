@@ -14,22 +14,30 @@
 // reading as wrong given the doc's own NEUTRAL example ("SELL entries =
 // OFF and BUY entries = OFF for THAT narrative").
 //
-// Two heuristics remain (now fixed AT CREATION TIME, not re-derived later):
-// (1) which opposite-direction opportunity a new counter-POI's own
-//     narrative is contesting -- decided once, when that counter narrative
-//     is created, and stored as ContestingOfWeeklyOpportunityId. Zone
+// ROUND 2 (audit sections 21, 23) -- both remaining heuristics below are
+// now fully removed, not just documented:
+// (1) Which opposite-direction opportunity(ies) a new counter-POI's own
+//     narrative is contesting is decided once, when that counter narrative
+//     is created, and stored as ContestingOfWeeklyOpportunityIds. Zone
 //     overlap can't be the test here (a counter-POI typically forms well
-//     away from the original zone after price has moved), so the tie-break
-//     is "whichever opposite-direction opportunity currently holds control
-//     in its own direction" -- still a documented implementation choice,
-//     but now fixed once instead of re-guessed by recency at retirement
-//     time (the actual defect).
+//     away from the original zone after price has moved). The old "most
+//     recently activated opposite" TIE-BREAK IS REMOVED -- multiplicity is
+//     preserved instead: every opposite-direction opportunity currently in
+//     its own control is linked, and this counter-narrative's own
+//     retirement hands control back to ALL of them independently (same
+//     reasoning as H4SetupEngine's Weekly->H4 multiplicity fix).
 // (2) NEUTRAL detection no longer uses the raw Weekly regime flag (that
 //     heuristic is removed per Finding 8 -- Pine regime and S1 Control are
 //     NOT confirmed equivalent). It now directly follows the doc's own
 //     worked example: the current controlling direction's own next
 //     opposite-kind swing (SellControl ends on the next Weekly Swing Low,
 //     BuyControl ends on the next Weekly Swing High) ends that phase.
+// (3) Reactivation FROM Neutral is no longer "any retouch" (audit section
+//     23 -- that was too broad). It now requires the triggering POI to be
+//     In-Favor or Aggressive-In-Favor (OriginBucket 0/4, i.e. the exact
+//     "I..."/"AI..." type families) -- matching the doc's own NEUTRAL
+//     worked example ("a valid bullish/bearish location subsequently
+//     qualifies"), not any POI type whatsoever.
 
 using System;
 using System.Collections.Generic;
@@ -115,7 +123,7 @@ namespace cAlgo.Robots.ICT_S1
                 snap.WeeklyOpportunityId = joinable.WeeklyOpportunityId;
                 snap.PoiClusterId = joinable.SupportingCluster.PoiClusterId;
                 joinable.SupportingCluster.Members.Add(snap);
-                ReactivateFromNeutralIfDue(joinable, ev.Time);
+                ReactivateFromNeutralIfDue(joinable, snap, ev.Time);
                 _eventQueue.Enqueue(new WeeklyOpportunityEvent { Type = WeeklyOpportunityEventType.Retouched, Opportunity = joinable, TriggeringPoi = snap, Time = ev.Time, Note = $"Joined existing cluster ({snap.TypeAtActivation})" });
                 return;
             }
@@ -168,15 +176,21 @@ namespace cAlgo.Robots.ICT_S1
         // overlap the original narrative's zone (price has already moved
         // away by the time a counter-POI forms) -- so overlap can't be the
         // contesting test. Instead: at the moment this counter-direction
-        // opportunity is created, link it to whichever ACTIVE opposite-
-        // direction opportunity currently holds control in its own
-        // direction (the one genuinely "in play" right now). This is a
-        // documented implementation choice, but fixed once at creation,
-        // not re-derived later.
+        // opportunity is created, link it to every ACTIVE opposite-
+        // direction opportunity currently holding control in its own
+        // direction (the ones genuinely "in play" right now).
+        //
+        // Round 2 fix (audit section 21): the old "most recently activated
+        // opposite" tie-break is REMOVED -- there is no confirmed rule for
+        // picking a single opposite-direction target when more than one
+        // qualifies simultaneously (same reasoning as the Weekly->H4
+        // multiplicity fix in H4SetupEngine). Multiplicity is preserved:
+        // this counter-narrative links to EVERY qualifying opposite-
+        // direction opportunity, and its own retirement hands control back
+        // to all of them (see ComputeControlTransitionOnRetire).
         private void LinkContestingNarrativeIfAny(WeeklyOpportunity newOpp, DateTime now)
         {
             var oppositeDir = newOpp.Direction == Direction.Buy ? Direction.Sell : Direction.Buy;
-            WeeklyOpportunity target = null;
             foreach (var opp in Opportunities)
             {
                 if (opp.Status != WeeklyOpportunityStatus.Active) continue;
@@ -184,12 +198,10 @@ namespace cAlgo.Robots.ICT_S1
                 bool inOwnControl = (opp.Control == ControlState.BuyControl && opp.Direction == Direction.Buy)
                                   || (opp.Control == ControlState.SellControl && opp.Direction == Direction.Sell);
                 if (!inOwnControl) continue;
-                if (target == null || opp.ActivationTime > target.ActivationTime) target = opp;
-            }
-            if (target == null) return;
 
-            newOpp.ContestingOfWeeklyOpportunityId = target.WeeklyOpportunityId;
-            target.ContestingCluster = newOpp.SupportingCluster;
+                newOpp.ContestingOfWeeklyOpportunityIds.Add(opp.WeeklyOpportunityId);
+                opp.ContestingClusters.Add(newOpp.SupportingCluster);
+            }
         }
 
         private void HandleRetouch(PoiLifecycleEvent ev)
@@ -197,7 +209,7 @@ namespace cAlgo.Robots.ICT_S1
             var opp = FindOwningOpportunity(ev.Snapshot);
             if (opp == null) return;
             opp.RetouchCounter++;
-            ReactivateFromNeutralIfDue(opp, ev.Time);
+            ReactivateFromNeutralIfDue(opp, ev.Snapshot, ev.Time);
             _eventQueue.Enqueue(new WeeklyOpportunityEvent { Type = WeeklyOpportunityEventType.Retouched, Opportunity = opp, TriggeringPoi = ev.Snapshot, Time = ev.Time, Note = $"Weekly retouch #{opp.RetouchCounter}" });
         }
 
@@ -206,17 +218,31 @@ namespace cAlgo.Robots.ICT_S1
         // activity under THIS opportunity's own cluster is what ends a
         // Neutral phase and restores control to this narrative's own
         // direction.
-        private void ReactivateFromNeutralIfDue(WeeklyOpportunity opp, DateTime time)
+        //
+        // Round 2 fix (audit section 23): NOT "any retouch". The doc's own
+        // example is specifically "a valid bullish/bearish LOCATION" --
+        // this is read as the In-Favor/Aggressive-In-Favor POI families
+        // (OriginBucket 0/4, i.e. the "I..."/"AI..." types), which are the
+        // confirmed "in this narrative's favor" location types elsewhere in
+        // the spec (same family H4SetupEngine.IsInFavorType tests for RouteA
+        // vs RouteB classification). An Old or plain-Aggressive (A.../O...)
+        // POI impact or retouch does NOT qualify.
+        private static bool IsInFavorOrigin(int originBucket) => originBucket == 0 || originBucket == 4;
+
+        private void ReactivateFromNeutralIfDue(WeeklyOpportunity opp, S1PoiSnapshot triggeringSnap, DateTime time)
         {
             if (opp.Control != ControlState.Neutral) return;
+            if (!IsInFavorOrigin(triggeringSnap.OriginBucket)) return;
+
             var restored = opp.Direction == Direction.Buy ? ControlState.BuyControl : ControlState.SellControl;
             opp.Control = restored;
             _eventQueue.Enqueue(new WeeklyOpportunityEvent
             {
                 Type = WeeklyOpportunityEventType.ControlChanged,
                 Opportunity = opp,
+                TriggeringPoi = triggeringSnap,
                 Time = time,
-                Note = $"Control -> {restored} (valid own-direction location reached)"
+                Note = $"Control -> {restored} (valid own-direction In-Favor/Aggressive-In-Favor location reached: {triggeringSnap.TypeAtActivation})"
             });
         }
 
@@ -235,34 +261,38 @@ namespace cAlgo.Robots.ICT_S1
 
         // A counter-direction POI just RETIRED (respected + reaction swing
         // confirmed) -- per spec section 3, this establishes Control in its
-        // direction for the narrative it was EXPLICITLY linked to at
-        // creation (Finding 9 fix -- no recency search here anymore).
+        // direction for EVERY narrative it was EXPLICITLY linked to at
+        // creation (Finding 9 fix + Round 2 multiplicity fix -- no recency
+        // search, no single-target collapse; fans out to all contested
+        // targets independently).
         private void ComputeControlTransitionOnRetire(PoiLifecycleEvent ev)
         {
             var snap = ev.Snapshot;
             var owner = FindOwningOpportunity(snap);
-            if (owner?.ContestingOfWeeklyOpportunityId == null) return;
-
-            var contested = FindById(owner.ContestingOfWeeklyOpportunityId);
-            if (contested == null || contested.Status != WeeklyOpportunityStatus.Active) return;
+            if (owner == null || owner.ContestingOfWeeklyOpportunityIds.Count == 0) return;
 
             var newControl = snap.Direction == Direction.Buy ? ControlState.BuyControl : ControlState.SellControl;
-            if (contested.Control == newControl) return;
-
-            contested.Control = newControl;
-            contested.ControlSourcePoiId = snap.S1PoiId;
-            contested.ControlSwingType = snap.RelevantReactionSwingType;
-            contested.ControlSwingPrice = snap.RelevantReactionSwingPrice;
-            contested.ControlSwingTime = snap.RelevantReactionSwingConfirmationTime;
-
-            _eventQueue.Enqueue(new WeeklyOpportunityEvent
+            foreach (var contestedId in owner.ContestingOfWeeklyOpportunityIds)
             {
-                Type = WeeklyOpportunityEventType.ControlChanged,
-                Opportunity = contested,
-                TriggeringPoi = snap,
-                Time = ev.Time,
-                Note = $"Control -> {newControl} (source {snap.TypeAtActivation} {snap.S1PoiId})"
-            });
+                var contested = FindById(contestedId);
+                if (contested == null || contested.Status != WeeklyOpportunityStatus.Active) continue;
+                if (contested.Control == newControl) continue;
+
+                contested.Control = newControl;
+                contested.ControlSourcePoiId = snap.S1PoiId;
+                contested.ControlSwingType = snap.RelevantReactionSwingType;
+                contested.ControlSwingPrice = snap.RelevantReactionSwingPrice;
+                contested.ControlSwingTime = snap.RelevantReactionSwingConfirmationTime;
+
+                _eventQueue.Enqueue(new WeeklyOpportunityEvent
+                {
+                    Type = WeeklyOpportunityEventType.ControlChanged,
+                    Opportunity = contested,
+                    TriggeringPoi = snap,
+                    Time = ev.Time,
+                    Note = $"Control -> {newControl} (source {snap.TypeAtActivation} {snap.S1PoiId})"
+                });
+            }
         }
 
         // Finding 8 fix: NEUTRAL is no longer derived from the raw Weekly

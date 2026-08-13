@@ -154,7 +154,7 @@ namespace cAlgo.Robots.ICT_S1
                 case 4: type = PoiTypeLabel.AIFOB; break;
                 default: type = PoiTypeLabel.IFOB; break;
             }
-            var snap = NewSnapshot(PoiFamily.OB, type, z.Bullish, z.Zb, z.Zt, z.OrigState, z.StopK, z.Candle, z.TriggerK, z.EligibleK);
+            var snap = NewSnapshot(PoiFamily.OB, type, z.Bullish, z.Zb, z.Zt, z.OrigState, z.StopK, z.Candle, z.TriggerK, z.EligibleK, z.SourcePoiId, z.SourceSwingIdx);
             z.S1SnapshotId = snap.S1PoiId;
         }
 
@@ -168,7 +168,7 @@ namespace cAlgo.Robots.ICT_S1
                 case 2: type = PoiTypeLabel.OFVG; break;
                 default: type = PoiTypeLabel.IFVG; break;
             }
-            var snap = NewSnapshot(PoiFamily.FVG, type, z.Bullish, z.Zb, z.Zt, z.Origin, z.StopK, z.LeftIdx, z.TriggerK, z.EligibleK);
+            var snap = NewSnapshot(PoiFamily.FVG, type, z.Bullish, z.Zb, z.Zt, z.Origin, z.StopK, z.LeftIdx, z.TriggerK, z.EligibleK, z.SourcePoiId, z.SourceSwingIdx);
             z.S1SnapshotId = snap.S1PoiId;
         }
 
@@ -185,7 +185,7 @@ namespace cAlgo.Robots.ICT_S1
             }
             // RB direction is used AS-IS from the raw engine's raw-wick
             // convention -- confirmed rule, no hunt-direction translation.
-            var snap = NewSnapshot(PoiFamily.RB, type, z.Bullish, z.Zb, z.Zt, z.Origin, z.StopK, z.LeftIdx, z.TriggerK, z.EligibleK);
+            var snap = NewSnapshot(PoiFamily.RB, type, z.Bullish, z.Zb, z.Zt, z.Origin, z.StopK, z.LeftIdx, z.TriggerK, z.EligibleK, z.SourcePoiId, z.SourceSwingIdx);
             z.S1SnapshotId = snap.S1PoiId;
         }
 
@@ -199,18 +199,25 @@ namespace cAlgo.Robots.ICT_S1
                 case 2: type = PoiTypeLabel.OVI; break;
                 default: type = PoiTypeLabel.IVI; break;
             }
-            var snap = NewSnapshot(PoiFamily.VI, type, z.Bullish, z.Zb, z.Zt, z.Origin, z.StopK, z.LeftIdx, z.TriggerK, z.EligibleK);
+            var snap = NewSnapshot(PoiFamily.VI, type, z.Bullish, z.Zb, z.Zt, z.Origin, z.StopK, z.LeftIdx, z.TriggerK, z.EligibleK, z.SourcePoiId, z.SourceSwingIdx);
             z.S1SnapshotId = snap.S1PoiId;
         }
 
         // Finding 13 fix: CreationTime/TriggerTime/EligibilityTime are now
         // populated from the raw zone's own bar indices instead of being
         // left at their default (unset) value forever.
-        private S1PoiSnapshot NewSnapshot(PoiFamily family, PoiTypeLabel type, bool bullish, double zb, double zt, int originBucket, int impactBarIdx, int creationBarIdx, int triggerBarIdx, int eligibleBarIdx)
+        //
+        // Round 2 fix (audit section 25): sourcePoiId/sourceSwingIdx are the
+        // exact identity/structural-swing metadata the raw engine stamped
+        // at creation time (PoiMarketEngine.RawPoiIdGenerator / AddOB|Fvg|Rb|Vi's
+        // sourceSwingIdx parameter). Frozen here so H4SetupEngine can consume
+        // the exact original swing directly instead of reconstructing it later.
+        private S1PoiSnapshot NewSnapshot(PoiFamily family, PoiTypeLabel type, bool bullish, double zb, double zt, int originBucket, int impactBarIdx, int creationBarIdx, int triggerBarIdx, int eligibleBarIdx, string sourcePoiId, int sourceSwingIdx)
         {
             var snap = new S1PoiSnapshot
             {
                 S1PoiId = IdGenerator.NextPoiId(),
+                SourcePoiId = sourcePoiId,
                 Timeframe = Timeframe,
                 Family = family,
                 TypeAtActivation = type,
@@ -225,10 +232,30 @@ namespace cAlgo.Robots.ICT_S1
                 EligibilityTime = BarTime(eligibleBarIdx),
                 LifecycleState = S1PoiLifecycleState.ImpactedUnresolved
             };
+            PopulateSourceSwing(snap, sourceSwingIdx);
             AllSnapshots.Add(snap);
             _unresolved.Add(snap);
             _eventQueue.Enqueue(new PoiLifecycleEvent { Type = PoiEventType.NewImpact, Snapshot = snap, Time = snap.FirstImpactTime, Note = $"{type} first qualifying impact" });
             return snap;
+        }
+
+        // Looks up the exact recorded swing-confirmation event for the
+        // structural swing index the engine stamped on the raw zone at
+        // creation -- not a reconstruction/approximation: SwingIdx is the
+        // same bar index AddOB/AddFvg/AddRb/AddVi's caller passed in, and
+        // each confirmed swing has exactly one AddEv entry recording its
+        // Kind (High/Low), Price, and confirmation bar (ConfirmIdx).
+        private void PopulateSourceSwing(S1PoiSnapshot snap, int sourceSwingIdx)
+        {
+            if (sourceSwingIdx < 0) return;
+            foreach (var ev in _engine.Events)
+            {
+                if (ev.SwingIdx != sourceSwingIdx) continue;
+                snap.SourceSwingType = ev.Kind == 0 ? SwingType.High : SwingType.Low;
+                snap.SourceSwingPrice = ev.Price;
+                snap.SourceSwingConfirmationTime = BarTime(ev.ConfirmIdx);
+                return;
+            }
         }
 
         // -1 (e.g. EligibleK not yet set at freeze time, though it always

@@ -20,8 +20,25 @@
 // recreate): an order Cancelled or a position Closed with a reason other
 // than our own SL/TP, where the M5Attempt hadn't already been transitioned
 // to Cancelled/Closed by our own code, is treated as external/manual.
+//
+// ROUND 2 FIX (audit sections 5-6) -- the OLD classification relied on
+// `attempt.Status == Cancelled` at the moment PendingOrderCancelled fires.
+// That is unreliable by construction: every order MOVE cancels the old
+// order and immediately places a replacement, which sets attempt.Status
+// back to Pending before the old order's (possibly async) cancellation
+// confirmation arrives -- so a perfectly normal internal move looked
+// identical to a manual cancel, and that is the confirmed root cause of
+// the ~34 false MANUAL_INTERVENTION_DETECTED events in the Round 2 backtest.
+// Fixed by tracking INTENT explicitly, keyed by order label, independent of
+// whatever attempt.Status has moved on to by the time the confirmation
+// arrives: CancelPendingOrder() (this class's own method, called by
+// M5ExecutionEngine for both order moves and parent-setup termination)
+// records the intent BEFORE issuing the real cAlgo cancel. A counter (not a
+// flag) because the same label can legitimately have more than one
+// internal cancel in flight (e.g. a very fast successive move).
 
 using System;
+using System.Collections.Generic;
 using cAlgo.API;
 
 namespace cAlgo.Robots.ICT_S1
@@ -31,6 +48,7 @@ namespace cAlgo.Robots.ICT_S1
         private readonly Robot _robot;
         private readonly Symbol _symbol;
         private readonly RiskManager _riskManager;
+        private readonly Dictionary<string, int> _internalCancelIntent = new Dictionary<string, int>();
 
         public double Bid => _symbol.Bid;
         public double Ask => _symbol.Ask;
@@ -80,6 +98,9 @@ namespace cAlgo.Robots.ICT_S1
         {
             var order = FindPendingOrder(orderId);
             if (order == null) return;
+            // Record intent BEFORE the real cancel -- see class header.
+            _internalCancelIntent.TryGetValue(orderId, out var n);
+            _internalCancelIntent[orderId] = n + 1;
             _robot.CancelPendingOrder(order);
         }
 
@@ -103,6 +124,21 @@ namespace cAlgo.Robots.ICT_S1
             var attempt = FindAttempt(args.Position.Label);
             if (attempt == null) return; // not one of ours
             ExecutionEngine.OnAttemptFilled(attempt, args.Position.EntryPrice, _robot.Server.Time);
+
+            attempt.TradeId = attempt.TradeId ?? IdGenerator.NextTradeId(); // Round 2 fix (audit 29): assigned once, at fill
+            attempt.PositionId = args.Position.Id;
+            attempt.PositionVolume = args.Position.VolumeInUnits;
+
+            // Round 2 fix (audit sections 30-32): OnAttemptFilled just
+            // recalculated SLPrice/TPPrice anchored to the ACTUAL fill price
+            // (slippage/gap-adjusted) -- push those to the real broker
+            // position so the live protective orders match what our own
+            // journal/RealizedR math assumes. Without this the broker keeps
+            // protecting the ORIGINAL pre-fill levels while S1 reports
+            // R-multiples computed from the recalculated ones -- confirmed
+            // root cause of the RealizedR anomalies in the Round 2 backtest.
+            args.Position.ModifyStopLossPrice(attempt.SLPrice);
+            args.Position.ModifyTakeProfitPrice(attempt.TPPrice);
         }
 
         private void OnPositionClosed(PositionClosedEventArgs args)
@@ -131,18 +167,50 @@ namespace cAlgo.Robots.ICT_S1
                     break;
             }
 
-            // Exit price: current quote at close time as the closest
-            // available proxy -- verify whether the installed API exposes
-            // Position's actual closing price more directly (see file header).
-            double exitPrice = pos.TradeType == TradeType.Buy ? _symbol.Bid : _symbol.Ask;
+            // Round 2 fix (audit sections 30-32): exit price now comes from
+            // the account's actual closed-trade record (History), which
+            // carries the REAL closing price cAlgo executed at -- not a
+            // live Bid/Ask quote fetched after the close event fires, which
+            // can already have moved past the true fill and was flagged as
+            // only an approximate proxy. Falls back to the live quote only
+            // if the historical record genuinely isn't found (shouldn't
+            // happen for a position that was just closed).
+            var histTrade = FindHistoricalTrade(pos.Id);
+            double exitPrice = histTrade != null
+                ? histTrade.ClosingPrice
+                : (pos.TradeType == TradeType.Buy ? _symbol.Bid : _symbol.Ask);
             ExecutionEngine.OnAttemptClosed(attempt, exitPrice, _robot.Server.Time, reason, pos.GrossProfit, pos.NetProfit);
+        }
+
+        private HistoricalTrade FindHistoricalTrade(long positionId)
+        {
+            for (int i = _robot.History.Count - 1; i >= 0; i--)
+            {
+                var t = _robot.History[i];
+                if (t.PositionId == positionId) return t;
+            }
+            return null;
         }
 
         private void OnPendingOrderCancelled(PendingOrderCancelledEventArgs args)
         {
-            var attempt = FindAttempt(args.PendingOrder.Label);
+            var label = args.PendingOrder.Label;
+            var attempt = FindAttempt(label);
             if (attempt == null) return;
-            if (attempt.Status == M5AttemptStatus.Cancelled) return; // we already did this ourselves
+
+            // Intent-based classification (Round 2 fix) -- NOT attempt.Status,
+            // which may already have moved on to Pending (replacement order
+            // from a move) or Cancelled (terminal cancel already applied) by
+            // the time this confirmation arrives. Either way, if WE initiated
+            // this specific cancellation, consume one unit of intent and stop:
+            // the M5ExecutionEngine call site that triggered it already did
+            // (or is doing) whatever attempt.Status transition is correct.
+            if (_internalCancelIntent.TryGetValue(label, out var n) && n > 0)
+            {
+                if (n <= 1) _internalCancelIntent.Remove(label);
+                else _internalCancelIntent[label] = n - 1;
+                return;
+            }
 
             attempt.Status = M5AttemptStatus.Cancelled;
             ManualInterventionDetected?.Invoke(attempt, "Pending order cancelled externally");

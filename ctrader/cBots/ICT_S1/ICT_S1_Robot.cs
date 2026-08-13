@@ -78,6 +78,14 @@ namespace cAlgo.Robots.ICT_S1
         private JournalManager _journal;
         private VisualizationManager _viz;
 
+        // Round 2 fix (audit section 27): cursors for mechanically draining
+        // PoiMarketEngine's already-computed Events/Msses lists into the
+        // journal (SWING_HIGH/LOW_CONFIRMED, MSS_UP/DOWN) -- no new
+        // detection logic, just visibility into data the engine already
+        // produces.
+        private int _weeklySwingLogIdx, _weeklyMssLogIdx;
+        private int _h4SwingLogIdx, _h4MssLogIdx;
+
         protected override void OnStart()
         {
             var weeklyBars = MarketData.GetBars(TimeFrame.Weekly, SymbolName);
@@ -179,8 +187,25 @@ namespace cAlgo.Robots.ICT_S1
             _journal?.FlushAll();
         }
 
+        private void DrainSwingAndMssLog(PoiMarketEngine engine, string timeframe, ref int swingIdx, ref int mssIdx)
+        {
+            for (; swingIdx < engine.Events.Count; swingIdx++)
+            {
+                var e = engine.Events[swingIdx];
+                var t = e.ConfirmIdx >= 0 && e.ConfirmIdx < engine.BT.Count ? engine.BT[e.ConfirmIdx] : default(DateTime);
+                _journal.LogSwingEvent(timeframe, e.Kind == 0, e.Price, t);
+            }
+            for (; mssIdx < engine.Msses.Count; mssIdx++)
+            {
+                var m = engine.Msses[mssIdx];
+                var t = m.AtIdx >= 0 && m.AtIdx < engine.BT.Count ? engine.BT[m.AtIdx] : default(DateTime);
+                _journal.LogMssEvent(timeframe, m.ToUp, m.Price, t);
+            }
+        }
+
         private void DrainWeeklySide()
         {
+            DrainSwingAndMssLog(_weeklyEngine, "Weekly", ref _weeklySwingLogIdx, ref _weeklyMssLogIdx);
             _weeklyTracker.Update();
             var poiEvents = _weeklyTracker.DrainEvents();
             foreach (var ev in poiEvents)
@@ -196,6 +221,7 @@ namespace cAlgo.Robots.ICT_S1
 
         private void DrainH4Side()
         {
+            DrainSwingAndMssLog(_h4Engine, "H4", ref _h4SwingLogIdx, ref _h4MssLogIdx);
             _h4Tracker.Update();
             var poiEvents = _h4Tracker.DrainEvents();
             foreach (var ev in poiEvents)
@@ -217,8 +243,18 @@ namespace cAlgo.Robots.ICT_S1
         private void WireEvents()
         {
             _m5ExecEngine.OrderPlaced += a => { _journal.LogOrderEvent(a, "PENDING_ORDER_CREATED", $"@{a.RequestedEntryPrice}", Server.Time); _viz.DrawAttemptOrder(a, Server.Time); };
-            _m5ExecEngine.OrderMoved += a => { _journal.LogOrderEvent(a, "PENDING_ORDER_MOVED", $"@{a.RequestedEntryPrice}", Server.Time); _viz.DrawAttemptOrder(a, Server.Time); };
-            _m5ExecEngine.OrderCancelled += a => _journal.LogOrderEvent(a, "PENDING_ORDER_CANCELLED", "", Server.Time);
+            _m5ExecEngine.OrderMoved += a =>
+            {
+                // Round 2 fix (audit sections 3/27): explicit A->B swing
+                // transition instead of a silent overwrite -- this is what
+                // makes clear in the journal that a later PendingOrderCreatedTime
+                // legitimately supersedes an earlier one, rather than looking
+                // like "order created before its authorizing swing".
+                string note = $"@{a.RequestedEntryPrice} | entry {a.PreviousEntrySwingType}@{a.PreviousEntrySwingPrice} ({a.PreviousEntrySwingTime:O}) -> {a.EntrySwingType}@{a.EntrySwingPrice} ({a.EntrySwingTime:O}); stop {a.PreviousStopSwingType}@{a.PreviousStopSwingPrice} ({a.PreviousStopSwingTime:O}) -> {a.StopSwingType}@{a.StopSwingPrice} ({a.StopSwingTime:O})";
+                _journal.LogOrderEvent(a, "ORDER_MOVED_FROM_SWING_A_TO_SWING_B", note, Server.Time);
+                _viz.DrawAttemptOrder(a, Server.Time);
+            };
+            _m5ExecEngine.OrderCancelled += a => _journal.LogOrderEvent(a, "PENDING_ORDER_CANCELLED_INTERNAL", a.LastCancellationReason ?? "", Server.Time);
             _m5ExecEngine.AttemptFilled += a => _journal.LogOrderEvent(a, "TRADE_ENTERED", $"fill={a.ActualFillPrice}", Server.Time);
             _m5ExecEngine.AttemptClosed += a =>
             {
@@ -228,6 +264,7 @@ namespace cAlgo.Robots.ICT_S1
                 _viz.DrawAttemptClosed(a, Server.Time);
             };
             _tradeManager.ManualInterventionDetected += (a, detail) => _journal.LogManualIntervention(a, detail, Server.Time);
+            _m5ExecEngine.M5ExecutionActivated += (setup, t) => _journal.LogM5ExecutionActivated(setup, t);
         }
 
         private H4Setup FindSetup(string id)

@@ -42,8 +42,14 @@ namespace cAlgo.Robots.ICT_S1
         public bool ToUp;
     }
 
+    // Round 2 fix (audit sections 24-26): every zone now carries a stable
+    // raw ID assigned once at creation, and the EXACT structural swing
+    // index it was created from -- stored then, not reconstructed later by
+    // scanning history. -1 means "no single swing reference applies"
+    // (shouldn't occur for any zone that ever needs a protected swing).
     public class ObZone
     {
+        public string SourcePoiId;
         public int Candle;
         public double Zb, Zt;
         public bool Bullish;
@@ -53,6 +59,7 @@ namespace cAlgo.Robots.ICT_S1
         public int State;         // 0=IFOB,1=AOB,2=OOB,3=SPENT,4=AIFOB
         public int OrigState;
         public int PreSpentState;
+        public int SourceSwingIdx = -1;
         // S1 bookkeeping: has this raw zone already been frozen into an
         // S1PoiSnapshot? Prevents re-freezing the same zone on a later scan.
         public string S1SnapshotId;
@@ -60,6 +67,7 @@ namespace cAlgo.Robots.ICT_S1
 
     public class FvgZone
     {
+        public string SourcePoiId;
         public int LeftIdx;
         public double Zb, Zt;
         public bool Bullish;
@@ -69,11 +77,13 @@ namespace cAlgo.Robots.ICT_S1
         public int State;         // 0=IFVG,1=AFVG,2=OFVG,3=SPENT
         public int Origin;
         public int PreSpentState;
+        public int SourceSwingIdx = -1;
         public string S1SnapshotId;
     }
 
     public class RbZone
     {
+        public string SourcePoiId;
         public int LeftIdx;
         public double Zb, Zt;
         public bool Bullish;      // RAW WICK TYPE, see indicator header
@@ -83,11 +93,13 @@ namespace cAlgo.Robots.ICT_S1
         public int State;         // 0=IRB,1=ARB,2=ORB,3=SPENT,4=AIRB
         public int Origin;
         public int PreSpentState;
+        public int SourceSwingIdx = -1;
         public string S1SnapshotId;
     }
 
     public class ViZone
     {
+        public string SourcePoiId;
         public int LeftIdx;
         public double Zb, Zt;
         public bool Bullish;
@@ -97,7 +109,20 @@ namespace cAlgo.Robots.ICT_S1
         public int State;         // 0=IVI,1=AVI,2=OVI,3=SPENT
         public int Origin;
         public int PreSpentState;
+        public int SourceSwingIdx = -1;
         public string S1SnapshotId;
+    }
+
+    // Stable IDs for RAW (Pine-mirrored) POIs, distinct from IdGenerator's
+    // S1 (frozen-layer) IDs. Separate namespace/prefix so the two ID
+    // spaces are never confused when read together in the journal.
+    internal static class RawPoiIdGenerator
+    {
+        private static int _ob, _fvg, _rb, _vi;
+        public static string NextOb() => "RAW_OB_" + (++_ob).ToString("D5");
+        public static string NextFvg() => "RAW_FVG_" + (++_fvg).ToString("D5");
+        public static string NextRb() => "RAW_RB_" + (++_rb).ToString("D5");
+        public static string NextVi() => "RAW_VI_" + (++_vi).ToString("D5");
     }
 
     public class PoiMarketEngine
@@ -189,16 +214,30 @@ namespace cAlgo.Robots.ICT_S1
             while (ProcessOneBar()) { }
         }
 
-        // Returns the open time of the NEXT bar that would be processed, or
-        // null if none is available yet (nothing new closed). Lets a caller
-        // decide, across several PoiMarketEngine instances, which one's next
-        // bar is chronologically earliest -- the basis of the causality fix.
+        // Returns the INFORMATION-AVAILABILITY time of the next bar that
+        // would be processed -- i.e. when its full OHLC actually becomes
+        // known -- or null if none is available yet.
+        //
+        // Round 2 fix: this previously returned the bar's own OPEN time,
+        // which is wrong -- a bar's High/Low/Close aren't known until it
+        // CLOSES. A Weekly candle opening Monday doesn't reveal its real
+        // high/low/close until the following Monday; using its open time
+        // as its availability time let H4/M5 bars mid-week be scheduled
+        // AFTER a Weekly bar whose data wasn't actually known yet (hidden
+        // look-ahead, confirmed by source inspection).
+        //
+        // A bar's close time = the next bar's open time. The `closedUpTo`
+        // guard already requires bar `next` to have a following bar before
+        // it's considered processable at all (closedUpTo = Count-2), so
+        // `next+1` is always in bounds whenever this returns non-null --
+        // there's no case where a bar is "processable" but its close time
+        // is unknowable.
         public DateTime? PeekNextBarTime()
         {
             int next = _lastProcessedIndex + 1;
             int closedUpTo = _bars.Count - 2;
             if (next > closedUpTo) return null;
-            return _bars.OpenTimes[next];
+            return _bars.OpenTimes[next + 1]; // = bar `next`'s own close time
         }
 
         // Processes exactly one more bar if one is available (a fully
@@ -357,9 +396,9 @@ namespace cAlgo.Robots.ICT_S1
                     {
                         int lo = Math.Min(Math.Min(_lastSWLidx, k), _swhIdx);
                         int hi = Math.Max(Math.Max(_lastSWLidx, k), _swhIdx);
-                        TryCreateIFVGs(lo, hi, true, k);
+                        TryCreateIFVGs(lo, hi, true, k, _lastSWLidx);
                         _fvgBullScanUpto = hi;
-                        TryCreateIVIs(lo, hi, true, k);
+                        TryCreateIVIs(lo, hi, true, k, _lastSWLidx);
                         _viBullScanUpto = hi;
                         if (!ExistsAifobInRange(lo, hi, true))
                         {
@@ -374,7 +413,7 @@ namespace cAlgo.Robots.ICT_S1
                             if (best != -1 && !CandleClaimed(best, true))
                             {
                                 double oB = O[best], cB = C[best];
-                                AddOB(best, Math.Min(oB, cB), Math.Max(oB, cB), true, k, 0);
+                                AddOB(best, Math.Min(oB, cB), Math.Max(oB, cB), true, k, 0, _lastSWLidx);
                             }
                         }
                     }
@@ -466,9 +505,9 @@ namespace cAlgo.Robots.ICT_S1
                     {
                         int lo2 = Math.Min(Math.Min(_lastSWHidx, k), _swlIdx);
                         int hi2 = Math.Max(Math.Max(_lastSWHidx, k), _swlIdx);
-                        TryCreateIFVGs(lo2, hi2, false, k);
+                        TryCreateIFVGs(lo2, hi2, false, k, _lastSWHidx);
                         _fvgBearScanUpto = hi2;
-                        TryCreateIVIs(lo2, hi2, false, k);
+                        TryCreateIVIs(lo2, hi2, false, k, _lastSWHidx);
                         _viBearScanUpto = hi2;
                         if (!ExistsAifobInRange(lo2, hi2, false))
                         {
@@ -483,7 +522,7 @@ namespace cAlgo.Robots.ICT_S1
                             if (best2 != -1 && !CandleClaimed(best2, false))
                             {
                                 double oB = O[best2], cB = C[best2];
-                                AddOB(best2, Math.Min(oB, cB), Math.Max(oB, cB), false, k, 0);
+                                AddOB(best2, Math.Min(oB, cB), Math.Max(oB, cB), false, k, 0, _lastSWHidx);
                             }
                         }
                     }
@@ -531,9 +570,9 @@ namespace cAlgo.Robots.ICT_S1
                     {
                         int lo3 = Math.Min(Math.Min(_lastSWHidx, k), _swlIdx);
                         int hi3 = Math.Max(Math.Max(_lastSWHidx, k), _swlIdx);
-                        TryCreateIFVGs(lo3, hi3, false, k);
+                        TryCreateIFVGs(lo3, hi3, false, k, _lastSWHidx);
                         _fvgBearScanUpto = hi3;
-                        TryCreateIVIs(lo3, hi3, false, k);
+                        TryCreateIVIs(lo3, hi3, false, k, _lastSWHidx);
                         _viBearScanUpto = hi3;
                         if (!ExistsAifobInRange(lo3, hi3, false))
                         {
@@ -548,7 +587,7 @@ namespace cAlgo.Robots.ICT_S1
                             if (best3 != -1 && !CandleClaimed(best3, false))
                             {
                                 double oB = O[best3], cB = C[best3];
-                                AddOB(best3, Math.Min(oB, cB), Math.Max(oB, cB), false, k, 0);
+                                AddOB(best3, Math.Min(oB, cB), Math.Max(oB, cB), false, k, 0, _lastSWHidx);
                             }
                         }
                     }
@@ -640,9 +679,9 @@ namespace cAlgo.Robots.ICT_S1
                     {
                         int lo4 = Math.Min(Math.Min(_lastSWLidx, k), _swhIdx);
                         int hi4 = Math.Max(Math.Max(_lastSWLidx, k), _swhIdx);
-                        TryCreateIFVGs(lo4, hi4, true, k);
+                        TryCreateIFVGs(lo4, hi4, true, k, _lastSWLidx);
                         _fvgBullScanUpto = hi4;
-                        TryCreateIVIs(lo4, hi4, true, k);
+                        TryCreateIVIs(lo4, hi4, true, k, _lastSWLidx);
                         _viBullScanUpto = hi4;
                         if (!ExistsAifobInRange(lo4, hi4, true))
                         {
@@ -657,7 +696,7 @@ namespace cAlgo.Robots.ICT_S1
                             if (best4 != -1 && !CandleClaimed(best4, true))
                             {
                                 double oB = O[best4], cB = C[best4];
-                                AddOB(best4, Math.Min(oB, cB), Math.Max(oB, cB), true, k, 0);
+                                AddOB(best4, Math.Min(oB, cB), Math.Max(oB, cB), true, k, 0, _lastSWLidx);
                             }
                         }
                     }
@@ -689,27 +728,31 @@ namespace cAlgo.Robots.ICT_S1
             if (_regime == 1 && k >= 2 && k > _fvgBullScanUpto)
             {
                 double h1c = H[k - 2], l3c = L[k];
-                if (h1c < l3c) AddFVG(k - 2, h1c, l3c, true, k, 0);
+                // Continuous in-regime scan: the armed structural swing is
+                // the last confirmed swing low that started this bull
+                // regime leg (same source used by the swing-triggered IFVG
+                // path above for regime==1).
+                if (h1c < l3c) AddFVG(k - 2, h1c, l3c, true, k, 0, _lastSWLidx);
                 _fvgBullScanUpto = k;
             }
             if (_regime == 2 && k >= 2 && k > _fvgBearScanUpto)
             {
                 double l1c = L[k - 2], h3c = H[k];
-                if (l1c > h3c) AddFVG(k - 2, h3c, l1c, false, k, 0);
+                if (l1c > h3c) AddFVG(k - 2, h3c, l1c, false, k, 0, _lastSWHidx);
                 _fvgBearScanUpto = k;
             }
             if (_regime == 1 && k >= 1 && k > _viBullScanUpto)
             {
                 double op1c = O[k - 1], cl1c = C[k - 1], op2c = O[k], cl2c = C[k];
                 bool isBull1c = cl1c >= op1c;
-                if (cl1c < op2c && cl2c > cl1c && isBull1c) AddVI(k - 1, cl1c, op2c, true, k, 0);
+                if (cl1c < op2c && cl2c > cl1c && isBull1c) AddVI(k - 1, cl1c, op2c, true, k, 0, _lastSWLidx);
                 _viBullScanUpto = k;
             }
             if (_regime == 2 && k >= 1 && k > _viBearScanUpto)
             {
                 double op1d = O[k - 1], cl1d = C[k - 1], op2d = O[k], cl2d = C[k];
                 bool isBull1d = cl1d >= op1d;
-                if (cl1d > op2d && cl2d < cl1d && !isBull1d) AddVI(k - 1, op2d, cl1d, false, k, 0);
+                if (cl1d > op2d && cl2d < cl1d && !isBull1d) AddVI(k - 1, op2d, cl1d, false, k, 0, _lastSWHidx);
                 _viBearScanUpto = k;
             }
 
@@ -954,10 +997,12 @@ namespace cAlgo.Robots.ICT_S1
             Msses.Add(new MssEv { AtIdx = aIdx, BrokenIdx = bIdx, Price = pr, ToUp = up });
         }
 
-        private void AddOB(int cand, double zb, double zt, bool bull, int tK, int st)
+        // sourceSwingIdx: the exact structural swing this POI was created
+        // from (Round 2 fix -- stored now, not reconstructed later).
+        private void AddOB(int cand, double zb, double zt, bool bull, int tK, int st, int sourceSwingIdx)
         {
             int eK = (st == 1) ? tK : -1;
-            Obs.Add(new ObZone { Candle = cand, Zb = zb, Zt = zt, Bullish = bull, TriggerK = tK, EligibleK = eK, StopK = -1, State = st, OrigState = st, PreSpentState = st });
+            Obs.Add(new ObZone { SourcePoiId = RawPoiIdGenerator.NextOb(), Candle = cand, Zb = zb, Zt = zt, Bullish = bull, TriggerK = tK, EligibleK = eK, StopK = -1, State = st, OrigState = st, PreSpentState = st, SourceSwingIdx = sourceSwingIdx });
         }
 
         private bool CandleClaimed(int cand, bool bull)
@@ -974,13 +1019,15 @@ namespace cAlgo.Robots.ICT_S1
             return false;
         }
 
-        private void AddFVG(int leftIdx, double zb, double zt, bool bull, int tK, int st)
+        // sourceSwingIdx: the exact structural swing that armed this FVG's
+        // creation (Round 2 fix -- stored now, not reconstructed later).
+        private void AddFVG(int leftIdx, double zb, double zt, bool bull, int tK, int st, int sourceSwingIdx)
         {
             int eK = (st == 1) ? tK : -1;
-            Fvgs.Add(new FvgZone { LeftIdx = leftIdx, Zb = zb, Zt = zt, Bullish = bull, TriggerK = tK, EligibleK = eK, StopK = -1, State = st, Origin = st, PreSpentState = st });
+            Fvgs.Add(new FvgZone { SourcePoiId = RawPoiIdGenerator.NextFvg(), LeftIdx = leftIdx, Zb = zb, Zt = zt, Bullish = bull, TriggerK = tK, EligibleK = eK, StopK = -1, State = st, Origin = st, PreSpentState = st, SourceSwingIdx = sourceSwingIdx });
         }
 
-        private void TryCreateIFVGs(int lo, int hi, bool bullish, int triggerK)
+        private void TryCreateIFVGs(int lo, int hi, bool bullish, int triggerK, int sourceSwingIdx)
         {
             if (hi < lo + 2) return;
             for (int c3 = lo + 2; c3 <= hi; c3++)
@@ -989,17 +1036,17 @@ namespace cAlgo.Robots.ICT_S1
                 if (bullish)
                 {
                     double h1 = H[c1], l3 = L[c3];
-                    if (h1 < l3) AddFVG(c1, h1, l3, true, triggerK, 0);
+                    if (h1 < l3) AddFVG(c1, h1, l3, true, triggerK, 0, sourceSwingIdx);
                 }
                 else
                 {
                     double l1 = L[c1], h3 = H[c3];
-                    if (l1 > h3) AddFVG(c1, h3, l1, false, triggerK, 0);
+                    if (l1 > h3) AddFVG(c1, h3, l1, false, triggerK, 0, sourceSwingIdx);
                 }
             }
         }
 
-        private void TryCreateAFVGs(int lo, int hi, bool bullish, int triggerK, double guardPrice)
+        private void TryCreateAFVGs(int lo, int hi, bool bullish, int triggerK, double guardPrice, int sourceSwingIdx)
         {
             if (hi < lo + 2) return;
             for (int c3 = lo + 2; c3 <= hi; c3++)
@@ -1011,7 +1058,7 @@ namespace cAlgo.Robots.ICT_S1
                     if (l1 > h3)
                     {
                         double l3 = L[c3];
-                        if (l1 > guardPrice && l3 > guardPrice) AddFVG(c1, h3, l1, true, triggerK, 1);
+                        if (l1 > guardPrice && l3 > guardPrice) AddFVG(c1, h3, l1, true, triggerK, 1, sourceSwingIdx);
                     }
                 }
                 else
@@ -1020,7 +1067,7 @@ namespace cAlgo.Robots.ICT_S1
                     if (h1 < l3)
                     {
                         double h3 = H[c3];
-                        if (h1 < guardPrice && h3 < guardPrice) AddFVG(c1, h1, l3, false, triggerK, 1);
+                        if (h1 < guardPrice && h3 < guardPrice) AddFVG(c1, h1, l3, false, triggerK, 1, sourceSwingIdx);
                     }
                 }
             }
@@ -1049,7 +1096,7 @@ namespace cAlgo.Robots.ICT_S1
             if (L[best2] > newSwlP)
             {
                 double oB = O[best2], cB = C[best2];
-                AddOB(best2, Math.Min(oB, cB), Math.Max(oB, cB), true, k, 1);
+                AddOB(best2, Math.Min(oB, cB), Math.Max(oB, cB), true, k, 1, aobSWHi);
             }
         }
 
@@ -1076,7 +1123,7 @@ namespace cAlgo.Robots.ICT_S1
             if (H[best2] < newSwhP)
             {
                 double oB = O[best2], cB = C[best2];
-                AddOB(best2, Math.Min(oB, cB), Math.Max(oB, cB), false, k, 1);
+                AddOB(best2, Math.Min(oB, cB), Math.Max(oB, cB), false, k, 1, aobSWLi);
             }
         }
 
@@ -1091,7 +1138,7 @@ namespace cAlgo.Robots.ICT_S1
             int swlExt = (newSwlI + 1 <= k - 1) ? newSwlI + 1 : newSwlI;
             int lo2 = Math.Max(0, Math.Min(aobSWHi - 1, swlExt));
             int hi2 = Math.Max(aobSWHi - 1, swlExt);
-            TryCreateAFVGs(lo2, hi2, true, k, newSwlP);
+            TryCreateAFVGs(lo2, hi2, true, k, newSwlP, aobSWHi);
         }
 
         private void TryBearAFVG(int pReg, int aobSWLi, int newSwhI, double newSwhP, int k)
@@ -1105,13 +1152,15 @@ namespace cAlgo.Robots.ICT_S1
             int swhExt = (newSwhI + 1 <= k - 1) ? newSwhI + 1 : newSwhI;
             int lo2 = Math.Max(0, Math.Min(aobSWLi - 1, swhExt));
             int hi2 = Math.Max(aobSWLi - 1, swhExt);
-            TryCreateAFVGs(lo2, hi2, false, k, newSwhP);
+            TryCreateAFVGs(lo2, hi2, false, k, newSwhP, aobSWLi);
         }
 
         private void AddRB(int leftIdx, double zb, double zt, bool bull, int tK, int st)
         {
             int eK = (st == 1) ? tK : -1;
-            Rbs.Add(new RbZone { LeftIdx = leftIdx, Zb = zb, Zt = zt, Bullish = bull, TriggerK = tK, EligibleK = eK, StopK = -1, State = st, Origin = st, PreSpentState = st });
+            // RB's own anchor candle IS its source swing -- no separate
+            // source-swing parameter needed (Round 2 fix).
+            Rbs.Add(new RbZone { SourcePoiId = RawPoiIdGenerator.NextRb(), LeftIdx = leftIdx, Zb = zb, Zt = zt, Bullish = bull, TriggerK = tK, EligibleK = eK, StopK = -1, State = st, Origin = st, PreSpentState = st, SourceSwingIdx = leftIdx });
         }
 
         private void AddRBFromSwing(int idx, bool isHigh, int tK, int st)
@@ -1184,13 +1233,15 @@ namespace cAlgo.Robots.ICT_S1
             return result;
         }
 
-        private void AddVI(int leftIdx, double zb, double zt, bool bull, int tK, int st)
+        // sourceSwingIdx: the exact structural swing that armed this VI's
+        // creation (Round 2 fix -- stored now, not reconstructed later).
+        private void AddVI(int leftIdx, double zb, double zt, bool bull, int tK, int st, int sourceSwingIdx)
         {
             int eK = (st == 1) ? tK : -1;
-            Vis.Add(new ViZone { LeftIdx = leftIdx, Zb = zb, Zt = zt, Bullish = bull, TriggerK = tK, EligibleK = eK, StopK = -1, State = st, Origin = st, PreSpentState = st });
+            Vis.Add(new ViZone { SourcePoiId = RawPoiIdGenerator.NextVi(), LeftIdx = leftIdx, Zb = zb, Zt = zt, Bullish = bull, TriggerK = tK, EligibleK = eK, StopK = -1, State = st, Origin = st, PreSpentState = st, SourceSwingIdx = sourceSwingIdx });
         }
 
-        private void TryCreateIVIs(int lo, int hi, bool bullish, int triggerK)
+        private void TryCreateIVIs(int lo, int hi, bool bullish, int triggerK, int sourceSwingIdx)
         {
             if (hi < lo + 1) return;
             for (int c2 = lo + 1; c2 <= hi; c2++)
@@ -1200,16 +1251,16 @@ namespace cAlgo.Robots.ICT_S1
                 bool isBull1 = cl1 >= op1;
                 if (bullish)
                 {
-                    if (cl1 < op2 && cl2 > cl1 && isBull1) AddVI(c1, cl1, op2, true, triggerK, 0);
+                    if (cl1 < op2 && cl2 > cl1 && isBull1) AddVI(c1, cl1, op2, true, triggerK, 0, sourceSwingIdx);
                 }
                 else
                 {
-                    if (cl1 > op2 && cl2 < cl1 && !isBull1) AddVI(c1, op2, cl1, false, triggerK, 0);
+                    if (cl1 > op2 && cl2 < cl1 && !isBull1) AddVI(c1, op2, cl1, false, triggerK, 0, sourceSwingIdx);
                 }
             }
         }
 
-        private void TryCreateAVIs(int lo, int hi, bool bullish, int triggerK, double guardPrice)
+        private void TryCreateAVIs(int lo, int hi, bool bullish, int triggerK, double guardPrice, int sourceSwingIdx)
         {
             if (hi < lo + 1) return;
             for (int c2 = lo + 1; c2 <= hi; c2++)
@@ -1222,7 +1273,7 @@ namespace cAlgo.Robots.ICT_S1
                     if (cl1 > op2 && cl2 < cl1 && !isBull1)
                     {
                         double l1 = L[c1], l2 = L[c2];
-                        if (l1 > guardPrice && l2 > guardPrice) AddVI(c1, op2, cl1, true, triggerK, 1);
+                        if (l1 > guardPrice && l2 > guardPrice) AddVI(c1, op2, cl1, true, triggerK, 1, sourceSwingIdx);
                     }
                 }
                 else
@@ -1230,7 +1281,7 @@ namespace cAlgo.Robots.ICT_S1
                     if (cl1 < op2 && cl2 > cl1 && isBull1)
                     {
                         double h1 = H[c1], h2 = H[c2];
-                        if (h1 < guardPrice && h2 < guardPrice) AddVI(c1, cl1, op2, false, triggerK, 1);
+                        if (h1 < guardPrice && h2 < guardPrice) AddVI(c1, cl1, op2, false, triggerK, 1, sourceSwingIdx);
                     }
                 }
             }
@@ -1247,7 +1298,7 @@ namespace cAlgo.Robots.ICT_S1
             int swlExt = (newSwlI + 1 <= k - 1) ? newSwlI + 1 : newSwlI;
             int lo2 = Math.Max(0, Math.Min(aobSWHi - 1, swlExt));
             int hi2 = Math.Max(aobSWHi - 1, swlExt);
-            TryCreateAVIs(lo2, hi2, true, k, newSwlP);
+            TryCreateAVIs(lo2, hi2, true, k, newSwlP, aobSWHi);
         }
 
         private void TryBearAVI(int pReg, int aobSWLi, int newSwhI, double newSwhP, int k)
@@ -1261,7 +1312,7 @@ namespace cAlgo.Robots.ICT_S1
             int swhExt = (newSwhI + 1 <= k - 1) ? newSwhI + 1 : newSwhI;
             int lo2 = Math.Max(0, Math.Min(aobSWLi - 1, swhExt));
             int hi2 = Math.Max(aobSWLi - 1, swhExt);
-            TryCreateAVIs(lo2, hi2, false, k, newSwhP);
+            TryCreateAVIs(lo2, hi2, false, k, newSwhP, aobSWLi);
         }
 
         private int TryBullAIFOB(int pReg, bool pHaveSWH, int pSwhI, int pLastSWLi, int newSwlI, int k)
@@ -1284,7 +1335,7 @@ namespace cAlgo.Robots.ICT_S1
                 if (best != -1 && !CandleClaimed(best, true))
                 {
                     double oB = O[best], cB = C[best];
-                    AddOB(best, Math.Min(oB, cB), Math.Max(oB, cB), true, k, 4);
+                    AddOB(best, Math.Min(oB, cB), Math.Max(oB, cB), true, k, 4, pLastSWLi);
                     result = Obs.Count - 1;
                 }
             }
@@ -1311,7 +1362,7 @@ namespace cAlgo.Robots.ICT_S1
                 if (best != -1 && !CandleClaimed(best, false))
                 {
                     double oB = O[best], cB = C[best];
-                    AddOB(best, Math.Min(oB, cB), Math.Max(oB, cB), false, k, 4);
+                    AddOB(best, Math.Min(oB, cB), Math.Max(oB, cB), false, k, 4, pLastSWHi);
                     result = Obs.Count - 1;
                 }
             }

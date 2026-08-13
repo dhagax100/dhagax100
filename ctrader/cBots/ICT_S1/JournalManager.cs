@@ -10,15 +10,27 @@
 // resolves sensibly in your actual environment (Desktop vs Cloud/VPS can
 // differ) -- flagged per spec section 24, not silently assumed.
 //
-// KNOWN GAPS (explicit, not silently dropped): raw SWING_HIGH_CONFIRMED /
-// SWING_LOW_CONFIRMED / MSS_UP / MSS_DOWN events are not yet wired into the
-// EventLog -- PoiMarketEngine doesn't currently raise events for these
-// (it's pure state, no event queue), so hooking them in is a follow-up.
-// MFE/MAE (max favorable/adverse excursion) need a tick-by-tick high-
-// water-mark tracker per open position, not yet implemented. SpreadAtEntry
-// is captured; Slippage and Commission are left blank until the exact
-// data the installed API exposes for these is confirmed against a real
-// build.
+// ROUND 2 (audit section 27): SWING_HIGH_CONFIRMED / SWING_LOW_CONFIRMED /
+// MSS_UP / MSS_DOWN / M5_EXECUTION_ACTIVATED are now wired (see
+// ICT_S1_Robot.DrainSwingAndMssLog and M5ExecutionEngine.M5ExecutionActivated).
+// M5_SWING_SELECTED was considered and deliberately NOT added as a separate
+// event: every successful swing selection immediately produces a
+// PENDING_ORDER_CREATED or ORDER_MOVED_FROM_SWING_A_TO_SWING_B row that
+// already carries the full entry+stop swing pairing -- a distinct event
+// would duplicate that information under a different name, not add new
+// visibility.
+//
+// KNOWN GAPS still explicit, not silently dropped: H4_REACTION_CREATED /
+// H4_POI_JOINED_REACTION are NOT added -- they depend on the still-BLOCKED
+// H4 reaction-grouping boundary rule (see H4SetupEngine header / final
+// repair report's open strategy question); adding event types for a
+// grouping concept that doesn't exist yet would be inventing structure
+// ahead of the rule. MFE/MAE (max favorable/adverse excursion) need a
+// tick-by-tick high-water-mark tracker per open position -- a real new
+// feature, not a fix to existing wrong behavior, so left out of this
+// repair pass. SpreadAtEntry is captured; Slippage and Commission are left
+// blank until the exact data the installed API exposes for these is
+// confirmed against a real build.
 
 using System;
 using System.Collections.Generic;
@@ -47,7 +59,7 @@ namespace cAlgo.Robots.ICT_S1
             "TradeDirection,WeeklyOpportunityDirection,WeeklyPOITop,WeeklyPOIBottom," +
             "H4Route,H4ProtectedSwingType,H4ProtectedSwingPrice,H4ProtectedSwingTime,WeeklyRetouchNumber," +
             "M5EntrySwingType,M5EntrySwingPrice,M5EntrySwingTime,M5StopSwingType,M5StopSwingPrice,M5StopSwingTime," +
-            "PendingOrderCreatedTime,PendingOrderModificationCount,EntryTime,RequestedEntryPrice,ActualFillPrice," +
+            "FirstPendingOrderCreatedTime,PendingOrderCreatedTime,PendingOrderModificationCount,EntryTime,RequestedEntryPrice,ActualFillPrice," +
             "SLPrice,TPPrice,TargetR,RiskPercent,PositionVolume," +
             "ExitTime,ExitPrice,ExitReason,GrossPnL,NetPnL,RealizedR";
 
@@ -94,6 +106,32 @@ namespace cAlgo.Robots.ICT_S1
             WriteOpportunitySummaryRow(o);
         }
 
+        // Round 2 fix (audit section 27): raw swing-confirmation / MSS
+        // events, mechanically drained from PoiMarketEngine.Events/Msses
+        // (already-computed data, not a new detection rule) -- previously a
+        // documented gap ("EventLog has no SWING_HIGH_CONFIRMED/MSS_UP/DOWN
+        // rows"), now closed.
+        public void LogSwingEvent(string timeframe, bool isHigh, double price, DateTime time)
+        {
+            WriteEventRow(time, timeframe, isHigh ? "SWING_HIGH_CONFIRMED" : "SWING_LOW_CONFIRMED", "",
+                "", "", "", "", "", "",
+                price, "", "", "", "", "", "");
+        }
+
+        public void LogMssEvent(string timeframe, bool toUp, double price, DateTime time)
+        {
+            WriteEventRow(time, timeframe, toUp ? "MSS_UP" : "MSS_DOWN", "",
+                "", "", "", "", "", "",
+                price, "", "", "", "", "", "");
+        }
+
+        public void LogM5ExecutionActivated(H4Setup setup, DateTime time)
+        {
+            WriteEventRow(time, "M5", "M5_EXECUTION_ACTIVATED", setup.Direction.ToString(),
+                setup.WeeklyOpportunityId, setup.SupportingCluster?.PoiClusterId, "", setup.H4SetupId, "", "",
+                "", "", "", "", setup.Status.ToString(), "M5 swing-pairing window opened", "");
+        }
+
         public void LogH4SetupEvent(H4SetupEvent ev)
         {
             var h = ev.Setup;
@@ -107,14 +145,14 @@ namespace cAlgo.Robots.ICT_S1
         public void LogOrderEvent(M5Attempt attempt, string eventType, string note, DateTime time)
         {
             WriteEventRow(time, "M5", eventType, attempt.Direction.ToString(),
-                "", "", "", attempt.H4SetupId, attempt.M5AttemptId, "",
+                "", "", "", attempt.H4SetupId, attempt.M5AttemptId, attempt.TradeId ?? "",
                 attempt.RequestedEntryPrice, "", "", "", attempt.Status.ToString(), note, "");
         }
 
         public void LogManualIntervention(M5Attempt attempt, string detail, DateTime time)
         {
             WriteEventRow(time, "M5", "MANUAL_INTERVENTION_DETECTED", attempt.Direction.ToString(),
-                "", "", "", attempt.H4SetupId, attempt.M5AttemptId, "",
+                "", "", "", attempt.H4SetupId, attempt.M5AttemptId, attempt.TradeId ?? "",
                 "", "", "", "", attempt.Status.ToString(), detail, "");
         }
 
@@ -161,15 +199,22 @@ namespace cAlgo.Robots.ICT_S1
                 weeklyBottom = bottom.ToString();
             }
 
+            // Round 2 fix (audit section 29): TradeId is consumed from the
+            // attempt (assigned once, at fill time by TradeManager) -- never
+            // regenerated here. A closed attempt that somehow never got a
+            // TradeId (shouldn't happen -- every ClosedTP/ClosedSL/ClosedManual
+            // attempt passed through OnPendingOrderFilled first) still gets
+            // one rather than leaving the row blank.
+            string tradeId = attempt.TradeId ?? IdGenerator.NextTradeId();
             var row = string.Join(",", new[]
             {
-                Csv(StrategyVersion), Csv(SymbolName), Csv(IdGenerator.NextTradeId()), Csv(""),
+                Csv(StrategyVersion), Csv(SymbolName), Csv(tradeId), Csv(attempt.PositionId?.ToString()),
                 Csv(weekly?.WeeklyOpportunityId), Csv(setup?.SupportingCluster?.PoiClusterId), Csv(setup?.H4SetupId), Csv(attempt.M5AttemptId), Csv(attempt.AttemptNumber.ToString()),
                 Csv(attempt.Direction.ToString()), Csv(weekly?.Direction.ToString()), Csv(weeklyTop), Csv(weeklyBottom),
                 Csv(setup?.Route.ToString()), Csv(setup?.ProtectedSwingType.ToString()), Csv(setup?.ProtectedSwingPrice.ToString()), Csv(setup?.ProtectedSwingTime.ToString("O")), Csv(setup?.WeeklyRetouchNumber.ToString()),
                 Csv(attempt.EntrySwingType.ToString()), Csv(attempt.EntrySwingPrice.ToString()), Csv(attempt.EntrySwingTime.ToString("O")), Csv(attempt.StopSwingType.ToString()), Csv(attempt.StopSwingPrice.ToString()), Csv(attempt.StopSwingTime.ToString("O")),
-                Csv(attempt.PendingOrderCreatedTime?.ToString("O")), Csv(attempt.PendingOrderModificationCount.ToString()), Csv(attempt.EntryTime?.ToString("O")), Csv(attempt.RequestedEntryPrice.ToString()), Csv(attempt.ActualFillPrice?.ToString()),
-                Csv(attempt.SLPrice.ToString()), Csv(attempt.TPPrice.ToString()), Csv("3"), Csv(RiskPercentConfigured.ToString()), Csv(""),
+                Csv(attempt.FirstPendingOrderCreatedTime?.ToString("O")), Csv(attempt.PendingOrderCreatedTime?.ToString("O")), Csv(attempt.PendingOrderModificationCount.ToString()), Csv(attempt.EntryTime?.ToString("O")), Csv(attempt.RequestedEntryPrice.ToString()), Csv(attempt.ActualFillPrice?.ToString()),
+                Csv(attempt.SLPrice.ToString()), Csv(attempt.TPPrice.ToString()), Csv("3"), Csv(RiskPercentConfigured.ToString()), Csv(attempt.PositionVolume?.ToString()),
                 Csv(attempt.ExitTime?.ToString("O")), Csv(attempt.ExitPrice?.ToString()), Csv(attempt.ExitReason?.ToString()), Csv(attempt.GrossPnL?.ToString()), Csv(attempt.NetPnL?.ToString()), Csv(attempt.RealizedR?.ToString())
             });
             _tradeSummaryBuffer.Add(row);
