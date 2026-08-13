@@ -193,10 +193,22 @@ tryCreateIFVGs(int lo, int hi, bool bullish, int triggerK) =>
 // separately, not changed here.)
 //
 // Per-gap version of AOB's near-side straddle guard still applies: a gap
-// is dropped if EITHER boundary candle's wick already reaches guardPrice
-// (the price of the swing that triggered this hunt), since either edge
-// could be the candle straddling the pivot -- AOB only has one picked
-// candle to check, a gap has two edges that both need to clear it.
+// is dropped if EITHER boundary candle's wick already reaches PAST
+// guardPrice (the price of the swing that triggered this hunt), since
+// either edge could be the candle straddling the pivot -- AOB only has
+// one picked candle to check, a gap has two edges that both need to
+// clear it.
+//
+// GUARD FIX (issue 1, triple-action-candle case): this now allows a
+// boundary candle's wick to land EXACTLY ON guardPrice, not just past
+// it (>= / <= instead of strict > / <). Reason: guardPrice IS the
+// swing pivot's own price -- when the pivot candle itself is c1 (a
+// completely legitimate, expected edge for this gap), its own wick
+// equals guardPrice exactly, never strictly beyond it. The old strict
+// check rejected that candle for being "not strictly clear of itself",
+// which isn't a real straddle -- it's the pivot being the pivot. Only
+// a wick that actually crosses PAST guardPrice is a genuine straddle
+// and still gets dropped.
 tryCreateAFVGs(int lo, int hi, bool bullish, int triggerK, float guardPrice) =>
     if hi >= lo + 2
         for c3 = lo + 2 to hi
@@ -208,7 +220,7 @@ tryCreateAFVGs(int lo, int hi, bool bullish, int triggerK, float guardPrice) =>
                 h3 = array.get(H_, c3)
                 if l1 > h3
                     l3 = array.get(L_, c3)
-                    if l1 > guardPrice and l3 > guardPrice
+                    if l1 >= guardPrice and l3 >= guardPrice
                         addFVG(c1, h3, l1, false, triggerK, 1)
             else
                 // Bearish-context hunt -- always a rising-shape gap ->
@@ -217,7 +229,7 @@ tryCreateAFVGs(int lo, int hi, bool bullish, int triggerK, float guardPrice) =>
                 l3 = array.get(L_, c3)
                 if h1 < l3
                     h3 = array.get(H_, c3)
-                    if h1 < guardPrice and h3 < guardPrice
+                    if h1 <= guardPrice and h3 <= guardPrice
                         addFVG(c1, h1, l3, true, triggerK, 1)
 
 // --- AFVG HUNT: Bullish -- mirrors tryBullAOB's range + reference-
