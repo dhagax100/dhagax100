@@ -36,6 +36,7 @@
 using System;
 using System.Collections.Generic;
 using cAlgo.API;
+using cAlgo.API.Indicators;
 
 namespace cAlgo.Indicators
 {
