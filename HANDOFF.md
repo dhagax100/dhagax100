@@ -1,0 +1,217 @@
+# Handoff — ICT indicator debugging
+
+Repo: `dhagax100/dhagax100`
+Branch: `claude/afvg-rendering-bug-ctjnuq`
+Latest commit: `2e88f5d`
+
+This file exists so a fresh chat can pick up exactly where this one left
+off, without the user having to re-explain any of it. Read this whole
+file before touching any code.
+
+## The four files, and where each one stands
+
+1. **`pine/ICT_Full_OB_v24.pine`** — the MAIN combined indicator (Swings +
+   MSS + OB/IFOB/AOB/AIFOB/OOB + IFVG/AFVG + IRB/ARB, all in one script).
+   **OB is done.** All OB engine fixes were ported in from the diagnostic
+   file (commit `e33df62`, "Main indicator: port all OB engine fixes from
+   ICT_OB_Diagnostic.pine"). Do not restart OB debugging from scratch.
+
+   **Important gap:** this file's FVG/AFVG section is currently OLDER
+   than `ICT_Full_FVG_Indicator.pine`. None of this session's three FVG
+   fixes (see below) have been ported here yet:
+   - AFVG scan-range extension (`swlExt`/`swhExt` pattern) — absent.
+   - The out-of-bounds guard that came with it — absent.
+   - CLOSE-THROUGH restricted to IFVG only (`origin != 1`) — absent;
+     this file's AFVG zones still die same-day on eligibility.
+
+   Don't port these automatically — ask the user first, since they may
+   want FVG fully settled (including issue 1 and issue 3 below) before
+   merging it back into the main file, same as how OB was handled.
+
+2. **`pine/ICT_OB_Diagnostic.pine`** — standalone OB-only diagnostic.
+   Superseded by the merge into main (`e33df62`). Not actively worked on
+   unless a fresh OB-specific bug turns up.
+
+3. **`pine/ICT_Full_FVG_Indicator.pine`** — standalone FVG-only
+   diagnostic (no OB/RB code at all, by design, to stay well under
+   TradingView's 20s script-execution limit on Daily history). This was
+   the entire focus of the session that produced this handoff. Baseline
+   locked at commit `2e88f5d`.
+
+4. **`pine/ICT_RB_Diagnostic.pine`** — standalone RB-only diagnostic.
+   **This is the next thing to work on**, per explicit user instruction.
+   Last commit `fafc402` ("RB Diagnostic: stop rbClaimed from deleting
+   legitimate IRB zones"). An earlier RB session (before this one) had a
+   lot of back-and-forth that frustrated the user — see "How this user
+   wants to work" below for what NOT to repeat. **This handoff does not
+   catalogue specific open RB bugs** — the previous RB session's context
+   was not carried into this one. Ask the user directly what's still
+   broken in RB before proposing anything.
+
+## FVG status — three numbered issues this session
+
+The user numbers issues as we go and revisits them by number. Keep that
+convention alive in the new chat.
+
+### Issue 1 — AFVG missed detection (STILL HANGING, not yet verified)
+
+A real AFVG gap (confirmed by hand-tracing real EURUSD Daily OHLC,
+Thu 31 Jul – Tue 05 Aug 2025) was structurally impossible for the old
+scan to ever find: the scan's upper bound stopped exactly at the swing
+pivot candle, one candle short of where the real closing candle of the
+gap actually sat.
+
+Fixed in two commits:
+- `b4b13d9` — extended the scan's upper bound by one candle so it can
+  reach the true gap-closing candle.
+- `d99a0de` — the unconditional `+1` from the above fix crashed
+  (array-out-of-bounds) on dual-action/outside candles where the swing
+  pivot's index equals the confirming bar itself. Fixed with a guarded
+  `swlExt`/`swhExt` that only extends when a bar strictly before the
+  confirming bar actually exists.
+
+**What's not done:** this was never actually confirmed against the
+user's live chart. A debug-label tool was built for exactly this
+purpose and IS still in the file:
+- `InpDebugValues` (bool, off by default) — turn on to show a debug
+  label.
+- `InpFocusFvgDate` (date, defaults to 2025-07-31) — the label shows
+  the SINGLE zone whose `leftIdx` candle is nearest this date, with its
+  `state=`/`orig=`/`leftIdx=`/`trigK=`/`eligK=`/`stopK=` values.
+
+The debug-label work got interrupted by an (unrelated) 20-second
+timeout bug before the user ever reported back what the label showed
+for the Aug 2025 zone. **This is the immediate next step if the new
+session picks FVG back up**: have the user enable `InpDebugValues`,
+confirm `InpFocusFvgDate` is near 2025-07-31, and report the label's
+contents.
+
+### Issue 2 — AFVG box stopped extending before impact (SOLVED)
+
+Hand-traced against real EURUSD Daily OHLC (Nov 2025) with a leg that
+had two AFVG gaps: a wide lower one (5-7 Nov, zone 1.14979-1.15295) and
+a narrow upper one (12-14 Nov, zone 1.15977-1.16060). Both stopped
+drawing on the exact same day (Wed 12 Nov), which looked like a
+coupling bug (one zone's impact taking out another). It wasn't — traced
+line by line, each zone's SPENT decision only ever reads its own
+`zb`/`zt`/`stopK`, no shared state between zones.
+
+**Actual root cause:** the CLOSE-THROUGH INVALIDATION rule (a candle's
+close moving past the zone's far edge = dead) was applied to BOTH IFVG
+and AFVG zones identically. That's correct for IFVG (a continuation
+zone starts on the "correct" side of price, so a close back through it
+later is a genuine reversal signal) but wrong for AFVG (an anticipatory
+zone starts ALREADY on the far side of price by design, waiting for a
+later return visit — so the same check is trivially true the instant
+it becomes eligible, killing it on day one regardless of whether price
+ever comes back).
+
+In the traced example: both AFVG zones became eligible on the exact
+same day (Nov 12, when the swing high that triggered both finally
+confirmed). By then price had already rallied past the lower zone —
+so it died via CLOSE-THROUGH the instant it went live, same day the
+upper zone died from a genuine wick impact. Two independent rules,
+same day, not a shared bug.
+
+**Fix (commit `2e88f5d`):** CLOSE-THROUGH now only applies to
+`origin == 0` (IFVG-style) zones. AFVG zones (`origin == 1`) can now
+only end via IMPACT (real wick touch) or STRANDING (a real new
+opposing swing forming beyond the zone — already correctly implemented
+and untouched by this fix).
+
+Also fixed in this session, unrelated to issue 2 but discovered along
+the way while chasing a **real** 20-second timeout (not the earlier
+debug-label one, a structural one):
+
+- `b88aeb3` — STEP 2 (eligibility arming) and STEP 3 (spent/close-
+  through/stranding lifecycle) both rescanned the ENTIRE `fvgs` array
+  on every relevant bar. On Daily history going back decades, `fvgs`
+  grows into the thousands (continuous per-bar gap scan), so this was
+  effectively bars × total-zones-ever-created — the actual cause of the
+  timeout, unrelated to the debug labels. Fixed with two small index
+  lists (`liveIdx`, `pendingEligIdx`) that only track zones still
+  actually live/pending, swap-removed once resolved. No creation/
+  eligibility/lifecycle rule changed, only which zones get walked each
+  bar.
+
+### Issue 3 — "bullish AFVG in a downward leg" (OPEN, fundamental — let the user decide)
+
+Not a code bug. A naming/classification disagreement, raised while
+verifying a real AFVG gap found inside a down-pullback leg within a
+larger uptrend (Jan-Feb 2026 EURUSD data, gap at 1.18747-1.19060). The
+code labels it "bullish" even though every candle that carved it was
+moving down.
+
+**The actual mechanism (confirmed against the code, not guessed):**
+the `bull`/`bullish` field is assigned by which HUNT found the zone —
+`tryBullAFVG` fires when the previous regime was UP (a down-pullback
+within an uptrend) and tags its zone bullish; `tryBearAFVG` mirrors it
+for downtrends. This names the zone by the trade/trend it's expected
+to serve (a "buy zone" for when the uptrend resumes), not by the raw
+shape of the candles that created it. Confirmed via `ICT_Full_OB_v24.pine`
+that AOB uses the identical `pReg == 1` → bullish convention — so this
+isn't an AFVG quirk, it already exists, unquestioned, in AOB.
+
+**Where it was left:** the user pushed back hard — "candles will form
+at the right in the uptrend leg, covering whatever's on the left...
+since when do we mark bullish zone in downward leg." The explanation
+given (this matches real ICT terminology — a bullish order block is
+often literally a down-candle, named for what it sets up next, not its
+own color) was **not accepted or rejected** — the chat ended there.
+
+**Do not re-litigate by re-asserting the AOB-mirroring argument as if
+it settles things.** The fundamental question is genuinely open and is
+the user's call to make, not something to argue back into: should
+AFVG/AOB naming stay intent-based (buy zone / sell zone, matching
+current code and matching AOB), or should it switch to shape-based
+naming (matching how IFVG's bull/bear tag already works — tied to the
+raw direction of the candles, not the anticipated trade)? Whichever the
+user picks, note that IFVG and AFVG currently use two DIFFERENT naming
+conventions for the same "bullish"/"bearish" field in the same file —
+that inconsistency is real and worth surfacing plainly, without
+pushing the user toward either resolution.
+
+## How this user wants to work (do not skip this)
+
+- **Explain first, short, plain English.** No jargon dumps before a
+  diagnosis is understood. Keep replies SHORT — this user has
+  explicitly said "why the fuck are you talking too much." Answer the
+  question asked, then stop.
+- **Never claim "fixed" without a real, checkable diff.** This user has
+  been burned by (in their words) hallucinated/repeated-code claims
+  before, twice, and does not extend trust automatically. If accused of
+  it, prove it — `git diff`, exact line numbers matched against their
+  own screenshot, or `curl` MD5 + cache-header checks against the raw
+  GitHub URL if caching is the suspicion.
+- **Diagnose against REAL OHLC data, hand-traced.** The user reads
+  candles off TradingView via click-lock (not hover — hover values
+  proved unreliable earlier). Verify a sequence of screenshotted
+  candles really are consecutive by checking `close[i] == open[i+1]`
+  chains before trusting the numbers.
+- **State blast radius before implementing a fix.** The user
+  consistently asks "will this affect the rest of the code, in any
+  way?" before saying "go ahead" — answer that plainly, unprompted,
+  alongside every proposed fix, not just when asked.
+- **When the user wants to hand-edit in the Pine Editor themselves**,
+  give exact line numbers cross-checked against their screenshot/error
+  trace — don't just re-paste the whole file.
+- **Numbered issues persist across the conversation** — the user refers
+  back to "issue 2," "gap 1," etc. Keep a running list, don't lose the
+  numbering.
+
+## Quick orientation for whichever file comes next
+
+- All four `.pine` files share the same core engine shape: OHLC arrays
+  pushed once per bar (`O_`/`H_`/`L_`/`C_`/`BI`/`BT`), a swing-detection
+  pass (`peakIdx_`/`troughIdx_`/`addSH`/`addSL`/`addEv`), then a
+  regime/MSS/zone-lifecycle pass keyed on `k = i` (the current bar's
+  index into those arrays — valid range is always `0..k` at any point
+  during that bar's own processing, a critical invariant for any
+  index-arithmetic fix).
+- `docs/trading_logic.md` has a plain-English reference for swings,
+  MSS, OB, and FVG concepts (section 4 is FVG) — read it before
+  re-deriving definitions from scratch.
+- Full trace of everything that happened this session, including all
+  verbatim back-and-forth, is in this branch's commit history
+  (`b4b13d9` through `2e88f5d`) — commit messages are written in full
+  sentences explaining root cause, not just "fix bug."
