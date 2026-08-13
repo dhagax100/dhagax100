@@ -368,6 +368,23 @@ tryBearAOB(int pReg, int aobSWLi, int newSwhI, float newSwhP, int k) =>
 // --- AFVG HUNT: Bullish -- mirrors tryBullAOB's range + reference-
 // validity gate one-for-one (candle-picking isn't needed, tryCreateAFVGs
 // scans every qualifying gap itself instead of picking one candle).
+// Range upper bound extends one candle past newSwlI when it's safe to:
+// the classic 3-candle gap left by an impulsive swing very often has
+// its CLOSING candle sit right after the swing point itself (swing
+// point = the displacement/impulse candle in the middle of the 3), not
+// before or on it. Capping the scan at newSwlI alone made that closing
+// candle structurally unreachable as a candidate3, so a real, visible
+// gap could never be picked up (ported from ICT_Full_FVG_Indicator.pine,
+// commits b4b13d9/d99a0de).
+// The extension only applies when newSwlI + 1 lands strictly before k
+// (the confirming bar). Two reasons: (1) that bar's own wick shouldn't
+// be allowed to both trigger this hunt and immediately consume a zone
+// it just created, and (2) on a dual-action/outside candle the swing
+// pivot can BE the confirming bar itself (newSwlI == k), and the H_/L_
+// arrays only hold data up to and including k so far -- reaching for
+// k + 1 there would read past the end of the array. When neither
+// candle before k exists (newSwlI is already k or k - 1), there's
+// nothing to extend into, so the bound just stays at newSwlI.
 tryBullAFVG(int pReg, int aobSWHi, int newSwlI, float newSwlP, int k) =>
     if pReg == 1 and aobSWHi >= 0
         armedSwhPrice = array.get(H_, aobSWHi)
@@ -376,11 +393,13 @@ tryBullAFVG(int pReg, int aobSWHi, int newSwlI, float newSwlP, int k) =>
             if array.get(H_, v) >= armedSwhPrice
                 refViolated := true
         if not refViolated
-            lo2 = math.max(0, math.min(aobSWHi - 1, newSwlI))
-            hi2 = math.max(aobSWHi - 1, newSwlI)
+            swlExt = (newSwlI + 1) <= (k - 1) ? newSwlI + 1 : newSwlI
+            lo2 = math.max(0, math.min(aobSWHi - 1, swlExt))
+            hi2 = math.max(aobSWHi - 1, swlExt)
             tryCreateAFVGs(lo2, hi2, true, k, newSwlP)
 
-// --- AFVG HUNT: Bearish -- mirrors tryBearAOB ---
+// --- AFVG HUNT: Bearish -- mirrors tryBearAOB --- (same reasoning as
+// tryBullAFVG above, mirrored for the swing-high pivot.)
 tryBearAFVG(int pReg, int aobSWLi, int newSwhI, float newSwhP, int k) =>
     if pReg == 2 and aobSWLi >= 0
         armedSwlPrice = array.get(L_, aobSWLi)
@@ -389,8 +408,9 @@ tryBearAFVG(int pReg, int aobSWLi, int newSwhI, float newSwhP, int k) =>
             if array.get(L_, v) <= armedSwlPrice
                 refViolated := true
         if not refViolated
-            lo2 = math.max(0, math.min(aobSWLi - 1, newSwhI))
-            hi2 = math.max(aobSWLi - 1, newSwhI)
+            swhExt = (newSwhI + 1) <= (k - 1) ? newSwhI + 1 : newSwhI
+            lo2 = math.max(0, math.min(aobSWLi - 1, swhExt))
+            hi2 = math.max(aobSWLi - 1, swhExt)
             tryCreateAFVGs(lo2, hi2, false, k, newSwhP)
 
 addRB(int leftIdx, float zb, float zt, bool bull, int tK, int st) =>
@@ -1045,15 +1065,20 @@ if not skipBar and bar_index != lastProcessedBI
                     array.set(fvgs, zf3, fvgZ3)
                     continue
 
-            // CLOSE-THROUGH INVALIDATION: a candle's body closing all the way
-            // through the gap's FAR edge (below zb for bullish, above zt for
-            // bearish) -- checked independently of, and before, the
-            // structural OFVG check below, per spec. Leads to the same
-            // SPENT terminal state as an ordinary wick touch (a close-through
-            // necessarily also touches the gap). Gated by eligibility, same
-            // as impact/stranding -- a zone not yet watched isn't checked.
-            // Applies to any live zone (IFVG or AFVG), not just IFVG.
-            if (fvgZ3.state == 0 or fvgZ3.state == 1) and fvgZ3.eligibleK != -1 and k >= fvgZ3.eligibleK
+            // CLOSE-THROUGH INVALIDATION -- IFVG only (origin 0). An IFVG
+            // gap is left behind WHILE price is still moving in the gap's
+            // own direction, so price starts out on the "correct" side of
+            // it -- a close back through the far edge later means the
+            // continuation genuinely failed, a real signal. An AFVG gap
+            // (origin 1) is the opposite: price has already moved AWAY
+            // from it by design, waiting to come back, so it starts out
+            // already on the "wrong" side -- this same check would fire
+            // the instant it becomes eligible, every time, regardless of
+            // whether price ever comes back. AFVG's "left behind for
+            // good" signal is STRANDING below (a genuine new opposing
+            // swing), not this. (Ported from ICT_Full_FVG_Indicator.pine,
+            // commit 2e88f5d -- issue 2.)
+            if fvgZ3.origin != 1 and fvgZ3.state == 0 and fvgZ3.eligibleK != -1 and k >= fvgZ3.eligibleK
                 cK = array.get(C_, k)
                 closedThrough = bullf ? cK < zbf : cK > ztf
                 if closedThrough

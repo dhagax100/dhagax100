@@ -8,6 +8,9 @@ decision.** Issue 1 and issue 3 were both investigated extensively in a
 later session (see below) but their code changes were reverted — the
 user chose to stop chasing both and ship the file as-is, issues 1 and 3
 still open. Do not reapply either fix without the user asking again.
+This finalized state (issue 2 + the earlier scan-range extension) has
+now been **merged into `ICT_Full_OB_v24.pine`** too, at the user's
+explicit request — see file 1 below for exactly what changed there.
 
 This file exists so a fresh chat can pick up exactly where this one left
 off, without the user having to re-explain any of it. Read this whole
@@ -21,17 +24,23 @@ file before touching any code.
    file (commit `e33df62`, "Main indicator: port all OB engine fixes from
    ICT_OB_Diagnostic.pine"). Do not restart OB debugging from scratch.
 
-   **Important gap:** this file's FVG/AFVG section is currently OLDER
-   than `ICT_Full_FVG_Indicator.pine`. None of this session's three FVG
-   fixes (see below) have been ported here yet:
-   - AFVG scan-range extension (`swlExt`/`swhExt` pattern) — absent.
-   - The out-of-bounds guard that came with it — absent.
-   - CLOSE-THROUGH restricted to IFVG only (`origin != 1`) — absent;
-     this file's AFVG zones still die same-day on eligibility.
-
-   Don't port these automatically — ask the user first, since they may
-   want FVG fully settled (including issue 1 and issue 3 below) before
-   merging it back into the main file, same as how OB was handled.
+   **FVG is now merged too**, at the user's explicit request, matching
+   the diagnostic file's finalized (issue-2-only) state:
+   - `tryBullAFVG`/`tryBearAFVG` now have the `swlExt`/`swhExt` scan-range
+     extension (from `b4b13d9`/`d99a0de`).
+   - CLOSE-THROUGH invalidation is now restricted to `origin != 1`
+     (IFVG only) — the issue 2 fix.
+   - Issues 1 and 3's (reverted) experimental changes were NOT
+     ported — the main file now matches the diagnostic file's actual
+     shipped state exactly, not anything that was tried and undone.
+   - The `liveIdx`/`pendingEligIdx` perf optimization (`b88aeb3`) was
+     deliberately NOT ported — it's specific to the standalone
+     diagnostic's unbounded zone growth on Daily history; the main
+     file's OB code has its own, separate perf characteristics that
+     were out of scope here and untouched.
+   - Only the two functions/blocks above were touched. No OB/RB code
+     was touched — verify with `git diff` if in doubt, the change
+     should be small and land only in FVG-specific code.
 
 2. **`pine/ICT_OB_Diagnostic.pine`** — standalone OB-only diagnostic.
    Superseded by the merge into main (`e33df62`). Not actively worked on
