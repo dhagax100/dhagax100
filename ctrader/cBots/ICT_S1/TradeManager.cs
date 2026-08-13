@@ -1,14 +1,15 @@
 // ICT_S1 — TradeManager. Implements ITradeExecutor against the real cAlgo
 // trading API. Spec: docs/s1_ea_specification.md sections 8-9.
 //
-// FLAGGING FOR BUILD-PASS VERIFICATION (same honest-uncertainty pattern as
-// the rest of this build -- no cAlgo SDK available to compile against
-// here): the exact PlaceStopOrder/ModifyPendingOrder overload signatures,
-// PositionClosedEventArgs.Reason enum member names, and whether a closed
-// Position exposes its closing price directly are the likeliest spots for
-// a compiler mismatch. Everything here uses the most standard, widely-
-// documented cAlgo Robot API shape; confirm against the real Autocomplete
-// once this is pasted into Automate.
+// Confirmed against a real build (2026-08-13):
+// - PlaceStopOrder takes a symbol NAME (string), not a Symbol object -- fixed.
+// - ModifyPendingOrder's Symbol/PendingOrder overload used here is flagged
+//   obsolete in favor of a ProtectionType-parameter version, but that newer
+//   version has confirmed community reports of a runtime TypeLoadException
+//   on some cTrader installs (undocumented/unstable as of this writing) --
+//   deliberately kept on the old overload. The CS0618 warning is expected
+//   and safe to ignore; switching it is a "fix" only once cTrader's own API
+//   stabilizes, not before.
 //
 // SL/TP are placed via PIPS (PlaceStopOrder's standard parameter shape),
 // converted from the absolute price levels M5ExecutionEngine computes --
@@ -61,7 +62,7 @@ namespace cAlgo.Robots.ICT_S1
             double slPips = Math.Abs(triggerPrice - slPrice) / _symbol.PipSize;
             double tpPips = Math.Abs(tpPrice - triggerPrice) / _symbol.PipSize;
 
-            var result = _robot.PlaceStopOrder(tradeType, _symbol, volume, triggerPrice, label, slPips, tpPips);
+            var result = _robot.PlaceStopOrder(tradeType, _symbol.Name, volume, triggerPrice, label, slPips, tpPips);
             if (result == null || !result.IsSuccessful || result.PendingOrder == null) return null;
             return label; // our own M5AttemptId doubles as the cAlgo order label and our lookup key
         }

@@ -55,7 +55,6 @@ namespace cAlgo.Robots.ICT_S1
     public class PoiLifecycleTracker
     {
         private readonly PoiMarketEngine _engine;
-        private readonly string _weeklyOpportunityIdPlaceholder; // reserved, callers assign real linkage after NewImpact
 
         public readonly List<S1PoiSnapshot> AllSnapshots = new List<S1PoiSnapshot>();
         private readonly List<S1PoiSnapshot> _unresolved = new List<S1PoiSnapshot>();

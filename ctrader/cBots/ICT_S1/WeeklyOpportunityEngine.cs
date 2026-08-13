@@ -57,8 +57,6 @@ namespace cAlgo.Robots.ICT_S1
         public readonly List<WeeklyOpportunity> Opportunities = new List<WeeklyOpportunity>();
         private readonly Queue<WeeklyOpportunityEvent> _eventQueue = new Queue<WeeklyOpportunityEvent>();
 
-        private ControlState _lastKnownRegimeControl = ControlState.Neutral;
-
         public WeeklyOpportunityEngine(PoiMarketEngine weeklyEngine, PoiLifecycleTracker weeklyTracker)
         {
             _engine = weeklyEngine;
