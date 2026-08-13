@@ -495,7 +495,7 @@ the actual chart.
 
 ## Quick orientation for whichever file comes next
 
-- All four `.pine` files share the same core engine shape: OHLC arrays
+- All five `.pine` files share the same core engine shape: OHLC arrays
   pushed once per bar (`O_`/`H_`/`L_`/`C_`/`BI`/`BT`), a swing-detection
   pass (`peakIdx_`/`troughIdx_`/`addSH`/`addSL`/`addEv`), then a
   regime/MSS/zone-lifecycle pass keyed on `k = i` (the current bar's
@@ -504,8 +504,37 @@ the actual chart.
   index-arithmetic fix).
 - `docs/trading_logic.md` has a plain-English reference for swings,
   MSS, OB, and FVG concepts (section 4 is FVG) — read it before
-  re-deriving definitions from scratch.
+  re-deriving definitions from scratch. It predates RB/VI, so it won't
+  cover those two yet.
 - Full trace of everything that happened this session, including all
   verbatim back-and-forth, is in this branch's commit history
-  (`b4b13d9` through `2e88f5d`) — commit messages are written in full
-  sentences explaining root cause, not just "fix bug."
+  (`b4b13d9` onward) — commit messages are written in full sentences
+  explaining root cause, not just "fix bug."
+
+## EA / setup files removed from the repo
+
+At the user's explicit request, all EA and "Setup" files were deleted
+from this branch (still recoverable via git history if ever needed,
+just not present in the working tree going forward):
+- `mq5/ICT_EA_1.mq5`
+- `ctrader/ICT_EA_1.cs`, `ctrader/ICT_EA_2.cs`, and
+  `ctrader/checkpoints/EA1_ICT_EA_1.cs` (the whole `ctrader/` directory
+  is gone as a result — it only ever held these three files)
+- `pine/ICT_Setup1_4H.pine`, `pine/ICT_Setup1_5M.pine`,
+  `pine/ICT_Setup1_S1.pine`
+
+Why: the user is starting a fresh EA-building effort in a new session,
+deliberately NOT resuming an older branch (`claude/ict-ea-continuation-
+25yqwx`) that had substantial cascade/session-timing/stop-loss trading
+logic already built — but on an OLD, pre-RB/VI engine that predates
+every fix in this document. That branch was NOT touched or deleted,
+it's just not the basis for the new work; its approach may still be
+worth reviewing for ideas (session-deadline handling, entry cascade
+structure, stop-loss rules for different entry scenarios) even though
+its POI engine is outdated.
+
+The four POI indicator files (`ICT_Full_OB_v24.pine`,
+`ICT_Full_FVG_Indicator.pine`, `ICT_RB_Diagnostic.pine`,
+`ICT_Full_VI_Indicator.pine`) and the two MQL5 indicator files
+(`ICT_Full_OB_v24.mq5`, `ICT_Swings_MSS_FVG.mq5`) were NOT touched —
+only EA/Setup files were removed.
