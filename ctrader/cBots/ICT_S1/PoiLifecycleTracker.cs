@@ -154,7 +154,7 @@ namespace cAlgo.Robots.ICT_S1
                 case 4: type = PoiTypeLabel.AIFOB; break;
                 default: type = PoiTypeLabel.IFOB; break;
             }
-            var snap = NewSnapshot(PoiFamily.OB, type, z.Bullish, z.Zb, z.Zt, z.OrigState, z.StopK);
+            var snap = NewSnapshot(PoiFamily.OB, type, z.Bullish, z.Zb, z.Zt, z.OrigState, z.StopK, z.Candle, z.TriggerK, z.EligibleK);
             z.S1SnapshotId = snap.S1PoiId;
         }
 
@@ -168,7 +168,7 @@ namespace cAlgo.Robots.ICT_S1
                 case 2: type = PoiTypeLabel.OFVG; break;
                 default: type = PoiTypeLabel.IFVG; break;
             }
-            var snap = NewSnapshot(PoiFamily.FVG, type, z.Bullish, z.Zb, z.Zt, z.Origin, z.StopK);
+            var snap = NewSnapshot(PoiFamily.FVG, type, z.Bullish, z.Zb, z.Zt, z.Origin, z.StopK, z.LeftIdx, z.TriggerK, z.EligibleK);
             z.S1SnapshotId = snap.S1PoiId;
         }
 
@@ -185,7 +185,7 @@ namespace cAlgo.Robots.ICT_S1
             }
             // RB direction is used AS-IS from the raw engine's raw-wick
             // convention -- confirmed rule, no hunt-direction translation.
-            var snap = NewSnapshot(PoiFamily.RB, type, z.Bullish, z.Zb, z.Zt, z.Origin, z.StopK);
+            var snap = NewSnapshot(PoiFamily.RB, type, z.Bullish, z.Zb, z.Zt, z.Origin, z.StopK, z.LeftIdx, z.TriggerK, z.EligibleK);
             z.S1SnapshotId = snap.S1PoiId;
         }
 
@@ -199,11 +199,14 @@ namespace cAlgo.Robots.ICT_S1
                 case 2: type = PoiTypeLabel.OVI; break;
                 default: type = PoiTypeLabel.IVI; break;
             }
-            var snap = NewSnapshot(PoiFamily.VI, type, z.Bullish, z.Zb, z.Zt, z.Origin, z.StopK);
+            var snap = NewSnapshot(PoiFamily.VI, type, z.Bullish, z.Zb, z.Zt, z.Origin, z.StopK, z.LeftIdx, z.TriggerK, z.EligibleK);
             z.S1SnapshotId = snap.S1PoiId;
         }
 
-        private S1PoiSnapshot NewSnapshot(PoiFamily family, PoiTypeLabel type, bool bullish, double zb, double zt, int originBucket, int impactBarIdx)
+        // Finding 13 fix: CreationTime/TriggerTime/EligibilityTime are now
+        // populated from the raw zone's own bar indices instead of being
+        // left at their default (unset) value forever.
+        private S1PoiSnapshot NewSnapshot(PoiFamily family, PoiTypeLabel type, bool bullish, double zb, double zt, int originBucket, int impactBarIdx, int creationBarIdx, int triggerBarIdx, int eligibleBarIdx)
         {
             var snap = new S1PoiSnapshot
             {
@@ -216,7 +219,10 @@ namespace cAlgo.Robots.ICT_S1
                 Zt = zt,
                 OriginBucket = originBucket,
                 FirstImpactBarIndex = impactBarIdx,
-                FirstImpactTime = impactBarIdx >= 0 && impactBarIdx < _engine.BT.Count ? _engine.BT[impactBarIdx] : default(DateTime),
+                FirstImpactTime = BarTime(impactBarIdx),
+                CreationTime = BarTime(creationBarIdx),
+                TriggerTime = BarTime(triggerBarIdx),
+                EligibilityTime = BarTime(eligibleBarIdx),
                 LifecycleState = S1PoiLifecycleState.ImpactedUnresolved
             };
             AllSnapshots.Add(snap);
@@ -224,6 +230,12 @@ namespace cAlgo.Robots.ICT_S1
             _eventQueue.Enqueue(new PoiLifecycleEvent { Type = PoiEventType.NewImpact, Snapshot = snap, Time = snap.FirstImpactTime, Note = $"{type} first qualifying impact" });
             return snap;
         }
+
+        // -1 (e.g. EligibleK not yet set at freeze time, though it always
+        // is by SPENT time in practice) or an out-of-range index -> default
+        // DateTime rather than throwing.
+        private DateTime BarTime(int idx) =>
+            idx >= 0 && idx < _engine.BT.Count ? _engine.BT[idx] : default(DateTime);
 
         private void RunOngoingLifecycle()
         {
