@@ -159,6 +159,11 @@ namespace cAlgo.Robots.ICT_S1
         public double SwlPrice => _swlPrice;
         public int SwlIdx => _swlIdx;
 
+        // Highest bar index fully processed so far -- lets paired trackers
+        // (e.g. PoiLifecycleTracker) know exactly which new k values to
+        // check on each cycle without re-scanning history.
+        public int LastProcessedIndex => _lastProcessedIndex;
+
         public PoiMarketEngine(Bars bars, string label)
         {
             _bars = bars;

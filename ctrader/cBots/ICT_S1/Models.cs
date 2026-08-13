@@ -147,6 +147,14 @@ namespace cAlgo.Robots.ICT_S1
         public DateTime TriggerTime;
         public DateTime EligibilityTime;
         public DateTime FirstImpactTime;
+        public int FirstImpactBarIndex;    // this timeframe's own bar index, for event-scan cursoring
+
+        // Raw origin bucket at freeze time (ObZone.OrigState / Fvg|Rb|ViZone.Origin):
+        // 0/4 = far-side ("I..."-style) bucket, 1 = near-side ("A..."-style) bucket.
+        // Preserved so PoiLifecycleTracker can keep applying the correct
+        // family-specific stranding rule independently after Pine stops
+        // watching this (now SPENT) zone.
+        public int OriginBucket;
 
         public S1PoiLifecycleState LifecycleState = S1PoiLifecycleState.Available;
         public int RetouchCount = 0;
