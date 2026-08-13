@@ -81,10 +81,20 @@ purpose and IS still in the file:
 
 The debug-label work got interrupted by an (unrelated) 20-second
 timeout bug before the user ever reported back what the label showed
-for the Aug 2025 zone. **This is the immediate next step if the new
-session picks FVG back up**: have the user enable `InpDebugValues`,
-confirm `InpFocusFvgDate` is near 2025-07-31, and report the label's
-contents.
+for the Aug 2025 zone. Confirmed (next session) that this timeout was
+hit in the SAME session, BEFORE the real structural fix (`b88aeb3` —
+STEP 2/STEP 3 rescanning the entire `fvgs` array every bar) landed —
+the user never got to retry with the actual fix in place. The debug
+label itself is cheap (one scan, one label, doesn't scale with
+history) and was never the real cost.
+
+**This is still the immediate next step**: have the user enable
+`InpDebugValues`, confirm `InpFocusFvgDate` is near 2025-07-31, and
+retry now that `b88aeb3` is in — report whether it loads within 20s,
+and if so the label's `state=`/`orig=`/`leftIdx=`/`trigK=`/`eligK=`/
+`stopK=` contents. If it still times out, that's a genuinely new/
+unresolved perf issue, not the one already fixed — get timeframe +
+how far back history is loading before digging further.
 
 ### Issue 2 — AFVG box stopped extending before impact (SOLVED)
 
@@ -158,6 +168,12 @@ since when do we mark bullish zone in downward leg." The explanation
 given (this matches real ICT terminology — a bullish order block is
 often literally a down-candle, named for what it sets up next, not its
 own color) was **not accepted or rejected** — the chat ended there.
+
+**Confirmed closed:** the user explicitly checked the consequence
+against the original Jan-Feb 2026 example (the 1.18747-1.19060 gap
+that started this issue) — under the new rule it renders bearish
+instead of bullish, and the user confirmed that's the correct outcome.
+No further action needed on issue 3.
 
 **Decision:** shape-based. AFVG's `bullish` tag now matches IFVG's own
 convention exactly — rising-shape gap (`high[c1] < low[c3]`) = bullish,
