@@ -3,6 +3,11 @@
 Repo: `dhagax100/dhagax100`
 Branch: `claude/afvg-rendering-bug-ctjnuq`
 Latest commit: `2e88f5d`
+FVG file status: **finalized with ONLY issue 2 solved, by explicit user
+decision.** Issue 1 and issue 3 were both investigated extensively in a
+later session (see below) but their code changes were reverted — the
+user chose to stop chasing both and ship the file as-is, issues 1 and 3
+still open. Do not reapply either fix without the user asking again.
 
 This file exists so a fresh chat can pick up exactly where this one left
 off, without the user having to re-explain any of it. Read this whole
@@ -53,7 +58,7 @@ file before touching any code.
 The user numbers issues as we go and revisits them by number. Keep that
 convention alive in the new chat.
 
-### Issue 1 — AFVG missed detection (STILL HANGING, not yet verified)
+### Issue 1 — AFVG missed detection (INVESTIGATED IN DEPTH, code reverted, still OPEN)
 
 A real AFVG gap (confirmed by hand-tracing real EURUSD Daily OHLC,
 Thu 31 Jul – Tue 05 Aug 2025) was structurally impossible for the old
@@ -61,40 +66,70 @@ scan to ever find: the scan's upper bound stopped exactly at the swing
 pivot candle, one candle short of where the real closing candle of the
 gap actually sat.
 
-Fixed in two commits:
-- `b4b13d9` — extended the scan's upper bound by one candle so it can
-  reach the true gap-closing candle.
-- `d99a0de` — the unconditional `+1` from the above fix crashed
-  (array-out-of-bounds) on dual-action/outside candles where the swing
-  pivot's index equals the confirming bar itself. Fixed with a guarded
-  `swlExt`/`swhExt` that only extends when a bar strictly before the
-  confirming bar actually exists.
+Originally "fixed" in two commits (`b4b13d9`, `d99a0de` — extended the
+scan's upper bound by one candle, then guarded against out-of-bounds on
+dual-action candles). **These commits are still in history but a later
+session found the real bug goes deeper**, and additional attempted
+fixes on top were ultimately reverted — see below.
 
-**What's not done:** this was never actually confirmed against the
-user's live chart. A debug-label tool was built for exactly this
-purpose and IS still in the file:
-- `InpDebugValues` (bool, off by default) — turn on to show a debug
-  label.
-- `InpFocusFvgDate` (date, defaults to 2025-07-31) — the label shows
-  the SINGLE zone whose `leftIdx` candle is nearest this date, with its
-  `state=`/`orig=`/`leftIdx=`/`trigK=`/`eligK=`/`stopK=` values.
+**The concrete example, fully hand-traced (real numbers, verified by
+close[i]=open[i+1] chaining):**
 
-The debug-label work got interrupted by an (unrelated) 20-second
-timeout bug before the user ever reported back what the label showed
-for the Aug 2025 zone. Confirmed (next session) that this timeout was
-hit in the SAME session, BEFORE the real structural fix (`b88aeb3` —
-STEP 2/STEP 3 rescanning the entire `fvgs` array every bar) landed —
-the user never got to retry with the actual fix in place. The debug
-label itself is cheap (one scan, one label, doesn't scale with
-history) and was never the real cost.
+| Date | O | H | L | C |
+|---|---|---|---|---|
+| Thu 31 Jul | 1.14032 | 1.14607 | — | 1.14123 |
+| Fri 01 Aug | 1.14123 | 1.15969 | 1.13914 | 1.15853 |
+| Mon 04 Aug | 1.15894 | 1.15965 | 1.15494 | 1.15679 |
+| Tue 05 Aug | 1.15679 | 1.15879 | 1.15277 | 1.15751 |
 
-**This is still the immediate next step**: have the user enable
-`InpDebugValues`, confirm `InpFocusFvgDate` is near 2025-07-31, and
-retry now that `b88aeb3` is in — report whether it loads within 20s,
-and if so the label's `state=`/`orig=`/`leftIdx=`/`trigK=`/`eligK=`/
-`stopK=` contents. If it still times out, that's a genuinely new/
-unresolved perf issue, not the one already fixed — get timeframe +
-how far back history is loading before digging further.
+Downtrend regime. The gap: `c1=Jul31 (H=1.14607)`, `c3=Aug4 (L=1.15494)`
+— a genuine rising-shape gap (`h1 < l3`). **Aug 1 is a dual-action
+candle that fully engulfs BOTH neighbors** — its range `[1.13914,
+1.15969]` contains all of Jul 31's range and all of Aug 4's range. This
+makes Aug 1 serve as BOTH the reference swing low (via breaking Jul
+31's low) AND, once later confirmed, the swing high pivot (its own high
+is the true peak, higher than both neighbors) — `aobSWLi == newSwhI ==
+Aug1` in the code's terms. Aug 5 (breaking Aug 4's low) is what finally
+confirms Aug 1 as the swing high, triggering `tryBearAFVG`.
+
+**Debug label result (confirmed via live chart, `InpFocusFvgDate`
+= 2025-07-31, current code): `state=3 orig=0, leftIdx=14023,
+trigK=14025, eligK=14026, stopK=14026`.** This is an ordinary,
+unrelated continuation IFVG from the down-leg — not the target gap.
+No AFVG box ever appears in this window.
+
+**Two internal fixes were tried and both proved NOT to be the actual
+blocker** (confirmed by re-checking the debug label after each — output
+was byte-identical to before any fix):
+1. Guard price equality (`h1 <= guardPrice` instead of `<`) — reasoning
+   was that when the pivot candle IS c1, its own high always equals
+   guardPrice exactly, never strictly less. Applied, committed, tested
+   — no change to the debug label. Reverted along with everything else
+   per the user's decision to stop here.
+2. Range extension to `k-1` instead of a fixed pivot+1 — analysis
+   showed this wasn't even needed for this specific example once
+   `aobSWLi == newSwhI == Aug1` was accounted for (the old range formula
+   already reaches Aug 4). Never actually applied to the file.
+
+**Leading unconfirmed hypothesis, not yet tested:** on Aug 1's own bar,
+the swing-detection code may ALSO fire a "Second break: SWH" against
+some OLDER, previously-armed swing high (from further back in the
+downtrend) — if Aug 1's high breaks that older reference too, regime
+flips to UP right there on Aug 1's own bar, not later at Aug 5. If so,
+by the time Aug 1 finally gets structurally confirmed as swing high (at
+Aug 5), `tryBearAFVG`'s gate (`pReg==2`) already fails, because the code
+thinks we're in an uptrend by then — explaining why the hunt never
+fires at all, independent of the guard/range questions above. **Next
+step, if this gets picked back up**: check whether an MSS mark (✕)
+appears exactly on Aug 1's candle. Never confirmed — the user chose to
+stop investigating issue 1 at this point.
+
+**Also worth revisiting if this comes back**: `InpDebugValues` +
+`InpFocusFvgDate` (still in the file, defaults to 2025-07-31) is the
+tool for this — it shows the SINGLE zone whose `leftIdx` is nearest the
+given date. Set the date precisely to the candle you care about (not a
+nearby one) — the debug scan will silently show an unrelated zone
+otherwise, which caused real confusion earlier in this investigation.
 
 ### Issue 2 — AFVG box stopped extending before impact (SOLVED)
 
@@ -144,7 +179,7 @@ debug-label one, a structural one):
   eligibility/lifecycle rule changed, only which zones get walked each
   bar.
 
-### Issue 3 — "bullish AFVG in a downward leg" (CODE CHANGED, NOT YET VERIFIED — deferred)
+### Issue 3 — "bullish AFVG in a downward leg" (DECISION MADE, code reverted — OPEN in the file)
 
 Not a code bug. A naming/classification disagreement, raised while
 verifying a real AFVG gap found inside a down-pullback leg within a
@@ -169,51 +204,46 @@ given (this matches real ICT terminology — a bullish order block is
 often literally a down-candle, named for what it sets up next, not its
 own color) was **not accepted or rejected** — the chat ended there.
 
-**Status: NOT verified against the live chart yet.** The user confirmed
-that bearish-instead-of-bullish is the CORRECT/INTENDED outcome for the
-Jan-Feb 2026 example (1.18747-1.19060) IF the fix works as designed —
-that is agreement on what the right answer should look like, not
-confirmation the chart actually shows it. Nobody has looked at that
-zone on the live chart since the code changed. **Explicitly deferred**
-by the user: don't chase this further right now — it may end up
-verified as a side effect of resolving issue 1 (same file, same kind of
-chart-verification work), so pick it back up then rather than as a
-separate push.
+**Status: decision made, but NOT implemented in the file — reverted at
+the user's explicit request to finalize the FVG file with only issue 2
+solved.** The user confirmed that bearish-instead-of-bullish is the
+CORRECT/INTENDED outcome for the Jan-Feb 2026 example (1.18747-1.19060)
+if the fix were applied — that was agreement on what the right answer
+should look like, not confirmation the live chart shows it (nobody
+checked before the code was reverted).
 
-**Decision:** shape-based. AFVG's `bullish` tag now matches IFVG's own
-convention exactly — rising-shape gap (`high[c1] < low[c3]`) = bullish,
-falling-shape gap (`low[c1] > high[c3]`) = bearish — regardless of
-which hunt (bullish-context/uptrend-pullback vs bearish-context/
-downtrend-pullback) found it. Since a bullish-context hunt only ever
-finds falling-shape gaps and a bearish-context hunt only ever finds
-rising-shape gaps, this is a full inversion of the old labels for AFVG,
-not a per-zone conditional.
+**Decision, for whenever this gets picked back up:** shape-based.
+AFVG's `bullish` tag should match IFVG's own convention exactly —
+rising-shape gap (`high[c1] < low[c3]`) = bullish, falling-shape gap
+(`low[c1] > high[c3]`) = bearish — regardless of which hunt
+(bullish-context/uptrend-pullback vs bearish-context/downtrend-pullback)
+found it. Since a bullish-context hunt only ever finds falling-shape
+gaps and a bearish-context hunt only ever finds rising-shape gaps, this
+would be a full inversion of the old labels for AFVG, not a per-zone
+conditional.
 
-**Implemented in `pine/ICT_Full_FVG_Indicator.pine`:**
-- `tryCreateAFVGs`: the two `addFVG(...)` calls now pass the flipped
-  boolean (bullish-context hunt → `false`/bearish tag; bearish-context
+**What the (reverted) implementation looked like, for reference if this
+gets redone:**
+- `tryCreateAFVGs`: flip the boolean passed to the two `addFVG(...)`
+  calls (bullish-context hunt → `false`/bearish tag; bearish-context
   hunt → `true`/bullish tag). The `bullish` parameter itself still means
-  hunt context, not the final label — commented inline to avoid future
-  confusion.
+  hunt context, not the final label.
 - STRANDING (`else` branch, AFVG/origin==1 zones): the `bullf`/
-  `not bullf` conditions were swapped to compensate. This branch decides
-  which geometric side (new swing high below zb, or new swing low above
-  zt) counts as stranded — that geometric truth didn't change, only
-  which label now points at which side of it. Left un-swapped, AFVG
-  stranding would have silently checked the wrong side after the label
-  flip.
-- Nothing else reads AFVG's `bullish` field in a way that mattered: the
+  `not bullf` conditions need swapping to compensate — that branch
+  decides which geometric side (new swing high below zb, or new swing
+  low above zt) counts as stranded, and that geometric truth doesn't
+  change even though the label does. Skipping this swap would make
+  AFVG stranding silently check the wrong side.
+- Nothing else reads AFVG's `bullish` field in a way that matters: the
   eligibility-arming code and CLOSE-THROUGH check only ever run for
   IFVG zones (gated by `state==0`/`origin!=1`), and live AFVG boxes are
-  colored green regardless of `bullish` (unchanged).
+  colored green regardless of `bullish`.
 
-**Not touched:** `ICT_Full_OB_v24.pine` — never edited, per the user's
-standing rule: the main indicator does not get touched while a
-diagnostic file is being worked. Its FVG section stays the older,
-pre-session copy (not ported until FVG is fully settled and the user
-asks), and its AOB/IFOB naming stays exactly as it was. The open
-follow-up on AOB/IFOB naming is tracked here in HANDOFF only, not as a
-comment in the file:
+**Not touched (and shouldn't be until the user asks):**
+`ICT_Full_OB_v24.pine` — per the user's standing rule, the main
+indicator does not get touched while a diagnostic file is being worked.
+Its FVG section stays the older, pre-session copy, and its AOB/IFOB
+naming stays exactly as it was. The open follow-up on AOB/IFOB naming:
 
 AOB doesn't have AFVG's exact shape/intent conflict — it picks an
 actual candle whose color already matches its label, by construction
