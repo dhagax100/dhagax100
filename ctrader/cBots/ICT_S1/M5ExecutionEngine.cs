@@ -46,6 +46,8 @@ namespace cAlgo.Robots.ICT_S1
         public event Action<M5Attempt> OrderPlaced;
         public event Action<M5Attempt> OrderMoved;
         public event Action<M5Attempt> OrderCancelled;
+        public event Action<M5Attempt> AttemptFilled;
+        public event Action<M5Attempt> AttemptClosed;
 
         public M5ExecutionEngine(PoiMarketEngine m5Engine, H4SetupEngine h4Engine, ITradeExecutor executor)
         {
@@ -212,6 +214,7 @@ namespace cAlgo.Robots.ICT_S1
             attempt.ActualFillPrice = fillPrice;
             attempt.EntryTime = fillTime;
             attempt.Status = M5AttemptStatus.Open;
+            AttemptFilled?.Invoke(attempt);
         }
 
         public void OnAttemptClosed(M5Attempt attempt, double exitPrice, DateTime exitTime, ExitReason reason,
@@ -231,6 +234,7 @@ namespace cAlgo.Robots.ICT_S1
 
             var h4SetupId = attempt.H4SetupId;
             _liveAttemptByH4Setup.Remove(h4SetupId);
+            AttemptClosed?.Invoke(attempt);
 
             // Re-entry: only on SL, and only if the parent H4Setup is still
             // live -- +3R does NOT re-arm (confirmed rule; EnsureAttemptTracking

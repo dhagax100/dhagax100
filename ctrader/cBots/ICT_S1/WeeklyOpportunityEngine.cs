@@ -72,10 +72,13 @@ namespace cAlgo.Robots.ICT_S1
             return list;
         }
 
-        // Call once per cycle, after weeklyTracker.Update().
-        public void Update()
+        // Call once per cycle with the SAME event batch the caller already
+        // drained from weeklyTracker (a Queue can only be drained by one
+        // consumer -- the caller owns the single drain and fans the batch
+        // out to this engine AND to Journal/Visualization directly).
+        public void Update(List<PoiLifecycleEvent> poiEvents)
         {
-            foreach (var ev in _tracker.DrainEvents())
+            foreach (var ev in poiEvents)
             {
                 switch (ev.Type)
                 {

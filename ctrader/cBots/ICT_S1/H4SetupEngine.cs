@@ -79,10 +79,12 @@ namespace cAlgo.Robots.ICT_S1
             return list;
         }
 
-        // Call once per cycle, after h4Tracker.Update().
-        public void Update()
+        // Call once per cycle with the SAME event batch the caller already
+        // drained from h4Tracker (single-drain, fanned out by the caller --
+        // see WeeklyOpportunityEngine.Update for the same pattern).
+        public void Update(List<PoiLifecycleEvent> poiEvents)
         {
-            foreach (var ev in _h4Tracker.DrainEvents())
+            foreach (var ev in poiEvents)
             {
                 switch (ev.Type)
                 {
