@@ -257,16 +257,40 @@ gets redone:**
 **Not touched (and shouldn't be until the user asks):**
 `ICT_Full_OB_v24.pine` — per the user's standing rule, the main
 indicator does not get touched while a diagnostic file is being worked.
-Its FVG section stays the older, pre-session copy, and its AOB/IFOB
-naming stays exactly as it was. The open follow-up on AOB/IFOB naming:
+Its FVG section stays the older, pre-session copy.
 
-AOB doesn't have AFVG's exact shape/intent conflict — it picks an
-actual candle whose color already matches its label, by construction
-of the scan (only up-close candles qualify for a "bullish" pick).
-IFOB's opposite-color pick (it deliberately picks the strongest
-down-candle for a "bullish" IFOB) matches real ICT terminology on
-purpose. So AOB/IFOB naming isn't a guaranteed same-fix as AFVG's —
-it needs its own decision from the user later, not assumed.
+### AOB naming — FIXED in `ICT_OB_Diagnostic.pine` (commit `9600a67`)
+
+Follow-up above turned out to be wrong on inspection: AOB *is* the same
+intent-based naming as AFVG, just checked from the wrong angle
+(candle-color-matches-label was true but irrelevant — the label itself
+was still assigned by which regime/hunt found it, not by what trade the
+zone is used for). User's correction: in an uptrend, IFOB is the buy
+zone; AOB, formed during the down-pullback, is only ever used to sell
+temporarily — so it should be labeled bearish, not bullish. Same fix
+pattern as AFVG (issue 3's decision), applied here:
+
+- `tryBullAOB` (fires on uptrend pullback, pReg==1) now tags the zone
+  bearish (`false`) instead of bullish.
+- `tryBearAOB` (fires on downtrend pullback, pReg==2) now tags the zone
+  bullish (`true`) instead of bearish.
+- STRANDING branch for AOB zones (`origState==1`) had its `bull`/
+  `not bull` checks swapped to compensate, so the same physical zones
+  still strand on the same geometric side as before — only the label
+  changed, not the lifecycle behavior.
+- Checked and confirmed unaffected: STEP2 eligibility-arming (only
+  applies to state 0/4, i.e. IFOB/AIFOB, not AOB which is already
+  eligible at creation), IMPACT check (doesn't read `.bullish`), and
+  drawing color (AOB boxes are always green regardless of `.bullish`;
+  only the debug label's up/down position shifts, cosmetic only).
+
+IFOB naming was left alone — it already matches real ICT convention on
+purpose (opposite-color pick, intent-based label) and was never in
+question.
+
+**Not verified against a live chart yet.** Applied in
+`ICT_OB_Diagnostic.pine` only, per the "never touch main code" rule —
+not ported to `ICT_Full_OB_v24.pine` unless/until asked.
 
 ## How this user wants to work (do not skip this)
 
