@@ -69,6 +69,11 @@ var fvgs       = array.new<FvgZone>()
 var swHighs    = array.new<int>()
 var swLows     = array.new<int>()
 
+// Small "still needs checking" index lists into fvgs -- see STEP 2 / STEP 3
+// below for why these exist (20s-timeout fix).
+var liveIdx        = array.new<int>()   // zones not yet SPENT (state != 3)
+var pendingEligIdx = array.new<int>()   // zones still waiting on eligibility
+
 // OHLC + time storage (absolute indexing, oldest=0)
 var O_ = array.new<float>()
 var H_ = array.new<float>()
@@ -140,6 +145,12 @@ addFVG(int leftIdx, float zb, float zt, bool bull, int tK, int st) =>
     // addOB's st param one-for-one; origin is stamped once, forever.
     eK = (st == 1) ? tK : -1
     array.push(fvgs, FvgZone.new(leftIdx, zb, zt, bull, tK, eK, -1, st, st, st))
+    // Track the new zone in the small index lists instead of relying on
+    // full rescans of fvgs -- that's what keeps per-bar work bounded.
+    newFvgIdx = array.size(fvgs) - 1
+    array.push(liveIdx, newFvgIdx)
+    if eK == -1
+        array.push(pendingEligIdx, newFvgIdx)
 
 // Scans [lo,hi] for EVERY qualifying 3-candle gap (not just one best
 // candle). Called at each break-check site, using the same lo/hi/
@@ -453,6 +464,19 @@ if not skipBar and bar_index != lastProcessedBI
             fvgBearScanUpto := k
 
         // STEP 2: arm swings (consumed check) + IFVG eligibility
+        //
+        // PERFORMANCE (20s-timeout fix): this used to loop over the ENTIRE
+        // fvgs array -- every IFVG/AFVG zone ever created since the start
+        // of the loaded history -- on every single swing event. On Daily
+        // bars going back decades, fvgs grows into the thousands (STEP 1b
+        // below pushes roughly one new zone per bar for as long as a
+        // regime lasts), so this was effectively bars x total-zones-ever
+        // work. Fix: pendingEligIdx only holds zones still waiting on
+        // eligibility (AFVG zones never appear here -- they're eligible
+        // immediately at creation, see addFVG). Once a zone is armed it's
+        // swap-removed from this list, so the scan cost tracks how many
+        // zones are ACTUALLY still pending right now, not how much
+        // history has piled up behind them.
         while ei < evTotal
             sEv = array.get(events, ei)
             if sEv.confirmIdx != k
@@ -463,40 +487,57 @@ if not skipBar and bar_index != lastProcessedBI
                     swhPrice := sEv.price
                     swhIdx   := sEv.swingIdx
                 lastSWHidx := sEv.swingIdx
-                fvgSz = array.size(fvgs)
-                for zf = 0 to fvgSz - 1
-                    if zf < 0 or zf >= fvgSz
-                        continue
-                    fvgZ = array.get(fvgs, zf)
-                    if fvgZ.bullish and fvgZ.state == 0 and fvgZ.eligibleK == -1 and k > fvgZ.triggerK
-                        fvgZ.eligibleK := k
-                        array.set(fvgs, zf, fvgZ)
+                p0 = array.size(pendingEligIdx) - 1
+                while p0 >= 0
+                    zfP = array.get(pendingEligIdx, p0)
+                    fvgZP = array.get(fvgs, zfP)
+                    if fvgZP.bullish and fvgZP.state == 0 and fvgZP.eligibleK == -1 and k > fvgZP.triggerK
+                        fvgZP.eligibleK := k
+                        array.set(fvgs, zfP, fvgZP)
+                        lastP0 = array.size(pendingEligIdx) - 1
+                        array.set(pendingEligIdx, p0, array.get(pendingEligIdx, lastP0))
+                        array.pop(pendingEligIdx)
+                    p0 -= 1
             else
                 if not swlCons
                     haveSWL  := true
                     swlPrice := sEv.price
                     swlIdx   := sEv.swingIdx
                 lastSWLidx := sEv.swingIdx
-                fvgSz2 = array.size(fvgs)
-                for zf2 = 0 to fvgSz2 - 1
-                    if zf2 < 0 or zf2 >= fvgSz2
-                        continue
-                    fvgZ2 = array.get(fvgs, zf2)
-                    if not fvgZ2.bullish and fvgZ2.state == 0 and fvgZ2.eligibleK == -1 and k > fvgZ2.triggerK
-                        fvgZ2.eligibleK := k
-                        array.set(fvgs, zf2, fvgZ2)
+                p1 = array.size(pendingEligIdx) - 1
+                while p1 >= 0
+                    zfP2 = array.get(pendingEligIdx, p1)
+                    fvgZP2 = array.get(fvgs, zfP2)
+                    if not fvgZP2.bullish and fvgZP2.state == 0 and fvgZP2.eligibleK == -1 and k > fvgZP2.triggerK
+                        fvgZP2.eligibleK := k
+                        array.set(fvgs, zfP2, fvgZP2)
+                        lastP1 = array.size(pendingEligIdx) - 1
+                        array.set(pendingEligIdx, p1, array.get(pendingEligIdx, lastP1))
+                        array.pop(pendingEligIdx)
+                    p1 -= 1
             ei += 1
 
         // STEP 3: IFVG/AFVG lifecycle at this candle
+        //
+        // PERFORMANCE (20s-timeout fix): same problem as STEP 2, but worse
+        // -- this ran on EVERY bar (not just swing-event bars), rescanning
+        // the entire fvgs array each time. That made this the single
+        // biggest cost in the script: bars x total-zones-ever-created,
+        // growing without bound as more Daily history loads. Fix: liveIdx
+        // only holds zones that haven't reached state 3 (SPENT) yet. The
+        // instant a zone is marked SPENT this bar, it's swap-removed from
+        // liveIdx, so the list only ever holds zones genuinely still "in
+        // play" (live IFVG/AFVG, or OFVG not yet hit) -- bounded by how
+        // many zones are actually open at once, not by how many years of
+        // history sit behind them. No rule below changed, only which
+        // zones get walked each bar.
         hK = array.get(H_, k)
         lK = array.get(L_, k)
-        fvgTotal = array.size(fvgs)
-        for zf3 = 0 to fvgTotal - 1
-            if zf3 < 0 or zf3 >= fvgTotal
-                continue
+        m3 = array.size(liveIdx) - 1
+        while m3 >= 0
+            zf3 = array.get(liveIdx, m3)
             fvgZ3 = array.get(fvgs, zf3)
-            if fvgZ3.state == 3
-                continue
+            becameSpent = false
 
             zbf = fvgZ3.zb
             ztf = fvgZ3.zt
@@ -509,11 +550,11 @@ if not skipBar and bar_index != lastProcessedBI
                     fvgZ3.state := 3
                     fvgZ3.stopK := k
                     array.set(fvgs, zf3, fvgZ3)
-                    continue
+                    becameSpent := true
 
             // CLOSE-THROUGH INVALIDATION -- applies to any live zone (IFVG
             // or AFVG), not just IFVG.
-            if (fvgZ3.state == 0 or fvgZ3.state == 1) and fvgZ3.eligibleK != -1 and k >= fvgZ3.eligibleK
+            if not becameSpent and (fvgZ3.state == 0 or fvgZ3.state == 1) and fvgZ3.eligibleK != -1 and k >= fvgZ3.eligibleK
                 cK = array.get(C_, k)
                 closedThrough = bullf ? cK < zbf : cK > ztf
                 if closedThrough
@@ -521,14 +562,14 @@ if not skipBar and bar_index != lastProcessedBI
                     fvgZ3.state := 3
                     fvgZ3.stopK := k
                     array.set(fvgs, zf3, fvgZ3)
-                    continue
+                    becameSpent := true
 
             // STRANDING -> OFVG: origin decides the rule -- IFVG-style
             // (origin 0) strands on the FAR side, mirroring IFOB; AFVG-style
             // (origin 1) strands on the NEAR side, mirroring AOB. Origin
             // never changes after creation, so this stays correct even
             // though state itself (0 or 1) is what's being checked here.
-            if (fvgZ3.state == 0 or fvgZ3.state == 1) and fvgZ3.eligibleK != -1
+            if not becameSpent and (fvgZ3.state == 0 or fvgZ3.state == 1) and fvgZ3.eligibleK != -1
                 isIfvgLike = fvgZ3.origin != 1
                 for e2 = evBeforeSwing to evTotal - 1
                     if e2 < 0 or e2 >= evTotal
@@ -551,6 +592,12 @@ if not skipBar and bar_index != lastProcessedBI
                         fvgZ3.state := 2
                         array.set(fvgs, zf3, fvgZ3)
                         break
+
+            if becameSpent
+                lastM3 = array.size(liveIdx) - 1
+                array.set(liveIdx, m3, array.get(liveIdx, lastM3))
+                array.pop(liveIdx)
+            m3 -= 1
 
 // ===================== DRAWING (last bar only) =====================
 if barstate.islast
