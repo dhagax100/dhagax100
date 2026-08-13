@@ -20,12 +20,15 @@
 // would duplicate that information under a different name, not add new
 // visibility.
 //
-// KNOWN GAPS still explicit, not silently dropped: H4_REACTION_CREATED /
-// H4_POI_JOINED_REACTION are NOT added -- they depend on the still-BLOCKED
-// H4 reaction-grouping boundary rule (see H4SetupEngine header / final
-// repair report's open strategy question); adding event types for a
-// grouping concept that doesn't exist yet would be inventing structure
-// ahead of the rule. MFE/MAE (max favorable/adverse excursion) need a
+// H4 reaction grouping is now resolved (strategy owner clarification,
+// 2026-08-13 -- see H4SetupEngine.AuthorizeOrJoin) -- the existing
+// H4_IMPACTED/H4_RETOUCHED EventLog rows (from LogH4SetupEvent) already
+// carry this distinction in their Notes field ("new H4 reaction, protected
+// swing X" vs "joined live reaction -- same protected swing X"), so no
+// separate H4_REACTION_CREATED/H4_POI_JOINED_REACTION event types were
+// needed on top of that.
+//
+// KNOWN GAPS still explicit, not silently dropped: MFE/MAE need a
 // tick-by-tick high-water-mark tracker per open position -- a real new
 // feature, not a fix to existing wrong behavior, so left out of this
 // repair pass. SpreadAtEntry is captured; Slippage and Commission are left

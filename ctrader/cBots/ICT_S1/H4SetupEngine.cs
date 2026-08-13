@@ -44,6 +44,15 @@
 // -- the exact structural swing PoiMarketEngine stamped on the raw zone at
 // the moment it was created (see PoiMarketEngine's AddOB/AddFvg/AddRb/AddVi
 // sourceSwingIdx parameter and PoiLifecycleTracker.PopulateSourceSwing).
+//
+// H4 REACTION GROUPING (audit sections 7-9, 43 -- strategy owner
+// clarification, 2026-08-13): "same H4 reaction" was previously conflated
+// with "same still-live setup under the same Weekly parent", with no
+// boundary condition for when a NEW reaction should begin. Resolved:
+// reaction identity is the EXACT protected H4 swing a POI is anchored to
+// (not time, not geometry) -- see AuthorizeOrJoin/FindLiveSetupForSwing.
+// More than one H4Setup can now be simultaneously live under one Weekly
+// opportunity, one per distinct protected swing.
 
 using System;
 using System.Collections.Generic;
@@ -183,17 +192,6 @@ namespace cAlgo.Robots.ICT_S1
 
         private void AuthorizeOrJoin(S1PoiSnapshot snap, WeeklyOpportunity weekly, PoiLifecycleEvent ev, bool isPrimary)
         {
-            var live = FindLiveSetup(weekly.WeeklyOpportunityId);
-            if (live != null)
-            {
-                if (isPrimary) { snap.WeeklyOpportunityId = weekly.WeeklyOpportunityId; snap.PoiClusterId = live.SupportingCluster.PoiClusterId; }
-                live.SupportingCluster.Members.Add(snap);
-                _eventQueue.Enqueue(new H4SetupEvent { Type = H4SetupEventType.Retouched, Setup = live, TriggeringPoi = snap, Time = ev.Time, Note = $"H4 POI joined live setup ({snap.TypeAtActivation})" });
-                return;
-            }
-
-            var route = IsInFavorType(snap.TypeAtActivation) ? H4Route.RouteA_Confirmed : H4Route.RouteB_Aggressive;
-
             // Round 2 fix (audit section 25): the protected swing is now the
             // EXACT structural swing PoiMarketEngine stamped on the raw zone
             // at creation (frozen onto the snapshot by PoiLifecycleTracker),
@@ -203,13 +201,41 @@ namespace cAlgo.Robots.ICT_S1
             // not always "the same-direction swing") -- consuming the exact
             // stored reference is what the audit requires; a direction-only
             // "BUY always protected by a swing LOW" rule was itself the kind
-            // of reconstruction/approximation this fix removes.
+            // of reconstruction/approximation this fix removes. Needed here
+            // BEFORE the live-setup lookup too, since H4 reaction identity
+            // (below) is itself defined by this exact swing.
             if (snap.SourceSwingType == null || snap.SourceSwingPrice == null || snap.SourceSwingConfirmationTime == null)
             {
                 // Finding 10: fail safely, no fake fallback -- do not arm.
                 _rejectionQueue.Enqueue(new RejectionEvent { Code = RejectionCode.H4_POI_REJECTED_NO_PROTECTED_SWING, Time = ev.Time, Direction = snap.Direction, PoiId = snap.S1PoiId, Note = $"No source-swing reference was stored for this {snap.TypeAtActivation} at creation -- refusing to arm with a substituted level" });
                 return;
             }
+
+            // H4 REACTION GROUPING RULE (strategy owner clarification,
+            // 2026-08-13): H4 reaction identity is structural, not time-
+            // based and not geometric. Multiple H4 POIs belong to the SAME
+            // H4 reaction/H4Setup while they are anchored to the SAME
+            // relevant protected H4 swing. Geometric overlap is not
+            // required. A later qualifying H4 POI anchored to a newly
+            // confirmed protected swing DIFFERENT from a live setup's own
+            // starts a NEW H4 reaction/H4Setup, even if that earlier setup
+            // under the same Weekly narrative hasn't otherwise terminated.
+            // No elapsed-time, distance, or "most recent" heuristic --
+            // exact swing-identity match only. This also means more than
+            // one H4Setup can now be simultaneously live under one Weekly
+            // opportunity (one per distinct protected swing), which is why
+            // "live setup" below is scoped by swing identity, not just by
+            // WeeklyOpportunityId.
+            var live = FindLiveSetupForSwing(weekly.WeeklyOpportunityId, snap.SourceSwingType.Value, snap.SourceSwingPrice.Value, snap.SourceSwingConfirmationTime.Value);
+            if (live != null)
+            {
+                if (isPrimary) { snap.WeeklyOpportunityId = weekly.WeeklyOpportunityId; snap.PoiClusterId = live.SupportingCluster.PoiClusterId; }
+                live.SupportingCluster.Members.Add(snap);
+                _eventQueue.Enqueue(new H4SetupEvent { Type = H4SetupEventType.Retouched, Setup = live, TriggeringPoi = snap, Time = ev.Time, Note = $"H4 POI joined live reaction -- same protected swing {snap.SourceSwingType}@{snap.SourceSwingPrice} ({snap.TypeAtActivation})" });
+                return;
+            }
+
+            var route = IsInFavorType(snap.TypeAtActivation) ? H4Route.RouteA_Confirmed : H4Route.RouteB_Aggressive;
 
             var cluster = new PoiCluster { PoiClusterId = IdGenerator.NextPoiClusterId(), Direction = snap.Direction };
             cluster.Members.Add(snap);
@@ -231,7 +257,7 @@ namespace cAlgo.Robots.ICT_S1
             };
             Setups.Add(setup);
             weekly.H4Setups.Add(setup); // Finding 11 fix
-            _eventQueue.Enqueue(new H4SetupEvent { Type = H4SetupEventType.Impacted, Setup = setup, TriggeringPoi = snap, Time = ev.Time, Note = $"{route} via {snap.TypeAtActivation}" });
+            _eventQueue.Enqueue(new H4SetupEvent { Type = H4SetupEventType.Impacted, Setup = setup, TriggeringPoi = snap, Time = ev.Time, Note = $"{route} via {snap.TypeAtActivation} -- new H4 reaction, protected swing {snap.SourceSwingType}@{snap.SourceSwingPrice}" });
         }
 
         private static bool IsInFavorType(PoiTypeLabel t) =>
@@ -270,25 +296,21 @@ namespace cAlgo.Robots.ICT_S1
             return (qualifying, anyTemporallyValid);
         }
 
-        // BLOCKED STRATEGY QUESTION (audit sections 7-9, 43 -- not resolved
-        // in this repair pass, flagged rather than invented): this treats
-        // "same Weekly parent, not yet Terminated" as the entire test for
-        // "same H4 reaction". Every H4 POI impact under a still-live setup
-        // joins that SAME setup/cluster no matter how much later it occurs
-        // or how many fresh market-structure legs have happened since --
-        // there is no confirmed rule in the Pine source or S1 spec for when
-        // a NEW H4 reaction should begin under an otherwise-still-active
-        // Weekly narrative (e.g. a formal H4ReactionContext/H4PoiGroup
-        // concept with its own boundary condition). Zone overlap doesn't
-        // generalize here for the same reason it doesn't at Weekly level
-        // (Finding 4/9), and inventing a time-gap or bar-count threshold
-        // would be new strategy logic, not a real fix. See the final repair
-        // report's open strategy question for a concrete scenario.
-        private H4Setup FindLiveSetup(string weeklyOpportunityId)
+        // RESOLVED (audit sections 7-9, 43 -- strategy owner clarification
+        // 2026-08-13, see AuthorizeOrJoin's H4 REACTION GROUPING RULE
+        // comment): "same reaction" = anchored to the same exact protected
+        // H4 swing, not merely "same Weekly parent, still live". A live
+        // setup only qualifies as the same reaction if its ProtectedSwing
+        // identity matches exactly.
+        private H4Setup FindLiveSetupForSwing(string weeklyOpportunityId, SwingType swingType, double swingPrice, DateTime swingTime)
         {
             foreach (var s in Setups)
-                if (s.WeeklyOpportunityId == weeklyOpportunityId && s.Status != H4SetupStatus.Terminated)
+            {
+                if (s.WeeklyOpportunityId != weeklyOpportunityId) continue;
+                if (s.Status == H4SetupStatus.Terminated) continue;
+                if (s.ProtectedSwingType == swingType && s.ProtectedSwingPrice == swingPrice && s.ProtectedSwingTime == swingTime)
                     return s;
+            }
             return null;
         }
 
