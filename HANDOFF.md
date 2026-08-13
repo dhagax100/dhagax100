@@ -144,7 +144,7 @@ debug-label one, a structural one):
   eligibility/lifecycle rule changed, only which zones get walked each
   bar.
 
-### Issue 3 — "bullish AFVG in a downward leg" (SOLVED — user decided shape-based)
+### Issue 3 — "bullish AFVG in a downward leg" (CODE CHANGED, NOT YET VERIFIED — deferred)
 
 Not a code bug. A naming/classification disagreement, raised while
 verifying a real AFVG gap found inside a down-pullback leg within a
@@ -169,11 +169,16 @@ given (this matches real ICT terminology — a bullish order block is
 often literally a down-candle, named for what it sets up next, not its
 own color) was **not accepted or rejected** — the chat ended there.
 
-**Confirmed closed:** the user explicitly checked the consequence
-against the original Jan-Feb 2026 example (the 1.18747-1.19060 gap
-that started this issue) — under the new rule it renders bearish
-instead of bullish, and the user confirmed that's the correct outcome.
-No further action needed on issue 3.
+**Status: NOT verified against the live chart yet.** The user confirmed
+that bearish-instead-of-bullish is the CORRECT/INTENDED outcome for the
+Jan-Feb 2026 example (1.18747-1.19060) IF the fix works as designed —
+that is agreement on what the right answer should look like, not
+confirmation the chart actually shows it. Nobody has looked at that
+zone on the live chart since the code changed. **Explicitly deferred**
+by the user: don't chase this further right now — it may end up
+verified as a side effect of resolving issue 1 (same file, same kind of
+chart-verification work), so pick it back up then rather than as a
+separate push.
 
 **Decision:** shape-based. AFVG's `bullish` tag now matches IFVG's own
 convention exactly — rising-shape gap (`high[c1] < low[c3]`) = bullish,
