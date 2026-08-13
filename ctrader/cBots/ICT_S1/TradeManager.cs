@@ -179,6 +179,9 @@ namespace cAlgo.Robots.ICT_S1
             double exitPrice = histTrade != null
                 ? histTrade.ClosingPrice
                 : (pos.TradeType == TradeType.Buy ? _symbol.Bid : _symbol.Ask);
+            // Part 21 instrumentation: prove which source actually supplied
+            // each trade's exit price rather than asserting it in a comment.
+            attempt.ExitPriceSource = histTrade != null ? "HistoricalTrade" : "QuoteFallback";
             ExecutionEngine.OnAttemptClosed(attempt, exitPrice, _robot.Server.Time, reason, pos.GrossProfit, pos.NetProfit);
         }
 

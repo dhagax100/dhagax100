@@ -163,6 +163,10 @@ namespace cAlgo.Robots.ICT_S1
         public SwingType? SourceSwingType;
         public double? SourceSwingPrice;
         public DateTime? SourceSwingConfirmationTime;
+        // Stable structural identity (this timeframe's own raw engine swing
+        // index) -- Part 15 hardening: reaction/ownership identity checks
+        // must compare this, not float Price equality.
+        public int SourceSwingIdx = -1;
 
         public S1PoiLifecycleState LifecycleState = S1PoiLifecycleState.Available;
         public int RetouchCount = 0;
@@ -287,6 +291,10 @@ namespace cAlgo.Robots.ICT_S1
         public SwingType ProtectedSwingType;
         public double ProtectedSwingPrice;
         public DateTime ProtectedSwingTime;
+        // Stable structural identity (H4 timeframe's own raw engine swing
+        // index) -- the authoritative test for "same H4 reaction" (Part 15
+        // hardening); Type/Price/Time are retained for display/journaling.
+        public int ProtectedSwingIdx = -1;
 
         public readonly List<M5Attempt> M5Attempts = new List<M5Attempt>();
 
@@ -380,6 +388,7 @@ namespace cAlgo.Robots.ICT_S1
 
         public DateTime? ExitTime;
         public double? ExitPrice;
+        public string ExitPriceSource; // "HistoricalTrade" | "QuoteFallback" -- Part 21 audit instrumentation
         public ExitReason? ExitReason;
 
         public double? GrossPnL;

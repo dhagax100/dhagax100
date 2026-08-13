@@ -14,18 +14,23 @@
 // reading as wrong given the doc's own NEUTRAL example ("SELL entries =
 // OFF and BUY entries = OFF for THAT narrative").
 //
-// ROUND 2 (audit sections 21, 23) -- both remaining heuristics below are
-// now fully removed, not just documented:
-// (1) Which opposite-direction opportunity(ies) a new counter-POI's own
-//     narrative is contesting is decided once, when that counter narrative
-//     is created, and stored as ContestingOfWeeklyOpportunityIds. Zone
-//     overlap can't be the test here (a counter-POI typically forms well
-//     away from the original zone after price has moved). The old "most
-//     recently activated opposite" TIE-BREAK IS REMOVED -- multiplicity is
-//     preserved instead: every opposite-direction opportunity currently in
-//     its own control is linked, and this counter-narrative's own
-//     retirement hands control back to ALL of them independently (same
-//     reasoning as H4SetupEngine's Weekly->H4 multiplicity fix).
+// ROUND 2 (audit sections 21, 23):
+// (1) BLOCKED STRATEGY QUESTION, NOT A SETTLED FIX (final audit Part 14 --
+//     comment-accuracy corrected, was previously overclaimed as resolved
+//     here): which opposite-direction opportunity(ies) a new counter-POI's
+//     own narrative is contesting is decided once, at creation, and stored
+//     as ContestingOfWeeklyOpportunityIds. Zone overlap can't be the test
+//     (a counter-POI typically forms well away from the original zone
+//     after price has moved). The old "most recently activated opposite"
+//     TIE-BREAK IS REMOVED, but "link to every opposite-direction
+//     opportunity currently in its own control" is the SAME class of
+//     unconfirmed decision as H4SetupEngine's Weekly->H4 fan-out -- one
+//     bearish Old/Aggressive POI should affect exactly the narrative(s)
+//     whose price/control path actually encountered it, and "all
+//     currently-active candidates" doesn't structurally prove that. Left
+//     running as-is pending the same strategy-owner architectural answer
+//     as the H4 case (see current repair report); do not resolve this one
+//     independently with a different guess.
 // (2) NEUTRAL detection no longer uses the raw Weekly regime flag (that
 //     heuristic is removed per Finding 8 -- Pine regime and S1 Control are
 //     NOT confirmed equivalent). It now directly follows the doc's own
@@ -180,14 +185,16 @@ namespace cAlgo.Robots.ICT_S1
         // direction opportunity currently holding control in its own
         // direction (the ones genuinely "in play" right now).
         //
-        // Round 2 fix (audit section 21): the old "most recently activated
-        // opposite" tie-break is REMOVED -- there is no confirmed rule for
-        // picking a single opposite-direction target when more than one
-        // qualifies simultaneously (same reasoning as the Weekly->H4
-        // multiplicity fix in H4SetupEngine). Multiplicity is preserved:
-        // this counter-narrative links to EVERY qualifying opposite-
-        // direction opportunity, and its own retirement hands control back
-        // to all of them (see ComputeControlTransitionOnRetire).
+        // BLOCKED STRATEGY QUESTION, NOT A SETTLED FIX (final audit Part 14
+        // -- see file header): the old "most recently activated opposite"
+        // tie-break is REMOVED, but "link to every currently-qualifying
+        // opposite-direction opportunity" is not proven correct either --
+        // same open question as H4SetupEngine's Weekly->H4 fan-out. Left as
+        // multiplicity-preserving (this counter-narrative links to EVERY
+        // qualifying opposite-direction opportunity, and its own retirement
+        // hands control back to all of them -- see
+        // ComputeControlTransitionOnRetire) pending the strategy owner's
+        // answer, not because that's confirmed correct.
         private void LinkContestingNarrativeIfAny(WeeklyOpportunity newOpp, DateTime now)
         {
             var oppositeDir = newOpp.Direction == Direction.Buy ? Direction.Sell : Direction.Buy;
@@ -246,6 +253,29 @@ namespace cAlgo.Robots.ICT_S1
             });
         }
 
+        // PARENT TERMINATION PROPAGATION (Part 19 audit, verified not
+        // guessed): this Weekly opportunity's termination is driven purely
+        // by its OWN cluster reaching all-terminal -- spec section 6 is
+        // explicit ("no other independent trigger terminates it -- not
+        // time, not a trade's W/L, not Pine SPENT"). It intentionally does
+        // NOT touch opp.H4Setups here. This is the confirmed symmetric
+        // counterpart of spec section 7's H4Setup termination rule ("do
+        // not touch the parent WeeklyOpportunity... it may spawn a new
+        // H4Setup later") -- the two lifecycles are independently driven by
+        // their own layer's cluster/swing state, deliberately allowed to
+        // diverge (a Weekly's own zone-cluster can go fully terminal while
+        // a child H4Setup/M5Attempt it already spawned keeps running under
+        // its own protected-swing/POI-terminal rules). No existing pending
+        // order or open position is force-closed by this.
+        //
+        // What DOES change once Status flips to Terminated: no NEW child
+        // activity can start under this narrative going forward --
+        // H4SetupEngine.FindArmingWeeklyOpportunities filters to
+        // Status == Active only, so a Terminated opportunity can never again
+        // be returned as a qualifying candidate for a fresh H4Setup. This is
+        // the "no new child activity may continue from a dead parent"
+        // guarantee (Part 19) -- already enforced structurally, not by a
+        // special-case check here.
         private void HandleTerminal(PoiLifecycleEvent ev)
         {
             var opp = FindOwningOpportunity(ev.Snapshot);

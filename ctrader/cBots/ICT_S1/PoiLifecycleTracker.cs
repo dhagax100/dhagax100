@@ -248,6 +248,10 @@ namespace cAlgo.Robots.ICT_S1
         private void PopulateSourceSwing(S1PoiSnapshot snap, int sourceSwingIdx)
         {
             if (sourceSwingIdx < 0) return;
+            // Stable structural identity, independent of Type/Price/Time
+            // (Part 15 hardening: H4 reaction-swing identity comparisons
+            // must not rely on floating-point price equality).
+            snap.SourceSwingIdx = sourceSwingIdx;
             foreach (var ev in _engine.Events)
             {
                 if (ev.SwingIdx != sourceSwingIdx) continue;

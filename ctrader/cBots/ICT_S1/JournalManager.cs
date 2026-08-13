@@ -45,6 +45,7 @@ namespace cAlgo.Robots.ICT_S1
     public class JournalManager
     {
         private readonly string _tradeSummaryPath;
+        private readonly string _opportunityHistoryPath;
         private readonly string _opportunitySummaryPath;
         private readonly string _eventLogPath;
         private readonly string _debugLogPath;
@@ -52,20 +53,38 @@ namespace cAlgo.Robots.ICT_S1
 
         private readonly List<string> _eventLogBuffer = new List<string>();
         private readonly List<string> _tradeSummaryBuffer = new List<string>();
-        private readonly List<string> _opportunitySummaryBuffer = new List<string>();
+        private readonly List<string> _opportunityHistoryBuffer = new List<string>();
         private readonly List<string> _debugBuffer = new List<string>();
-        private readonly HashSet<string> _opportunitiesWritten = new HashSet<string>();
+        // Part 23 fix: OpportunitySummary must be exactly ONE row per
+        // WeeklyOpportunityID (a real summary), not a repeated-append log --
+        // that repeated-append behavior moved to OpportunityHistory instead.
+        // This dictionary holds each opportunity's LATEST row; the whole
+        // summary file is rewritten from it on every change so the file is
+        // always current without needing an update-in-place CSV writer.
+        private readonly Dictionary<string, string> _latestOpportunityRow = new Dictionary<string, string>();
+        private readonly List<string> _opportunityIdOrder = new List<string>();
 
         private const string EventLogHeader = "Timestamp,Symbol,Timeframe,EventType,Direction,WeeklyOpportunityID,PoiClusterID,POIID,H4SetupID,M5AttemptID,TradeID,Price,POITop,POIBottom,PreviousState,NewState,Reason,Notes";
 
-        private const string TradeSummaryHeader = "StrategyVersion,Symbol,TradeID,PositionID,WeeklyOpportunityID,PoiClusterID,H4SetupID,M5AttemptID,AttemptNumber," +
-            "TradeDirection,WeeklyOpportunityDirection,WeeklyPOITop,WeeklyPOIBottom," +
+        // Part 22 forensic-completeness fix: full Weekly/H4/M5/execution
+        // lineage on every trade row, so a reviewer can answer "why did
+        // this exact trade exist" from this file alone -- WeeklyPoiIds/
+        // H4PoiIds list every supporting POI (not just the bounding box),
+        // ControlAtTradeTime/ControlSourcePoiId capture the narrative state
+        // that authorized it, H4ProtectedSwingIdx is the stable reaction
+        // identity (Part 15), M5ExecutionActivationTime is the swing-pairing
+        // window boundary, and ExitPriceSource proves which of
+        // HistoricalTrade/QuoteFallback actually supplied ExitPrice (Part 21).
+        private const string TradeSummaryHeader = "StrategyVersion,Symbol,TradeID,PositionID,WeeklyOpportunityID,WeeklyPoiIds,PoiClusterID,H4SetupID,H4PoiIds,H4ProtectedSwingIdx,M5AttemptID,AttemptNumber," +
+            "TradeDirection,WeeklyOpportunityDirection,WeeklyActivationTime,WeeklyPOITop,WeeklyPOIBottom,ControlAtTradeTime,ControlSourcePoiId," +
             "H4Route,H4ProtectedSwingType,H4ProtectedSwingPrice,H4ProtectedSwingTime,WeeklyRetouchNumber," +
-            "M5EntrySwingType,M5EntrySwingPrice,M5EntrySwingTime,M5StopSwingType,M5StopSwingPrice,M5StopSwingTime," +
+            "M5ExecutionActivationTime,M5EntrySwingType,M5EntrySwingPrice,M5EntrySwingTime,M5StopSwingType,M5StopSwingPrice,M5StopSwingTime," +
             "FirstPendingOrderCreatedTime,PendingOrderCreatedTime,PendingOrderModificationCount,EntryTime,RequestedEntryPrice,ActualFillPrice," +
             "SLPrice,TPPrice,TargetR,RiskPercent,PositionVolume," +
-            "ExitTime,ExitPrice,ExitReason,GrossPnL,NetPnL,RealizedR";
+            "ExitTime,ExitPrice,ExitPriceSource,ExitReason,GrossPnL,NetPnL,RealizedR";
 
+        // Same schema for both files -- History is the append-every-change
+        // log, Summary is the one-row-latest-state view of it.
         private const string OpportunitySummaryHeader = "Symbol,WeeklyOpportunityID,Direction,ActivationTime,Status,TerminationTime,TerminationReason," +
             "Control,ControlSourcePoiId,SupportingPoiCount,H4SetupCount,RetouchCounter";
 
@@ -80,12 +99,14 @@ namespace cAlgo.Robots.ICT_S1
             Directory.CreateDirectory(baseDir);
 
             _tradeSummaryPath = Path.Combine(baseDir, "S1_TradeSummary_" + runId + ".csv");
+            _opportunityHistoryPath = Path.Combine(baseDir, "S1_OpportunityHistory_" + runId + ".csv");
             _opportunitySummaryPath = Path.Combine(baseDir, "S1_OpportunitySummary_" + runId + ".csv");
             _eventLogPath = Path.Combine(baseDir, "S1_EventLog_" + runId + ".csv");
             _debugLogPath = Path.Combine(baseDir, "S1_Debug_" + runId + ".log");
 
             System.IO.File.WriteAllText(_eventLogPath, EventLogHeader + Environment.NewLine);
             System.IO.File.WriteAllText(_tradeSummaryPath, TradeSummaryHeader + Environment.NewLine);
+            System.IO.File.WriteAllText(_opportunityHistoryPath, OpportunitySummaryHeader + Environment.NewLine);
             System.IO.File.WriteAllText(_opportunitySummaryPath, OpportunitySummaryHeader + Environment.NewLine);
         }
 
@@ -106,7 +127,7 @@ namespace cAlgo.Robots.ICT_S1
             WriteEventRow(ev.Time, "Weekly", "WEEKLY_" + ev.Type.ToString().ToUpperInvariant(), o.Direction.ToString(),
                 o.WeeklyOpportunityId, o.SupportingCluster?.PoiClusterId ?? "", ev.TriggeringPoi?.S1PoiId ?? "", "", "", "",
                 "", "", "", "", o.Status.ToString(), ev.Note, "");
-            WriteOpportunitySummaryRow(o);
+            WriteOpportunityRow(o);
         }
 
         // Round 2 fix (audit section 27): raw swing-confirmation / MSS
@@ -209,36 +230,75 @@ namespace cAlgo.Robots.ICT_S1
             // attempt passed through OnPendingOrderFilled first) still gets
             // one rather than leaving the row blank.
             string tradeId = attempt.TradeId ?? IdGenerator.NextTradeId();
+
+            // Part 22 forensic-completeness fix: list every supporting POI
+            // on both layers, not just the Weekly bounding box -- a reviewer
+            // can now trace every POI that fed this trade's authorization
+            // without cross-referencing the EventLog.
+            string weeklyPoiIds = JoinPoiIds(weekly?.SupportingCluster?.Members);
+            string h4PoiIds = JoinPoiIds(setup?.SupportingCluster?.Members);
+
             var row = string.Join(",", new[]
             {
                 Csv(StrategyVersion), Csv(SymbolName), Csv(tradeId), Csv(attempt.PositionId?.ToString()),
-                Csv(weekly?.WeeklyOpportunityId), Csv(setup?.SupportingCluster?.PoiClusterId), Csv(setup?.H4SetupId), Csv(attempt.M5AttemptId), Csv(attempt.AttemptNumber.ToString()),
-                Csv(attempt.Direction.ToString()), Csv(weekly?.Direction.ToString()), Csv(weeklyTop), Csv(weeklyBottom),
+                Csv(weekly?.WeeklyOpportunityId), Csv(weeklyPoiIds), Csv(setup?.SupportingCluster?.PoiClusterId), Csv(setup?.H4SetupId), Csv(h4PoiIds), Csv(setup?.ProtectedSwingIdx.ToString()),
+                Csv(attempt.M5AttemptId), Csv(attempt.AttemptNumber.ToString()),
+                Csv(attempt.Direction.ToString()), Csv(weekly?.Direction.ToString()), Csv(weekly?.ActivationTime.ToString("O")), Csv(weeklyTop), Csv(weeklyBottom),
+                Csv(weekly?.Control.ToString()), Csv(weekly?.ControlSourcePoiId),
                 Csv(setup?.Route.ToString()), Csv(setup?.ProtectedSwingType.ToString()), Csv(setup?.ProtectedSwingPrice.ToString()), Csv(setup?.ProtectedSwingTime.ToString("O")), Csv(setup?.WeeklyRetouchNumber.ToString()),
-                Csv(attempt.EntrySwingType.ToString()), Csv(attempt.EntrySwingPrice.ToString()), Csv(attempt.EntrySwingTime.ToString("O")), Csv(attempt.StopSwingType.ToString()), Csv(attempt.StopSwingPrice.ToString()), Csv(attempt.StopSwingTime.ToString("O")),
+                Csv(setup?.M5ExecutionActivationTime?.ToString("O")), Csv(attempt.EntrySwingType.ToString()), Csv(attempt.EntrySwingPrice.ToString()), Csv(attempt.EntrySwingTime.ToString("O")), Csv(attempt.StopSwingType.ToString()), Csv(attempt.StopSwingPrice.ToString()), Csv(attempt.StopSwingTime.ToString("O")),
                 Csv(attempt.FirstPendingOrderCreatedTime?.ToString("O")), Csv(attempt.PendingOrderCreatedTime?.ToString("O")), Csv(attempt.PendingOrderModificationCount.ToString()), Csv(attempt.EntryTime?.ToString("O")), Csv(attempt.RequestedEntryPrice.ToString()), Csv(attempt.ActualFillPrice?.ToString()),
                 Csv(attempt.SLPrice.ToString()), Csv(attempt.TPPrice.ToString()), Csv("3"), Csv(RiskPercentConfigured.ToString()), Csv(attempt.PositionVolume?.ToString()),
-                Csv(attempt.ExitTime?.ToString("O")), Csv(attempt.ExitPrice?.ToString()), Csv(attempt.ExitReason?.ToString()), Csv(attempt.GrossPnL?.ToString()), Csv(attempt.NetPnL?.ToString()), Csv(attempt.RealizedR?.ToString())
+                Csv(attempt.ExitTime?.ToString("O")), Csv(attempt.ExitPrice?.ToString()), Csv(attempt.ExitPriceSource), Csv(attempt.ExitReason?.ToString()), Csv(attempt.GrossPnL?.ToString()), Csv(attempt.NetPnL?.ToString()), Csv(attempt.RealizedR?.ToString())
             });
             _tradeSummaryBuffer.Add(row);
             FlushTradeSummary();
         }
 
-        // ---------------- Opportunity Summary ----------------
-        private void WriteOpportunitySummaryRow(WeeklyOpportunity o)
+        private static string JoinPoiIds(List<S1PoiSnapshot> members)
         {
-            // One row per opportunity, rewritten (append-then-dedupe on read)
-            // each time its state changes -- simplest reliable way to keep
-            // this file current without an update-in-place CSV writer.
+            if (members == null || members.Count == 0) return "";
+            var sb = new StringBuilder();
+            for (int i = 0; i < members.Count; i++)
+            {
+                if (i > 0) sb.Append(';');
+                sb.Append(members[i].S1PoiId);
+            }
+            return sb.ToString();
+        }
+
+        // ---------------- Opportunity History / Summary ----------------
+        // Part 23 fix: this used to be the ONLY opportunity file, with a new
+        // row appended on every single state change under the name
+        // "OpportunitySummary" -- not actually a summary. Now split:
+        //   OpportunityHistory.csv -- every state change (this method's old
+        //     behavior, unchanged, just renamed/redirected).
+        //   OpportunitySummary.csv -- exactly ONE row per WeeklyOpportunityID,
+        //     always reflecting the latest known state (rewritten in full
+        //     from an in-memory latest-row map on every change).
+        private void WriteOpportunityRow(WeeklyOpportunity o)
+        {
             var row = string.Join(",", new[]
             {
                 Csv(SymbolName), Csv(o.WeeklyOpportunityId), Csv(o.Direction.ToString()), Csv(o.ActivationTime.ToString("O")), Csv(o.Status.ToString()),
                 Csv(o.TerminationTime?.ToString("O")), Csv(o.TerminationReason),
                 Csv(o.Control.ToString()), Csv(o.ControlSourcePoiId), Csv(o.SupportingCluster?.Members.Count.ToString()), Csv(o.H4Setups.Count.ToString()), Csv(o.RetouchCounter.ToString())
             });
-            _opportunitySummaryBuffer.Add(row);
-            _opportunitiesWritten.Add(o.WeeklyOpportunityId);
-            FlushOpportunitySummary();
+
+            _opportunityHistoryBuffer.Add(row);
+            FlushOpportunityHistory();
+
+            if (!_latestOpportunityRow.ContainsKey(o.WeeklyOpportunityId)) _opportunityIdOrder.Add(o.WeeklyOpportunityId);
+            _latestOpportunityRow[o.WeeklyOpportunityId] = row;
+            RewriteOpportunitySummary();
+        }
+
+        private void RewriteOpportunitySummary()
+        {
+            var lines = new List<string>(_opportunityIdOrder.Count + 1) { OpportunitySummaryHeader };
+            foreach (var id in _opportunityIdOrder)
+                lines.Add(_latestOpportunityRow[id]);
+            System.IO.File.WriteAllLines(_opportunitySummaryPath, lines);
         }
 
         // ---------------- Debug log ----------------
@@ -254,7 +314,8 @@ namespace cAlgo.Robots.ICT_S1
         {
             FlushEventLog();
             FlushTradeSummary();
-            FlushOpportunitySummary();
+            FlushOpportunityHistory();
+            RewriteOpportunitySummary(); // idempotent full rewrite -- cheap, guarantees the summary file is current at shutdown
             FlushDebugLog();
         }
 
@@ -272,11 +333,11 @@ namespace cAlgo.Robots.ICT_S1
             _tradeSummaryBuffer.Clear();
         }
 
-        private void FlushOpportunitySummary()
+        private void FlushOpportunityHistory()
         {
-            if (_opportunitySummaryBuffer.Count == 0) return;
-            System.IO.File.AppendAllLines(_opportunitySummaryPath, _opportunitySummaryBuffer);
-            _opportunitySummaryBuffer.Clear();
+            if (_opportunityHistoryBuffer.Count == 0) return;
+            System.IO.File.AppendAllLines(_opportunityHistoryPath, _opportunityHistoryBuffer);
+            _opportunityHistoryBuffer.Clear();
         }
 
         private void FlushDebugLog()

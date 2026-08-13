@@ -273,12 +273,24 @@ namespace cAlgo.Robots.ICT_S1
 
             var events = _m5Engine.Events;
 
+            // Adversarial-test fix (Part 16, "activation exactly at swing
+            // confirmation"): the boundary is INCLUSIVE of the activation
+            // bar itself, not strictly-after. EnsureAttemptTracking sets
+            // activation = the M5 engine's current bar (BT[LastProcessedIndex])
+            // AFTER that bar's own swing detection already ran (Update()'s
+            // ordering: ProcessOneBar() fully processes the bar, including
+            // any swing confirmed on it, before M5ExecutionEngine.Update()
+            // runs and can set activation) -- so a swing confirmed on the
+            // exact activation bar is already-known information, not a
+            // look-ahead. Excluding it (the old `<=` check) would force an
+            // unjustified extra bar of delay before an otherwise-fresh
+            // swing pair could be used.
             int entryEvIdx = -1;
             for (int i = events.Count - 1; i >= 0; i--)
             {
                 var e = events[i];
                 if (e.Kind != entryKind) continue;
-                if (BarTime(e.ConfirmIdx) <= activation) break; // chronological list -- nothing earlier can qualify either
+                if (BarTime(e.ConfirmIdx) < activation) break; // chronological list -- nothing earlier can qualify either
                 entryEvIdx = i;
                 break;
             }
@@ -288,7 +300,7 @@ namespace cAlgo.Robots.ICT_S1
             for (int i = entryEvIdx - 1; i >= 0; i--)
             {
                 var e = events[i];
-                if (BarTime(e.ConfirmIdx) <= activation) break;
+                if (BarTime(e.ConfirmIdx) < activation) break;
                 if (e.Kind == stopKind) { stopEvIdx = i; break; }
             }
             if (stopEvIdx == -1) return false;

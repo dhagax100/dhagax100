@@ -20,10 +20,18 @@
 //
 // ROUND 2 FIX (audit sections 18-19) -- the "most recently activated"
 // tie-break for MULTIPLE simultaneously-qualifying same-direction Weekly
-// opportunities is REMOVED. There is still no geometric-proximity rule to
-// pick a single "owner" (that would be invented strategy logic), so
-// instead of guessing, every qualifying narrative is authorized (or
-// joined) independently -- see FindArmingWeeklyOpportunities/HandleNewImpact.
+// opportunities was REMOVED, replaced with "authorize/join every qualifying
+// narrative independently" (FindArmingWeeklyOpportunities/HandleNewImpact).
+//
+// COMMENT-ACCURACY CORRECTION (Part 28/29 of the 2026-08-13 final audit --
+// the prior wording here overclaimed this as a settled fix): "every
+// qualifying candidate" is ITSELF an unconfirmed strategy decision, exactly
+// as much a guess as "most recent" was, just a different one -- backtest
+// evidence shows ~42 cases of one physical H4 POI impact being cloned
+// across multiple WeeklyOpportunityID/H4SetupID pairs as a direct result.
+// This is NOT presented as resolved. See the current repair report's open
+// strategy question (Weekly->H4 ownership) -- BLOCKED pending the owner's
+// answer, not silently left as "all candidates" by default.
 //
 // FINDING 10 FIX — protected-swing reconstruction no longer falls back to
 // the POI's own Zb/Zt when no real swing reference is found. A wrong
@@ -167,16 +175,17 @@ namespace cAlgo.Robots.ICT_S1
                 return;
             }
 
-            // Round 2 fix (audit sections 18-19): the "most recently
-            // activated" tie-break is REMOVED. Control is scoped per
-            // narrative (never global), so more than one same-direction
-            // Weekly opportunity can genuinely be in its own control at
-            // once -- there is no confirmed rule for picking a single
-            // "owner" among them, and inventing a geometric-proximity
-            // threshold would be new strategy logic, not a real fix.
-            // Multiplicity is preserved instead: this POI authorizes (or
-            // joins) an H4Setup under EVERY qualifying narrative
-            // independently. snap.WeeklyOpportunityId/PoiClusterId (single-
+            // BLOCKED STRATEGY QUESTION, NOT A SETTLED FIX (final audit
+            // Parts 10-13/28-29): the "most recently activated" tie-break
+            // was REMOVED, but "authorize every qualifying narrative
+            // independently" is ITSELF an unconfirmed strategy decision --
+            // no more proven than the tie-break it replaced. Backtest
+            // evidence: ~42 cases of one physical H4 POI impact producing
+            // more than one WeeklyOpportunityID/H4SetupID. Left running
+            // as-is (not reverted to a single-owner guess either, per "do
+            // not choose merely because you cannot fan-out") while this is
+            // an open question to the strategy owner -- see the current
+            // repair report. snap.WeeklyOpportunityId/PoiClusterId (single-
             // valued display fields) are set from the FIRST authorization
             // only; the authoritative multi-owner relationship lives in
             // each H4Setup's own SupportingCluster.Members (see
@@ -204,7 +213,7 @@ namespace cAlgo.Robots.ICT_S1
             // of reconstruction/approximation this fix removes. Needed here
             // BEFORE the live-setup lookup too, since H4 reaction identity
             // (below) is itself defined by this exact swing.
-            if (snap.SourceSwingType == null || snap.SourceSwingPrice == null || snap.SourceSwingConfirmationTime == null)
+            if (snap.SourceSwingType == null || snap.SourceSwingPrice == null || snap.SourceSwingConfirmationTime == null || snap.SourceSwingIdx < 0)
             {
                 // Finding 10: fail safely, no fake fallback -- do not arm.
                 _rejectionQueue.Enqueue(new RejectionEvent { Code = RejectionCode.H4_POI_REJECTED_NO_PROTECTED_SWING, Time = ev.Time, Direction = snap.Direction, PoiId = snap.S1PoiId, Note = $"No source-swing reference was stored for this {snap.TypeAtActivation} at creation -- refusing to arm with a substituted level" });
@@ -226,7 +235,7 @@ namespace cAlgo.Robots.ICT_S1
             // opportunity (one per distinct protected swing), which is why
             // "live setup" below is scoped by swing identity, not just by
             // WeeklyOpportunityId.
-            var live = FindLiveSetupForSwing(weekly.WeeklyOpportunityId, snap.SourceSwingType.Value, snap.SourceSwingPrice.Value, snap.SourceSwingConfirmationTime.Value);
+            var live = FindLiveSetupForSwing(weekly.WeeklyOpportunityId, snap.SourceSwingIdx);
             if (live != null)
             {
                 if (isPrimary) { snap.WeeklyOpportunityId = weekly.WeeklyOpportunityId; snap.PoiClusterId = live.SupportingCluster.PoiClusterId; }
@@ -252,6 +261,7 @@ namespace cAlgo.Robots.ICT_S1
                 ProtectedSwingType = snap.SourceSwingType.Value,
                 ProtectedSwingPrice = snap.SourceSwingPrice.Value,
                 ProtectedSwingTime = snap.SourceSwingConfirmationTime.Value,
+                ProtectedSwingIdx = snap.SourceSwingIdx,
                 CreatedTime = ev.Time,
                 WeeklyRetouchNumber = weekly.RetouchCounter
             };
@@ -302,13 +312,21 @@ namespace cAlgo.Robots.ICT_S1
         // H4 swing, not merely "same Weekly parent, still live". A live
         // setup only qualifies as the same reaction if its ProtectedSwing
         // identity matches exactly.
-        private H4Setup FindLiveSetupForSwing(string weeklyOpportunityId, SwingType swingType, double swingPrice, DateTime swingTime)
+        //
+        // Part 15 hardening: compare by ProtectedSwingIdx (the H4 engine's
+        // own stable structural swing index -- the same int PoiMarketEngine
+        // stamped on the raw zone at creation), NOT by float Price equality.
+        // Two swings could in principle share an identical price (e.g. a
+        // double top/bottom) while being genuinely different structural
+        // points; the index can never collide that way. Type/Price/Time
+        // stay on H4Setup purely for display/journaling.
+        private H4Setup FindLiveSetupForSwing(string weeklyOpportunityId, int protectedSwingIdx)
         {
             foreach (var s in Setups)
             {
                 if (s.WeeklyOpportunityId != weeklyOpportunityId) continue;
                 if (s.Status == H4SetupStatus.Terminated) continue;
-                if (s.ProtectedSwingType == swingType && s.ProtectedSwingPrice == swingPrice && s.ProtectedSwingTime == swingTime)
+                if (s.ProtectedSwingIdx == protectedSwingIdx)
                     return s;
             }
             return null;

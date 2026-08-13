@@ -274,6 +274,29 @@ namespace cAlgo.Robots.ICT_S1
         }
 
         // ===================== MAIN ENGINE (per bar k) =====================
+        //
+        // SWING ALTERNATION INVARIANT (proven, not assumed -- Part 16 of the
+        // 2026-08-13 adversarial audit demanded this be proven from the
+        // engine rather than taken on faith): every `AddEv(k, kind, ...)`
+        // call below is guarded by `if (lk != kind && !blockDup)` where `lk`
+        // is `Events[Events.Count-1].Kind` -- i.e. a new event of a given
+        // Kind can only be appended if the immediately preceding event in
+        // the list is NOT that same Kind. This holds even on a dual-active
+        // bar (brkH and brkL both true, e.g. an outside bar): the two
+        // opposite-kind confirmations are appended in sequence within the
+        // same call, and the second one's guard re-reads the list AFTER the
+        // first was added, so it still sees the correct (now just-appended)
+        // opposite Kind and never produces two same-Kind entries back to
+        // back. `blockDup`/`blockDup2` etc. only ever SUPPRESS an addition
+        // (preventing a redundant re-confirmation of the same structural
+        // point across consecutive dual-active bars) -- they never cause an
+        // addition, so they cannot introduce an adjacency violation either.
+        // Conclusion: Events strictly alternates Kind 0/1 by construction.
+        // (M5ExecutionEngine.TryGetRelevantSwings additionally does NOT rely
+        // on this invariant for correctness -- it explicitly searches
+        // backward for the nearest OPPOSITE-kind event rather than assuming
+        // strict adjacency -- so it stays correct even if this proof is
+        // ever invalidated by a future engine change.)
         private void RunEngine(int k)
         {
             // ---------- SWING DETECTION ----------

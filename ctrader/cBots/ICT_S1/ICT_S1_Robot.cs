@@ -183,8 +183,32 @@ namespace cAlgo.Robots.ICT_S1
 
         protected override void OnStop()
         {
+            // Part 25/26: still-open POIs/H4Setups at run end must extend
+            // to the real current simulated time, not be left at whatever
+            // their last event happened to draw -- not silently truncated,
+            // not left implying an open-ended future.
+            if (_viz != null && _weeklyTracker != null && _h4Tracker != null)
+            {
+                _viz.FinalizeOpenPois(FindOpenPois(_weeklyTracker), Server.Time);
+                _viz.FinalizeOpenPois(FindOpenPois(_h4Tracker), Server.Time);
+            }
+            if (_viz != null && _h4SetupEngine != null)
+                _viz.FinalizeOpenSetups(FindOpenSetups(), Server.Time);
+
             _journal?.Debug("S1 stopped.");
             _journal?.FlushAll();
+        }
+
+        private System.Collections.Generic.IEnumerable<S1PoiSnapshot> FindOpenPois(PoiLifecycleTracker tracker)
+        {
+            foreach (var s in tracker.AllSnapshots)
+                if (!s.IsTerminal) yield return s;
+        }
+
+        private System.Collections.Generic.IEnumerable<H4Setup> FindOpenSetups()
+        {
+            foreach (var s in _h4SetupEngine.Setups)
+                if (s.Status != H4SetupStatus.Terminated) yield return s;
         }
 
         private void DrainSwingAndMssLog(PoiMarketEngine engine, string timeframe, ref int swingIdx, ref int mssIdx)
@@ -212,6 +236,7 @@ namespace cAlgo.Robots.ICT_S1
             {
                 _journal.LogPoiEvent(ev);
                 if (ev.Type == PoiEventType.NewImpact) _viz.DrawPoiImpact(ev.Snapshot);
+                else if (ev.Type == PoiEventType.Retouch) _viz.UpdatePoiRetouch(ev.Snapshot, ev.Time);
                 else if (ev.Type == PoiEventType.Invalidated || ev.Type == PoiEventType.Retired) _viz.UpdatePoiTerminal(ev.Snapshot, ev.Time);
             }
             _weeklyOppEngine.Update(poiEvents);
@@ -228,13 +253,27 @@ namespace cAlgo.Robots.ICT_S1
             {
                 _journal.LogPoiEvent(ev);
                 if (ev.Type == PoiEventType.NewImpact) _viz.DrawPoiImpact(ev.Snapshot);
+                else if (ev.Type == PoiEventType.Retouch) _viz.UpdatePoiRetouch(ev.Snapshot, ev.Time);
                 else if (ev.Type == PoiEventType.Invalidated || ev.Type == PoiEventType.Retired) _viz.UpdatePoiTerminal(ev.Snapshot, ev.Time);
             }
             _h4SetupEngine.Update(poiEvents);
             foreach (var ev in _h4SetupEngine.DrainEvents())
             {
                 _journal.LogH4SetupEvent(ev);
-                if (ev.Type == H4SetupEventType.Impacted) _viz.DrawProtectedSwing(ev.Setup, ev.Time);
+                if (ev.Type == H4SetupEventType.Impacted)
+                {
+                    _viz.DrawProtectedSwing(ev.Setup, ev.Time);
+                    _viz.DrawH4PoiJoinedReaction(ev);
+                }
+                else if (ev.Type == H4SetupEventType.Retouched)
+                {
+                    _viz.UpdateH4SetupActivity(ev.Setup, ev.Time);
+                    _viz.DrawH4PoiJoinedReaction(ev);
+                }
+                else if (ev.Type == H4SetupEventType.Terminated)
+                {
+                    _viz.UpdateH4SetupTerminal(ev.Setup, ev.Time);
+                }
             }
             foreach (var rej in _h4SetupEngine.DrainRejections())
                 _journal.LogRejection(rej);
@@ -255,7 +294,7 @@ namespace cAlgo.Robots.ICT_S1
                 _viz.DrawAttemptOrder(a, Server.Time);
             };
             _m5ExecEngine.OrderCancelled += a => _journal.LogOrderEvent(a, "PENDING_ORDER_CANCELLED_INTERNAL", a.LastCancellationReason ?? "", Server.Time);
-            _m5ExecEngine.AttemptFilled += a => _journal.LogOrderEvent(a, "TRADE_ENTERED", $"fill={a.ActualFillPrice}", Server.Time);
+            _m5ExecEngine.AttemptFilled += a => { _journal.LogOrderEvent(a, "TRADE_ENTERED", $"fill={a.ActualFillPrice}", Server.Time); _viz.DrawAttemptFilled(a, a.EntryTime ?? Server.Time); };
             _m5ExecEngine.AttemptClosed += a =>
             {
                 var setup = FindSetup(a.H4SetupId);
