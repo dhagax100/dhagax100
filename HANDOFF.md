@@ -2,7 +2,9 @@
 
 Repo: `dhagax100/dhagax100`
 Branch: `claude/afvg-rendering-bug-ctjnuq`
-Latest commit: `134857a` (main), RB diagnostic locked at the same commit.
+Latest: see `git log -1` on this branch for the current commit hash —
+this file gets updated alongside code, don't rely on a hash staying
+accurate here for long; the section content is what matters.
 
 FVG file status: **finalized with ONLY issue 2 solved, by explicit user
 decision.** Issue 1 and issue 3 were both investigated extensively in a
@@ -21,11 +23,18 @@ the wrong swing kind/side because RB's bull/bear tag works differently
 from AFVG's (see "RB fixes" section below for the full explanation —
 important to understand before touching RB or ARB/AOB naming again).
 
+VI file status: **DONE, locked, and merged into `ICT_Full_OB_v24.pine`.**
+Brand-new POI type this session (Volume Imbalance, the 2-candle version
+of an FVG). Built once, correctly, with every lesson from the FVG/RB
+build already baked in — see "VI" section below for the full design
+(zone boundary, naming convention, both creation guards, why AVI's
+stranding formula is safe to mirror AFVG's directly here unlike ARB's).
+
 This file exists so a fresh chat can pick up exactly where this one left
 off, without the user having to re-explain any of it. Read this whole
 file before touching any code.
 
-## The four files, and where each one stands
+## The five files, and where each one stands
 
 1. **`pine/ICT_Full_OB_v24.pine`** — the MAIN combined indicator (Swings +
    MSS + OB/IFOB/AOB/AIFOB/OOB + IFVG/AFVG + IRB/ARB, all in one script).
@@ -59,6 +68,23 @@ file before touching any code.
    two lines here as in the diagnostic (commit `134857a`). Nothing else
    in RB needed porting.
 
+   **VI is now merged too — DONE, first-time addition (not a port of a
+   fixed bug, a brand-new POI type added to main directly).** `ViZone`
+   type, `vis` array, `addVI`/`tryCreateIVIs`/`tryCreateAVIs`/
+   `tryBullAVI`/`tryBearAVI` helpers, wired into all 4 break-point sites
+   and both MID-ARM sections (alongside the existing IFVG/AFVG calls),
+   plus STEP 1c (continuous 2-candle scan), STEP 2 (eligibility arming),
+   STEP 3d (lifecycle: IMPACT + IVI-only CLOSE-THROUGH + STRANDING), and
+   a drawing block at the end of the file. One deliberate style
+   difference from the standalone VI file: main's STEP 2/3d use the
+   SAME plain full-array-rescan style as `obs`/`fvgs`/`rbs` already do
+   in this file (not the `liveIdx`/`pendingEligIdx` perf-list approach
+   the standalone VI file uses) — matches main's existing pattern
+   rather than introducing a new one; main hasn't been given that perf
+   treatment for FVG either (see above), so this keeps the file
+   internally consistent. Not yet compiled/verified on a live chart —
+   do that before relying on it.
+
 2. **`pine/ICT_OB_Diagnostic.pine`** — standalone OB-only diagnostic.
    Superseded by the merge into main (`e33df62`). Not actively worked on
    unless a fresh OB-specific bug turns up.
@@ -90,6 +116,20 @@ file before touching any code.
    below for full detail) — both also ported into
    `ICT_Full_OB_v24.pine`. Do not restart RB debugging from scratch;
    this is a finished, locked file, same status as OB.
+
+5. **`pine/ICT_Full_VI_Indicator.pine`** — standalone VI-only diagnostic
+   (no OB/FVG/RB code, same 20s-limit reasoning as the other splits).
+   **DONE. Built once, correctly, merged into main same session it was
+   created.** Brand new this session — a Volume Imbalance is the
+   2-candle version of an FVG (gap between candle1's CLOSE and
+   candle2's OPEN, not wicks). See "VI design" below for the full
+   spec — every design choice was confirmed with the user BEFORE
+   writing code, and every lesson from the FVG/RB debugging cycle
+   (dual-action fix, CLOSE-THROUGH gating, perf lists, careful
+   stranding-formula mirroring) was built in from day one instead of
+   found later. Two extra creation guards beyond what FVG has, both
+   requested by the user after reviewing real chart behavior: same-
+   candle fill guard, and candle1-direction guard (see below).
 
 ## FVG status — three numbered issues this session
 
@@ -355,6 +395,70 @@ worth keeping in mind if AFVG's naming ever gets changed to shape-based
 (per issue 3's decision), since anything that reads AFVG's `bullish`
 field elsewhere would need the same kind of careful re-derivation, not
 an assumed copy.
+
+## VI design — built once, correctly, same session as OB/FVG/RB fixes
+
+A Volume Imbalance is the 2-candle version of an FVG: gap is between
+candle1's CLOSE and candle2's OPEN, not wicks (that's what makes it a
+VI instead of a smaller FVG). Unlike OB/FVG/RB, this was never an
+existing buggy file to debug — it was designed and built fresh this
+session, with the user confirming each design choice up front instead
+of discovering problems after the fact.
+
+**Confirmed with the user before writing any code:**
+- Zone boundary: `close[1]`/`open[2]`.
+- IVI naming: shape-based, matching IFVG exactly (rising gap = bullish,
+  regardless of hunt).
+- AVI naming: hunt-direction-based, matching AFVG/AOB exactly (tagged
+  by which trade it sets up, regardless of raw shape). This is why
+  AVI's stranding formula was safe to mirror AFVG's directly — VI uses
+  the SAME hunt-direction tagging convention AFVG does, unlike RB's
+  ARB, which uses a DIFFERENT raw-wick convention and needed its
+  formula flipped (see the RB section above). Both are documented
+  in-file so a future session doesn't have to re-derive which case it
+  is.
+- AVI's near-side guard checks WICKS (high/low) of both candles
+  against the guard price, not close/open — the guard's job is "has
+  price already traded past this level," a wick question regardless of
+  what defines the zone's own boundary. This one wasn't explicitly
+  confirmed by the user in as many words — flagged in-file as a design
+  choice to revisit if it turns out wrong.
+
+**Two more rules added after the user reviewed real chart behavior
+(both confirmed before implementing, both mirror in both directions):**
+
+1. **Same-candle fill guard.** Candle2 is the one that opens the gap,
+   but it's still a live candle with its own close. If candle2's own
+   close ends up back at or through candle1's close before candle2
+   even finishes forming, the gap got round-tripped within the same
+   candle that created it — disqualified from being marked as a VI at
+   all, not created-then-marked-filled.
+
+2. **Candle1-direction guard.** The gap has to continue candle1's own
+   momentum, not contradict it. A bearish candle1 only ever produces a
+   falling-shape gap (candle2 must open below close1); a bullish
+   candle1 only ever produces a rising-shape gap. A bearish candle1
+   followed by candle2 opening higher (or the mirror) is not a VI at
+   all, regardless of direction.
+
+Both guards are applied at all three creation sites in every VI-bearing
+file (`tryCreateIVIs`, `tryCreateAVIs`, and the continuous per-bar
+scan) — if VI logic is ever touched again, check all three sites, not
+just one, the same mistake pattern that caused real bugs elsewhere in
+this codebase.
+
+**Perf note:** the standalone `ICT_Full_VI_Indicator.pine` uses the
+`liveIdx`/`pendingEligIdx` bounded-scan design from day one (the fix
+FVG needed a real 20s timeout to discover — see `b88aeb3`). The merge
+into `ICT_Full_OB_v24.pine` deliberately does NOT carry that over —
+main uses plain full-array rescans for `vis`, matching how `obs`/
+`fvgs`/`rbs` already work there. If main ever needs the perf fix, it
+should probably get it for all four POI types at once, not just VI.
+
+**Not yet verified against a live chart or real OHLC data** — built
+and reviewed by design discussion only. Same process as FVG/RB should
+apply before trusting it fully: hand-trace real candles, confirm on
+the actual chart.
 
 ## How this user wants to work (do not skip this)
 

@@ -19,6 +19,17 @@
 // bear label is by RAW WICK TYPE (swing-high wick=bearish, swing-low
 // wick=bullish), not by which hunt fired it. Lifecycle is wick IMPACT +
 // STRANDING only (no close-through, that's FVG-only).
+// Also draws VI (Volume Imbalance): the 2-candle version of an FVG --
+// gap is between candle1's CLOSE and candle2's OPEN, not wicks. IVI
+// (continuation, mirrors IFVG) is shape-based: rising gap = bullish,
+// falling gap = bearish, regardless of hunt. AVI (anticipatory, mirrors
+// AFVG/AOB) is hunt-direction-based, same convention as AFVG. Two extra
+// creation guards not present in FVG: (1) same-candle fill -- a gap is
+// disqualified if candle2's own close already round-trips back through
+// candle1's close before candle2 finishes; (2) candle1-direction -- the
+// gap must continue candle1's own momentum (bearish candle1 only ever
+// produces a falling gap, bullish only ever a rising gap). Ported from
+// ICT_Full_VI_Indicator.pine.
 // See docs/trading_logic.md section 4.
 // Diagnostic PrintFormat calls omitted (no console in Pine Script).
 //@version=5
@@ -36,6 +47,8 @@ InpSwingLowGapATR = input.float(0.08, "Swing-low arrow / down-MSS gap below the 
 InpMaxFvgPerCategory = input.int(150, "Max IFVG / AFVG boxes shown (each category, most recent by chart date)", minval=1, maxval=160)
 InpFvgFillTransparency = input.int(85, "IFVG fill transparency % (0=solid, 100=invisible)", minval=0, maxval=100)
 InpMaxRbPerCategory = input.int(150, "Max IRB / ARB boxes shown (each category, most recent by chart date)", minval=1, maxval=160)
+InpMaxViPerCategory = input.int(150, "Max IVI / AVI boxes shown (each category, most recent by chart date)", minval=1, maxval=160)
+InpViFillTransparency = input.int(85, "IVI fill transparency % (0=solid, 100=invisible)", minval=0, maxval=100)
 
 // ===================== TYPE DEFINITIONS =====================
 type SwEv
@@ -103,12 +116,33 @@ type RbZone
                           // 1=ARB-style (near-side stranding)
     int   preSpentState
 
+// VI (Volume Imbalance): the 2-candle version of an FVG -- gap is between
+// candle1's CLOSE and candle2's OPEN, not wicks. IVI naming is shape-based
+// (matches IFVG); AVI naming is hunt-direction-based (matches AFVG/AOB).
+// Ported from ICT_Full_VI_Indicator.pine.
+type ViZone
+    int   leftIdx        // candle1 of the 2-candle gap (left edge of the box)
+    float zb
+    float zt
+    bool  bullish
+    int   triggerK       // the leg's breakout candle (IVI) or AOB-hunt
+                          // trigger candle (AVI)
+    int   eligibleK      // -1 = not yet eligible. Delayed for IVI (mirrors
+                          // IFOB); immediate (= triggerK) for AVI (mirrors AOB)
+    int   stopK          // -1 = extending
+    int   state          // 0=IVI, 1=AVI, 2=OVI, 3=SPENT
+    int   origin         // permanent creation-type marker, never changes
+                          // after creation: 0=IVI-style (far-side stranding),
+                          // 1=AVI-style (near-side stranding)
+    int   preSpentState
+
 // ===================== PERSISTENT STATE =====================
 var events     = array.new<SwEv>()
 var msses      = array.new<MssEv>()
 var obs        = array.new<ObZone>()
 var fvgs       = array.new<FvgZone>()
 var rbs        = array.new<RbZone>()
+var vis        = array.new<ViZone>()
 var swHighs    = array.new<int>()
 var swLows     = array.new<int>()
 
@@ -139,6 +173,8 @@ var int   pendBullAifob = -1
 var int   pendBearAifob = -1
 var int   fvgBullScanUpto = -1   // last bar index whose bullish 3-candle window was checked for a gap
 var int   fvgBearScanUpto = -1   // same, bearish side
+var int   viBullScanUpto = -1    // same as fvgBullScanUpto, but for the 2-candle VI window
+var int   viBearScanUpto = -1
 
 // Guard: process each bar exactly once
 var int lastProcessedBI = -1
@@ -454,6 +490,102 @@ tryBearARB(int pReg, int aobSWLi, int newSwhI, float newSwhP, int k) =>
         if not refViolated
             addRBFromSwing(aobSWLi, false, k, 1)
 
+addVI(int leftIdx, float zb, float zt, bool bull, int tK, int st) =>
+    // st: 0=IVI (delayed eligibility, far-side stranding later), 1=AVI
+    // (immediate eligibility, near-side stranding later) -- mirrors
+    // addFVG's st param one-for-one.
+    eK = (st == 1) ? tK : -1
+    array.push(vis, ViZone.new(leftIdx, zb, zt, bull, tK, eK, -1, st, st, st))
+
+// Scans [lo,hi] for EVERY qualifying 2-candle gap. Shape-based: the
+// "bullish" param IS the raw gap shape (matches IFVG's convention).
+//
+// SAME-CANDLE FILL GUARD: if candle2's own close ends up back at or
+// through candle1's close before candle2 even finishes, the gap got
+// round-tripped within the same candle that created it -- disqualified
+// from being marked at all.
+//
+// CANDLE1-DIRECTION GUARD: the gap has to continue candle1's own
+// momentum, not contradict it -- a bearish candle1 only ever produces a
+// falling-shape gap, a bullish candle1 only ever produces a rising-shape
+// gap. Ported from ICT_Full_VI_Indicator.pine, both guards confirmed
+// with the user there before being written.
+tryCreateIVIs(int lo, int hi, bool bullish, int triggerK) =>
+    if hi >= lo + 1
+        for c2 = lo + 1 to hi
+            c1 = c2 - 1
+            op1 = array.get(O_, c1)
+            cl1 = array.get(C_, c1)
+            op2 = array.get(O_, c2)
+            cl2 = array.get(C_, c2)
+            isBull1 = cl1 >= op1
+            if bullish
+                if cl1 < op2 and cl2 > cl1 and isBull1
+                    addVI(c1, cl1, op2, true, triggerK, 0)
+            else
+                if cl1 > op2 and cl2 < cl1 and not isBull1
+                    addVI(c1, op2, cl1, false, triggerK, 0)
+
+// Scans [lo,hi] -- the SAME range AOB/AFVG is picked/scanned from -- for
+// EVERY qualifying 2-candle gap left by the retracement leg's OWN
+// direction. Classified by hunt direction (bull hunt -> bullish zone),
+// same as AFVG. Guard checks WICKS of both candles against guardPrice
+// (the zone itself is close/open, but the guard's job -- has price
+// already traded past this level -- is a wick question regardless).
+// Same same-candle-fill and candle1-direction guards as tryCreateIVIs.
+tryCreateAVIs(int lo, int hi, bool bullish, int triggerK, float guardPrice) =>
+    if hi >= lo + 1
+        for c2 = lo + 1 to hi
+            c1 = c2 - 1
+            op1 = array.get(O_, c1)
+            cl1 = array.get(C_, c1)
+            op2 = array.get(O_, c2)
+            cl2 = array.get(C_, c2)
+            isBull1 = cl1 >= op1
+            if bullish
+                if cl1 > op2 and cl2 < cl1 and not isBull1
+                    l1 = array.get(L_, c1)
+                    l2 = array.get(L_, c2)
+                    if l1 > guardPrice and l2 > guardPrice
+                        addVI(c1, op2, cl1, true, triggerK, 1)
+            else
+                if cl1 < op2 and cl2 > cl1 and isBull1
+                    h1 = array.get(H_, c1)
+                    h2 = array.get(H_, c2)
+                    if h1 < guardPrice and h2 < guardPrice
+                        addVI(c1, cl1, op2, false, triggerK, 1)
+
+// --- AVI HUNT: Bullish -- mirrors tryBullAFVG's range + reference-
+// validity gate one-for-one. Range upper bound extends one candle past
+// newSwlI when it's safe to (same reasoning as AFVG's b4b13d9/d99a0de
+// fix -- built in here from the start).
+tryBullAVI(int pReg, int aobSWHi, int newSwlI, float newSwlP, int k) =>
+    if pReg == 1 and aobSWHi >= 0
+        armedSwhPrice = array.get(H_, aobSWHi)
+        refViolated = false
+        for v = aobSWHi + 1 to newSwlI
+            if array.get(H_, v) >= armedSwhPrice
+                refViolated := true
+        if not refViolated
+            swlExt = (newSwlI + 1) <= (k - 1) ? newSwlI + 1 : newSwlI
+            lo2 = math.max(0, math.min(aobSWHi - 1, swlExt))
+            hi2 = math.max(aobSWHi - 1, swlExt)
+            tryCreateAVIs(lo2, hi2, true, k, newSwlP)
+
+// --- AVI HUNT: Bearish -- mirrors tryBearAFVG ---
+tryBearAVI(int pReg, int aobSWLi, int newSwhI, float newSwhP, int k) =>
+    if pReg == 2 and aobSWLi >= 0
+        armedSwlPrice = array.get(L_, aobSWLi)
+        refViolated = false
+        for v = aobSWLi + 1 to newSwhI
+            if array.get(L_, v) <= armedSwlPrice
+                refViolated := true
+        if not refViolated
+            swhExt = (newSwhI + 1) <= (k - 1) ? newSwhI + 1 : newSwhI
+            lo2 = math.max(0, math.min(aobSWLi - 1, swhExt))
+            hi2 = math.max(aobSWLi - 1, swhExt)
+            tryCreateAVIs(lo2, hi2, false, k, newSwhP)
+
 // --- AIFOB HUNT: Bullish (returns obs[] index or -1) ---
 tryBullAIFOB(int pReg, bool pHaveSWH, int pSwhI, int pLastSWLi, int newSwlI, int k) =>
     result = -1
@@ -668,6 +800,8 @@ if not skipBar and bar_index != lastProcessedBI
                     hi = math.max(math.max(lastSWLidx, k), swhIdx)
                     tryCreateIFVGs(lo, hi, true, k)
                     fvgBullScanUpto := hi
+                    tryCreateIVIs(lo, hi, true, k)
+                    viBullScanUpto := hi
                     if not existsAifobInRange(lo, hi, true)
                         best = -1
                         for x = lo to hi
@@ -708,6 +842,7 @@ if not skipBar and bar_index != lastProcessedBI
                     tryBearAOB(prevReg, aobSWLi, pEv2.swingIdx, pEv2.price, k)
                     tryBearAFVG(prevReg, aobSWLi, pEv2.swingIdx, pEv2.price, k)
                     tryBearARB(prevReg, aobSWLi, pEv2.swingIdx, pEv2.price, k)
+                    tryBearAVI(prevReg, aobSWLi, pEv2.swingIdx, pEv2.price, k)
                     if pendBearAifob == -1
                         r2 = tryBearAIFOB(prevReg, haveSWL, aobSWLi, lastSWHidx, pEv2.swingIdx, k)
                         if r2 != -1
@@ -720,6 +855,7 @@ if not skipBar and bar_index != lastProcessedBI
                     tryBullAOB(prevReg, aobSWHi, pEv2.swingIdx, pEv2.price, k)
                     tryBullAFVG(prevReg, aobSWHi, pEv2.swingIdx, pEv2.price, k)
                     tryBullARB(prevReg, aobSWHi, pEv2.swingIdx, pEv2.price, k)
+                    tryBullAVI(prevReg, aobSWHi, pEv2.swingIdx, pEv2.price, k)
                     if pendBullAifob == -1
                         r3 = tryBullAIFOB(prevReg, haveSWH, aobSWHi, lastSWLidx, pEv2.swingIdx, k)
                         if r3 != -1
@@ -750,6 +886,8 @@ if not skipBar and bar_index != lastProcessedBI
                     hi2 = math.max(math.max(lastSWHidx, k), swlIdx)
                     tryCreateIFVGs(lo2, hi2, false, k)
                     fvgBearScanUpto := hi2
+                    tryCreateIVIs(lo2, hi2, false, k)
+                    viBearScanUpto := hi2
                     if not existsAifobInRange(lo2, hi2, false)
                         best2 = -1
                         for x = lo2 to hi2
@@ -797,6 +935,8 @@ if not skipBar and bar_index != lastProcessedBI
                     hi3 = math.max(math.max(lastSWHidx, k), swlIdx)
                     tryCreateIFVGs(lo3, hi3, false, k)
                     fvgBearScanUpto := hi3
+                    tryCreateIVIs(lo3, hi3, false, k)
+                    viBearScanUpto := hi3
                     if not existsAifobInRange(lo3, hi3, false)
                         best3 = -1
                         for x = lo3 to hi3
@@ -833,6 +973,7 @@ if not skipBar and bar_index != lastProcessedBI
                     tryBearAOB(prevReg, aobSWLi, pEv3.swingIdx, pEv3.price, k)
                     tryBearAFVG(prevReg, aobSWLi, pEv3.swingIdx, pEv3.price, k)
                     tryBearARB(prevReg, aobSWLi, pEv3.swingIdx, pEv3.price, k)
+                    tryBearAVI(prevReg, aobSWLi, pEv3.swingIdx, pEv3.price, k)
                     if pendBearAifob == -1
                         r4 = tryBearAIFOB(prevReg, haveSWL, aobSWLi, lastSWHidx, pEv3.swingIdx, k)
                         if r4 != -1
@@ -845,6 +986,7 @@ if not skipBar and bar_index != lastProcessedBI
                     tryBullAOB(prevReg, aobSWHi, pEv3.swingIdx, pEv3.price, k)
                     tryBullAFVG(prevReg, aobSWHi, pEv3.swingIdx, pEv3.price, k)
                     tryBullARB(prevReg, aobSWHi, pEv3.swingIdx, pEv3.price, k)
+                    tryBullAVI(prevReg, aobSWHi, pEv3.swingIdx, pEv3.price, k)
                     if pendBullAifob == -1
                         r5 = tryBullAIFOB(prevReg, haveSWH, aobSWHi, lastSWLidx, pEv3.swingIdx, k)
                         if r5 != -1
@@ -875,6 +1017,8 @@ if not skipBar and bar_index != lastProcessedBI
                     hi4 = math.max(math.max(lastSWLidx, k), swhIdx)
                     tryCreateIFVGs(lo4, hi4, true, k)
                     fvgBullScanUpto := hi4
+                    tryCreateIVIs(lo4, hi4, true, k)
+                    viBullScanUpto := hi4
                     if not existsAifobInRange(lo4, hi4, true)
                         best4 = -1
                         for x = lo4 to hi4
@@ -921,6 +1065,29 @@ if not skipBar and bar_index != lastProcessedBI
                 addFVG(k - 2, h3c, l1c, false, k, 0)
             fvgBearScanUpto := k
 
+        // STEP 1c: continuous IVI scan — same reasoning as STEP 1b, 2-candle
+        // version (close[k-1] vs open[k] instead of high[k-2] vs low[k]).
+        // Same same-candle-fill and candle1-direction guards as
+        // tryCreateIVIs/tryCreateAVIs.
+        if regime == 1 and k >= 1 and k > viBullScanUpto
+            op1c = array.get(O_, k - 1)
+            cl1c = array.get(C_, k - 1)
+            op2c = array.get(O_, k)
+            cl2c = array.get(C_, k)
+            isBull1c = cl1c >= op1c
+            if cl1c < op2c and cl2c > cl1c and isBull1c
+                addVI(k - 1, cl1c, op2c, true, k, 0)
+            viBullScanUpto := k
+        if regime == 2 and k >= 1 and k > viBearScanUpto
+            op1d = array.get(O_, k - 1)
+            cl1d = array.get(C_, k - 1)
+            op2d = array.get(O_, k)
+            cl2d = array.get(C_, k)
+            isBull1d = cl1d >= op1d
+            if cl1d > op2d and cl2d < cl1d and not isBull1d
+                addVI(k - 1, op2d, cl1d, false, k, 0)
+            viBearScanUpto := k
+
         // STEP 2: arm swings (consumed check) + IFOB/IFVG eligibility
         while ei < evTotal
             sEv = array.get(events, ei)
@@ -956,6 +1123,14 @@ if not skipBar and bar_index != lastProcessedBI
                     if rbZ.bullish and rbZ.state == 0 and rbZ.eligibleK == -1 and k > rbZ.triggerK
                         rbZ.eligibleK := k
                         array.set(rbs, zr, rbZ)
+                viSz = array.size(vis)
+                for zv = 0 to viSz - 1
+                    if zv < 0 or zv >= viSz
+                        continue
+                    viZ = array.get(vis, zv)
+                    if viZ.bullish and viZ.state == 0 and viZ.eligibleK == -1 and k > viZ.triggerK
+                        viZ.eligibleK := k
+                        array.set(vis, zv, viZ)
             else
                 if not swlCons
                     haveSWL  := true
@@ -986,6 +1161,14 @@ if not skipBar and bar_index != lastProcessedBI
                     if not rbZ2.bullish and rbZ2.state == 0 and rbZ2.eligibleK == -1 and k > rbZ2.triggerK
                         rbZ2.eligibleK := k
                         array.set(rbs, zr2, rbZ2)
+                viSz2 = array.size(vis)
+                for zv2 = 0 to viSz2 - 1
+                    if zv2 < 0 or zv2 >= viSz2
+                        continue
+                    viZ2 = array.get(vis, zv2)
+                    if not viZ2.bullish and viZ2.state == 0 and viZ2.eligibleK == -1 and k > viZ2.triggerK
+                        viZ2.eligibleK := k
+                        array.set(vis, zv2, viZ2)
             ei += 1
 
         // STEP 3: OB lifecycle at this candle
@@ -1176,6 +1359,76 @@ if not skipBar and bar_index != lastProcessedBI
                     if strandedR
                         rbZ3.state := 2
                         array.set(rbs, zr3, rbZ3)
+                        break
+
+        // STEP 3d: IVI/AVI lifecycle at this candle -- same structure as
+        // STEP 3b (FVG). CLOSE-THROUGH restricted to IVI only (origin 0)
+        // from the start, same reasoning as FVG issue 2 -- an AVI zone
+        // starts already on the far side of price by design, so this
+        // check would kill it on day one of eligibility if applied to it.
+        viTotal = array.size(vis)
+        for zv3 = 0 to viTotal - 1
+            if zv3 < 0 or zv3 >= viTotal
+                continue
+            viZ3 = array.get(vis, zv3)
+            if viZ3.state == 3
+                continue
+
+            zbv = viZ3.zb
+            ztv = viZ3.zt
+            bullv = viZ3.bullish
+
+            // IMPACT: any wick reaching into the gap, once eligible, ends it.
+            if viZ3.eligibleK != -1 and k >= viZ3.eligibleK
+                if hK >= zbv and lK <= ztv
+                    viZ3.preSpentState := viZ3.state
+                    viZ3.state := 3
+                    viZ3.stopK := k
+                    array.set(vis, zv3, viZ3)
+                    continue
+
+            // CLOSE-THROUGH INVALIDATION -- IVI only (origin 0). See
+            // ICT_Full_FVG_Indicator.pine issue 2 (commit 2e88f5d) for
+            // the full reasoning.
+            if viZ3.origin != 1 and viZ3.state == 0 and viZ3.eligibleK != -1 and k >= viZ3.eligibleK
+                cKv = array.get(C_, k)
+                closedThroughV = bullv ? cKv < zbv : cKv > ztv
+                if closedThroughV
+                    viZ3.preSpentState := viZ3.state
+                    viZ3.state := 3
+                    viZ3.stopK := k
+                    array.set(vis, zv3, viZ3)
+                    continue
+
+            // STRANDING -> OVI: origin decides the rule -- IVI-style
+            // (origin 0) strands FAR side, mirroring IFOB/IFVG; AVI-style
+            // (origin 1) strands NEAR side, mirroring AOB/AFVG. Safe to
+            // mirror AFVG's exact formula here (unlike RB's ARB, which had
+            // a DIFFERENT bull/bear tagging convention and needed the
+            // formula flipped) -- VI's AVI uses the SAME hunt-direction
+            // tagging as AFVG, so the geometry lines up identically.
+            if (viZ3.state == 0 or viZ3.state == 1) and viZ3.eligibleK != -1
+                isIVI = viZ3.origin != 1
+                for e2 = evBeforeSwing to evTotal - 1
+                    if e2 < 0 or e2 >= evTotal
+                        continue
+                    stEv = array.get(events, e2)
+                    if stEv.confirmIdx != k
+                        continue
+                    strandedV = false
+                    if isIVI
+                        if bullv and stEv.kind == 1 and stEv.price > ztv
+                            strandedV := true
+                        if not bullv and stEv.kind == 0 and stEv.price < zbv
+                            strandedV := true
+                    else
+                        if bullv and stEv.kind == 0 and stEv.price < zbv
+                            strandedV := true
+                        if not bullv and stEv.kind == 1 and stEv.price > ztv
+                            strandedV := true
+                    if strandedV
+                        viZ3.state := 2
+                        array.set(vis, zv3, viZ3)
                         break
 
 // ===================== DRAWING (last bar only) =====================
@@ -1447,3 +1700,55 @@ if barstate.islast
         bxR = box.new(leftTR, rbD.zt, rightTR, rbD.zb, border_color=colR, border_width=1,
                       border_style=line.style_dashed, bgcolor=na, xloc=xloc.bar_time)
         array.push(drawnBoxes, bxR)
+
+    // --- VI zones: filled box (solid border) + gray dotted 50% midline,
+    // same drawing style as FVG. Live IVI: blue/black by direction. Live
+    // AVI: green, matching AOB/AFVG. OVI (either origin, once stranded):
+    // red, same as OOB/OFVG. Capped independently per category (IVI vs
+    // AVI, by origin), and by chronological leftIdx -- same fix as
+    // IFVG/AFVG/IRB/ARB, built in from the start here.
+    viSzD = array.size(vis)
+    iviLeft = array.new<int>()
+    aviLeft = array.new<int>()
+    for zv = 0 to viSzD - 1
+        vScan = array.get(vis, zv)
+        if vScan.origin == 1
+            array.push(aviLeft, vScan.leftIdx)
+        else
+            array.push(iviLeft, vScan.leftIdx)
+    array.sort(iviLeft, order.descending)
+    array.sort(aviLeft, order.descending)
+    iviCutoff = array.size(iviLeft) > 0 ? array.get(iviLeft, math.min(InpMaxViPerCategory, array.size(iviLeft)) - 1) : 999999999
+    aviCutoff = array.size(aviLeft) > 0 ? array.get(aviLeft, math.min(InpMaxViPerCategory, array.size(aviLeft)) - 1) : 999999999
+    for zv = 0 to viSzD - 1
+        vD = array.get(vis, zv)
+        idxV = vD.leftIdx
+        if idxV < 0 or idxV >= nArr
+            continue
+        catCutoffV = vD.origin == 1 ? aviCutoff : iviCutoff
+        if idxV < catCutoffV
+            continue
+
+        btV = array.get(BT, idxV)
+        if btV < dispFrom
+            continue
+
+        dStV = vD.state == 3 ? vD.preSpentState : vD.state
+        if dStV == 2 and hideOOBHere
+            continue
+
+        leftTV = btV
+        rightTV = extT
+        if vD.stopK != -1 and vD.stopK < nArr
+            rightTV := array.get(BT, vD.stopK)
+
+        colV = dStV == 2 ? color.red : dStV == 1 ? color.green : (vD.bullish ? color.blue : color.black)
+
+        bxV = box.new(leftTV, vD.zt, rightTV, vD.zb, border_color=colV, border_width=1,
+                      bgcolor=color.new(colV, InpViFillTransparency), xloc=xloc.bar_time)
+        array.push(drawnBoxes, bxV)
+
+        midYV = (vD.zt + vD.zb) / 2
+        lnV = line.new(leftTV, midYV, rightTV, midYV, xloc=xloc.bar_time, color=color.gray,
+                       style=line.style_dotted, width=1)
+        array.push(drawnLines, lnV)
