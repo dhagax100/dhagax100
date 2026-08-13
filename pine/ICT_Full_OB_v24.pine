@@ -326,7 +326,7 @@ tryBullAOB(int pReg, int aobSWHi, int newSwlI, float newSwlP, int k) =>
                 if array.get(L_, best2) > newSwlP
                     oB = array.get(O_, best2)
                     cB = array.get(C_, best2)
-                    addOB(best2, math.min(oB, cB), math.max(oB, cB), true, k, 1)
+                    addOB(best2, math.min(oB, cB), math.max(oB, cB), false, k, 1)
 
 // --- AOB HUNT: Bearish ---
 tryBearAOB(int pReg, int aobSWLi, int newSwhI, float newSwhP, int k) =>
@@ -363,7 +363,7 @@ tryBearAOB(int pReg, int aobSWLi, int newSwhI, float newSwhP, int k) =>
                 if array.get(H_, best2) < newSwhP
                     oB = array.get(O_, best2)
                     cB = array.get(C_, best2)
-                    addOB(best2, math.min(oB, cB), math.max(oB, cB), false, k, 1)
+                    addOB(best2, math.min(oB, cB), math.max(oB, cB), true, k, 1)
 
 // --- AFVG HUNT: Bullish -- mirrors tryBullAOB's range + reference-
 // validity gate one-for-one (candle-picking isn't needed, tryCreateAFVGs
@@ -1030,9 +1030,13 @@ if not skipBar and bar_index != lastProcessedBI
                         if not bull and stEv.kind == 0 and stEv.price < zb
                             stranded := true
                     else
-                        if bull and stEv.kind == 0 and stEv.price < zb
+                        // AOB naming flipped (intent-based -> shape-based,
+                        // same fix as AFVG/issue 3). Geometric stranding
+                        // truth doesn't change, so bull/not-bull is swapped
+                        // here to keep tracking the same physical zones.
+                        if not bull and stEv.kind == 0 and stEv.price < zb
                             stranded := true
-                        if not bull and stEv.kind == 1 and stEv.price > zt
+                        if bull and stEv.kind == 1 and stEv.price > zt
                             stranded := true
                     if stranded
                         obZ3.state := 2
