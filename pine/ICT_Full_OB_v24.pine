@@ -1158,9 +1158,20 @@ if not skipBar and bar_index != lastProcessedBI
                         if not bullr and stEv.kind == 0 and stEv.price < zbr
                             strandedR := true
                     else
-                        if bullr and stEv.kind == 0 and stEv.price < zbr
+                        // ARB's bull/bear tag is RAW WICK TYPE, opposite of
+                        // AFVG's hunt-direction tag: tryBearARB (pReg==2)
+                        // anchors a swing-LOW wick -> bullish; tryBullARB
+                        // (pReg==1) anchors a swing-HIGH wick -> bearish.
+                        // So the correct near-side check is the OPPOSITE
+                        // kind/side pairing from AFVG's formula, not a
+                        // literal copy of it -- a bullish ARB (low-wick,
+                        // price above it) strands on a new swing LOW that
+                        // tops out above its own top; a bearish ARB
+                        // (high-wick, price below it) strands on a new
+                        // swing HIGH that bottoms out below its own bottom.
+                        if bullr and stEv.kind == 1 and stEv.price > ztr
                             strandedR := true
-                        if not bullr and stEv.kind == 1 and stEv.price > ztr
+                        if not bullr and stEv.kind == 0 and stEv.price < zbr
                             strandedR := true
                     if strandedR
                         rbZ3.state := 2

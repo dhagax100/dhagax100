@@ -2,7 +2,8 @@
 
 Repo: `dhagax100/dhagax100`
 Branch: `claude/afvg-rendering-bug-ctjnuq`
-Latest commit: `2e88f5d`
+Latest commit: `134857a` (main), RB diagnostic locked at the same commit.
+
 FVG file status: **finalized with ONLY issue 2 solved, by explicit user
 decision.** Issue 1 and issue 3 were both investigated extensively in a
 later session (see below) but their code changes were reverted — the
@@ -11,6 +12,14 @@ still open. Do not reapply either fix without the user asking again.
 This finalized state (issue 2 + the earlier scan-range extension) has
 now been **merged into `ICT_Full_OB_v24.pine`** too, at the user's
 explicit request — see file 1 below for exactly what changed there.
+
+RB file status: **DONE, locked, and merged into `ICT_Full_OB_v24.pine`.**
+Two real bugs found and fixed (both also ported to main): a
+dual-action-candle swing-detection bug shared with OB's original bug
+(same fix, ported verbatim), and an ARB stranding formula that checked
+the wrong swing kind/side because RB's bull/bear tag works differently
+from AFVG's (see "RB fixes" section below for the full explanation —
+important to understand before touching RB or ARB/AOB naming again).
 
 This file exists so a fresh chat can pick up exactly where this one left
 off, without the user having to re-explain any of it. Read this whole
@@ -38,9 +47,17 @@ file before touching any code.
      diagnostic's unbounded zone growth on Daily history; the main
      file's OB code has its own, separate perf characteristics that
      were out of scope here and untouched.
-   - Only the two functions/blocks above were touched. No OB/RB code
-     was touched — verify with `git diff` if in doubt, the change
-     should be small and land only in FVG-specific code.
+   - Only the two functions/blocks above were touched, at the time of
+     that merge. No OB/RB code was touched by the FVG merge itself.
+
+   **RB is now merged too — DONE.** Main's RB section already matched
+   the diagnostic's structure exactly (same functions, same call sites,
+   ported earlier via `fbafa6b`) and already had the shared
+   dual-action-candle swing-detection fix (it came in with the OB merge,
+   since swing detection is one shared engine for OB+FVG+RB in this
+   file). The only gap was the ARB stranding formula — fixed the same
+   two lines here as in the diagnostic (commit `134857a`). Nothing else
+   in RB needed porting.
 
 2. **`pine/ICT_OB_Diagnostic.pine`** — standalone OB-only diagnostic.
    Superseded by the merge into main (`e33df62`). Not actively worked on
@@ -53,20 +70,19 @@ file before touching any code.
    locked at commit `2e88f5d`.
 
 4. **`pine/ICT_RB_Diagnostic.pine`** — standalone RB-only diagnostic.
-   **RESET to a user-provided baseline (commit `ae8801a`)** — the user
-   supplied the file directly, replacing everything that had accumulated
-   in prior sessions. This baseline has **only IRB and ARB** — no AIRB
-   (type field, hunts, pending pointers, promotion logic all removed)
-   and no debug-label tooling (`InpDebugValues`/`InpFocusRB` gone).
-   Wick-based zones off a fixed swing pivot, no scanning, no picking.
-   Written verbatim from the user's upload — not hand-derived, don't
-   "clean it up" or reconcile it against the old AIRB-era commits
-   (`fafc402` and everything back through the AIRB rebuild history) —
-   those are superseded, not a reference to merge back in.
+   **DONE. Locked baseline, merged into main.** Started from a
+   user-provided baseline (commit `ae8801a`) that replaced everything
+   accumulated in prior sessions — **only IRB and ARB**, no AIRB (type
+   field, hunts, pending pointers, promotion logic all removed), no
+   debug-label tooling. Wick-based zones off a fixed swing pivot, no
+   scanning, no picking. Don't reconcile against the old AIRB-era
+   commits (`fafc402` and everything back through the AIRB rebuild
+   history) — those are superseded, not a reference to merge back in.
 
-   **Currently being actively checked by the user against this
-   baseline** — no known open bugs catalogued yet. Ask directly what's
-   broken before proposing anything, same as before.
+   Two real bugs found and fixed against that baseline (see "RB fixes"
+   below for full detail) — both also ported into
+   `ICT_Full_OB_v24.pine`. Do not restart RB debugging from scratch;
+   this is a finished, locked file, same status as OB.
 
 ## FVG status — three numbered issues this session
 
@@ -267,6 +283,71 @@ IFOB's opposite-color pick (it deliberately picks the strongest
 down-candle for a "bullish" IFOB) matches real ICT terminology on
 purpose. So AOB/IFOB naming isn't a guaranteed same-fix as AFVG's —
 it needs its own decision from the user later, not assumed.
+
+## RB status — DONE, two bugs found and fixed (both merged into main)
+
+### Fix 1 — missing swing high/low after a dual-action candle
+
+RB shares the exact same swing-detection code as OB (and originally had
+OB's pre-fix bug: a blanket "block ANY swing confirmation on the candle
+right after a dual-action/outside candle" rule, with no check for
+whether the new confirmation was a genuine duplicate or a different,
+legitimate point). This had already been found and fixed in OB
+(`4401edd`) and ported to main (`e33df62`) — but RB's user-provided
+baseline (`ae8801a`) carried the OLD pre-fix code forward, since that
+fix had never landed in the RB file itself.
+
+Fix: same as OB's — track the exact `(kind, swingIdx)` pair(s) the
+dual-action candle confirmed, only block an exact duplicate, let any
+different point through. Ported verbatim (diagnostic: `ffe98da`, main:
+part of `134857a`'s branch history — main's swing detection already had
+this since it's one shared engine, so only the diagnostic needed it).
+
+### Fix 2 — ARB stranding checked the wrong swing kind/side
+
+This one's a real, non-obvious bug worth understanding fully before
+touching ARB/AOB naming again:
+
+**The trap:** ARB's STRANDING code was a literal copy of AFVG's
+formula. That's wrong because RB's `bullish` tag means something
+different from AFVG's:
+- **AFVG** tags a zone bullish by which **hunt** found it
+  (`tryBullAFVG` fires in an uptrend-pullback context → bullish).
+- **RB** tags a zone bullish by **raw wick type** (swing-low wick =
+  always bullish, swing-high wick = always bearish), per RB's own
+  header spec — completely decoupled from which hunt fired it.
+
+Because of that, the hunt matching AFVG's bullish trigger condition
+(`tryBullARB`, `pReg==1`) anchors on a swing-**high** wick → tagged
+**bearish** in RB. The hunt matching AFVG's bearish trigger condition
+(`tryBearARB`, `pReg==2`) anchors a swing-**low** wick → tagged
+**bullish** in RB. RB's labels are the mirror image of AFVG's,
+hunt-context for hunt-context — so copying AFVG's kind/side pairing
+verbatim checked the wrong swing on the wrong side, for both
+directions.
+
+**Fix:** bullish ARB (low-wick, price sits above it, anticipating a
+later fall back down to it) now strands on a new swing **low** that
+tops out **above** its own top. Bearish ARB (high-wick, price below
+it) strands on a new swing **high** that bottoms out **below** its own
+bottom. This makes ARB's formula come out numerically identical to
+IRB's — not a redundancy to "clean up," just a coincidence of RB's
+uniform raw-wick tagging (unlike FVG, where IFVG and AFVG genuinely
+differ). Fixed identically in both files, same commit message: the
+diagnostic in `134857a`, and ported into main in the commit right
+after it in this branch's log.
+
+**Only the ARB stranding branch changed** in both files — creation,
+IMPACT, eligibility, and IRB's stranding (whose raw-wick tag already
+matches its own breakout direction, no flip needed) are untouched.
+
+**Relevant to issue 3 (FVG naming) if that ever comes back:** this RB
+bug is proof that blindly mirroring a formula across files with
+different tagging conventions is a real, demonstrated failure mode —
+worth keeping in mind if AFVG's naming ever gets changed to shape-based
+(per issue 3's decision), since anything that reads AFVG's `bullish`
+field elsewhere would need the same kind of careful re-derivation, not
+an assumed copy.
 
 ## How this user wants to work (do not skip this)
 
