@@ -67,7 +67,14 @@ file before touching any code.
    diagnostic (no OB/RB code at all, by design, to stay well under
    TradingView's 20s script-execution limit on Daily history). This was
    the entire focus of the session that produced this handoff. Baseline
-   locked at commit `2e88f5d`.
+   locked at commit `2e88f5d` for issue 2 (issues 1/3 still open, see
+   below) — plus one more universal fix layered on top after that:
+   the same dual-action-candle swing-detection bug found in OB/RB
+   (fix 1 in the RB section below) was ALSO still present here, since
+   it had only ever been fixed in `ICT_OB_Diagnostic.pine`/main, never
+   ported to the FVG file. Fixed the same way, ported verbatim. This is
+   not a reopening of issues 1/3 — it's the same shared-engine bug as
+   OB/RB, unrelated to the FVG-specific naming/detection questions.
 
 4. **`pine/ICT_RB_Diagnostic.pine`** — standalone RB-only diagnostic.
    **DONE. Locked baseline, merged into main.** Started from a

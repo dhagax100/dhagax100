@@ -275,15 +275,31 @@ if not skipBar and bar_index != lastProcessedBI
         brkL     = array.get(L_, i) < array.get(L_, i - 1)
         dualAct  = brkH and brkL
 
-        // detect previous dual-action
+        // prevDual: the previous candle confirmed BOTH a swing high and a
+        // swing low in one bar (a dual-action/outside-bar candle). We keep
+        // the (kind, swingIdx) of BOTH of those events -- not just a plain
+        // yes/no flag -- so we can tell a genuine duplicate (this candle
+        // re-confirming the EXACT same point again) apart from a totally
+        // different, legitimate confirmation that just happens to land the
+        // bar right after a dual-action candle (e.g. that same candle's
+        // high separately qualifying as its own swing high later). Ported
+        // from ICT_OB_Diagnostic.pine's fix (commit 4401edd) -- same bug,
+        // same swing-detection code, same fix.
         prevDual = false
+        pdKind1 = -1
+        pdIdx1 = -1
+        pdKind2 = -1
+        pdIdx2 = -1
         eCnt = array.size(events)
         if eCnt >= 2
             ev1 = array.get(events, eCnt - 1)
             ev2 = array.get(events, eCnt - 2)
-            prevDual := (ev1.kind != ev2.kind) and (ev1.confirmIdx == ev2.confirmIdx) and (ev1.confirmIdx == i - 1)
-
-        blockPD = prevDual and not dualAct
+            if (ev1.kind != ev2.kind) and (ev1.confirmIdx == ev2.confirmIdx) and (ev1.confirmIdx == i - 1)
+                prevDual := true
+                pdKind1 := ev1.kind
+                pdIdx1 := ev1.swingIdx
+                pdKind2 := ev2.kind
+                pdIdx2 := ev2.swingIdx
 
         evBeforeSwing = array.size(events)
 
@@ -293,7 +309,11 @@ if not skipBar and bar_index != lastProcessedBI
                 peakIdx_ := i
             if brkH
                 lk = array.size(events) > 0 ? array.get(events, array.size(events) - 1).kind : -1
-                if lk != 1 and not blockPD
+                // Would this re-confirm troughIdx_ as a swing LOW when the
+                // dual-action candle already confirmed that exact (kind=1,
+                // idx) pair? Only block that exact duplicate.
+                blockDup = prevDual and not dualAct and ((pdKind1 == 1 and pdIdx1 == troughIdx_) or (pdKind2 == 1 and pdIdx2 == troughIdx_))
+                if lk != 1 and not blockDup
                     addSL(troughIdx_)
                     addEv(i, 1, troughIdx_, array.get(L_, troughIdx_))
                     peakIdx_ := i
@@ -301,7 +321,8 @@ if not skipBar and bar_index != lastProcessedBI
                 troughIdx_ := i
             if brkL
                 lk2 = array.size(events) > 0 ? array.get(events, array.size(events) - 1).kind : -1
-                if lk2 != 0 and not blockPD
+                blockDup2 = prevDual and not dualAct and ((pdKind1 == 0 and pdIdx1 == peakIdx_) or (pdKind2 == 0 and pdIdx2 == peakIdx_))
+                if lk2 != 0 and not blockDup2
                     addSH(peakIdx_)
                     addEv(i, 0, peakIdx_, array.get(H_, peakIdx_))
                     troughIdx_ := i
@@ -311,7 +332,8 @@ if not skipBar and bar_index != lastProcessedBI
                 troughIdx_ := i
             if brkL
                 lk3 = array.size(events) > 0 ? array.get(events, array.size(events) - 1).kind : -1
-                if lk3 != 0 and not blockPD
+                blockDup3 = prevDual and not dualAct and ((pdKind1 == 0 and pdIdx1 == peakIdx_) or (pdKind2 == 0 and pdIdx2 == peakIdx_))
+                if lk3 != 0 and not blockDup3
                     addSH(peakIdx_)
                     addEv(i, 0, peakIdx_, array.get(H_, peakIdx_))
                     troughIdx_ := i
@@ -319,7 +341,8 @@ if not skipBar and bar_index != lastProcessedBI
                 peakIdx_ := i
             if brkH
                 lk4 = array.size(events) > 0 ? array.get(events, array.size(events) - 1).kind : -1
-                if lk4 != 1 and not blockPD
+                blockDup4 = prevDual and not dualAct and ((pdKind1 == 1 and pdIdx1 == troughIdx_) or (pdKind2 == 1 and pdIdx2 == troughIdx_))
+                if lk4 != 1 and not blockDup4
                     addSL(troughIdx_)
                     addEv(i, 1, troughIdx_, array.get(L_, troughIdx_))
                     peakIdx_ := i
