@@ -14,11 +14,18 @@
 // candle, not a scanned pick. IRB fires at IFOB's break-confirmation
 // moment (delayed eligibility, far-side stranding); ARB fires at AOB's
 // MID-ARM moment (same pReg + reference-validity gate, immediate
-// eligibility, near-side stranding). Anchor candle is always the FAR
-// swing relative to whichever swing directly caused the trigger. Bull/
-// bear label is by RAW WICK TYPE (swing-high wick=bearish, swing-low
-// wick=bullish), not by which hunt fired it. Lifecycle is wick IMPACT +
-// STRANDING only (no close-through, that's FVG-only).
+// eligibility, near-side stranding); AIRB fires at AIFOB's MID-ARM
+// moment (same moment as ARB, but pending/no immediate eligibility,
+// exactly like AIFOB) -- a candidate IRB anchored on the same reference
+// swing IFOB's own range would use (lastSWLidx/lastSWHidx), no
+// scanning. Promoted to a real IRB if still alive when the matching
+// break confirms; a fresh IRB is created otherwise. Strands far-side
+// while pending (mirrors AIFOB, not ARB). Anchor candle is always the
+// FAR swing relative to whichever swing directly caused the trigger.
+// Bull/bear label is by RAW WICK TYPE (swing-high wick=bearish,
+// swing-low wick=bullish), not by which hunt fired it -- naming needs
+// no fix here, unlike AOB. Lifecycle is wick IMPACT + STRANDING only
+// (no close-through, that's FVG-only).
 // Also draws VI (Volume Imbalance): the 2-candle version of an FVG --
 // gap is between candle1's CLOSE and candle2's OPEN, not wicks. IVI
 // (continuation, mirrors IFVG) is shape-based: rising gap = bullish,
@@ -110,10 +117,14 @@ type RbZone
     int   eligibleK      // -1 = not yet eligible. Delayed for IRB (mirrors IFOB);
                           // immediate (= triggerK) for ARB (mirrors AOB)
     int   stopK          // -1 = extending
-    int   state          // 0=IRB, 1=ARB, 2=ORB, 3=SPENT
+    int   state          // 0=IRB, 1=ARB, 2=ORB, 3=SPENT, 4=AIRB
     int   origin         // permanent creation-type marker, never changes after
                           // creation: 0=IRB-style (far-side stranding),
-                          // 1=ARB-style (near-side stranding)
+                          // 1=ARB-style (near-side stranding). AIRB is born
+                          // with origin=4 (far-side, same bucket as IRB --
+                          // matches OB, where origState!=1 is what actually
+                          // selects far-side, not a special case for 4) and
+                          // is reset to 0 on promotion to a real IRB.
     int   preSpentState
 
 // VI (Volume Imbalance): the 2-candle version of an FVG -- gap is between
@@ -171,6 +182,8 @@ var int   lastSWHidx = -1
 var int   lastSWLidx = -1
 var int   pendBullAifob = -1
 var int   pendBearAifob = -1
+var int   pendBullAirb  = -1
+var int   pendBearAirb  = -1
 var int   fvgBullScanUpto = -1   // last bar index whose bullish 3-candle window was checked for a gap
 var int   fvgBearScanUpto = -1   // same, bearish side
 var int   viBullScanUpto = -1    // same as fvgBullScanUpto, but for the 2-candle VI window
@@ -489,6 +502,64 @@ tryBearARB(int pReg, int aobSWLi, int newSwhI, float newSwhP, int k) =>
                 refViolated := true
         if not refViolated
             addRBFromSwing(aobSWLi, false, k, 1)
+
+// Is this exact swing already the anchor of an existing RB zone (any
+// state, alive or dead)? Mirrors OB's candleClaimed -- needed because an
+// AIRB's anchor and a fresh-fallback IRB's anchor can independently land
+// on the same reference swing (lastSWLidx/lastSWHidx), and this stops a
+// second zone from stacking on one that already claimed that swing.
+swingClaimed(int idx, bool bull) =>
+    found = false
+    n = array.size(rbs)
+    for z = 0 to n - 1
+        if z < 0 or z >= n
+            continue
+        if not found
+            zz = array.get(rbs, z)
+            if zz.leftIdx == idx and zz.bullish == bull
+                found := true
+    found
+
+// Mirrors OB's existsAifobInRange -- is there already a pending AIRB
+// (state==4) anchored inside this range? Used to skip the fresh-IRB
+// fallback when one already covers this exact setup.
+existsAirbInRange(int lo, int hi, bool bull) =>
+    found = false
+    n = array.size(rbs)
+    for z = 0 to n - 1
+        if z < 0 or z >= n
+            continue
+        if not found
+            zz = array.get(rbs, z)
+            if zz.state == 4 and zz.bullish == bull and zz.leftIdx >= lo and zz.leftIdx <= hi
+                found := true
+    found
+
+// --- AIRB HUNT: Bullish -- mirrors tryBullAIFOB's MID-ARM trigger and
+// gates one-for-one (same pReg/pHaveSWH/pSwhI/pLastSWLi preconditions,
+// same "already broke it in the same breath" exception). Instead of
+// scanning [lo,hi] for a body candle, the zone is just pLastSWLi's own
+// wick -- the same reference swing IFOB's own scan range would have used
+// as one of its bounds. Returns rbs[] index or -1, for the caller to
+// track via pendBullAirb.
+tryBullAIRB(int pReg, bool pHaveSWH, int pSwhI, int pLastSWLi, int newSwlI, int k) =>
+    result = -1
+    alreadyBrokeIt = array.get(L_, k) < array.get(L_, newSwlI)
+    if pReg == 1 and pHaveSWH and pSwhI >= 0 and pLastSWLi >= 0 and not alreadyBrokeIt
+        if not swingClaimed(pLastSWLi, true)
+            addRBFromSwing(pLastSWLi, false, k, 4)
+            result := array.size(rbs) - 1
+    result
+
+// --- AIRB HUNT: Bearish -- mirrors tryBearAIFOB ---
+tryBearAIRB(int pReg, bool pHaveSWL, int pSwlI, int pLastSWHi, int newSwhI, int k) =>
+    result = -1
+    alreadyBrokeIt2 = array.get(H_, k) > array.get(H_, newSwhI)
+    if pReg == 2 and pHaveSWL and pSwlI >= 0 and pLastSWHi >= 0 and not alreadyBrokeIt2
+        if not swingClaimed(pLastSWHi, false)
+            addRBFromSwing(pLastSWHi, true, k, 4)
+            result := array.size(rbs) - 1
+    result
 
 addVI(int leftIdx, float zb, float zt, bool bull, int tK, int st) =>
     // st: 0=IVI (delayed eligibility, far-side stranding later), 1=AVI
@@ -819,12 +890,31 @@ if not skipBar and bar_index != lastProcessedBI
                             oB = array.get(O_, best)
                             cB = array.get(C_, best)
                             addOB(best, math.min(oB, cB), math.max(oB, cB), true, k, 0)
-                if lastSWLidx >= 0
+                // IRB or promote AIRB -- mirrors OB's IFOB/AIFOB pattern
+                // just above. Only promote if the pending AIRB is still
+                // ALIVE (state==4); if it already died, leave that record
+                // alone and fall through to a fresh IRB for this break.
+                pendRbStillAlive = false
+                if pendBullAirb != -1
+                    pendRbStillAlive := array.get(rbs, pendBullAirb).state == 4
+                if pendRbStillAlive
+                    rbRef = array.get(rbs, pendBullAirb)
+                    rbRef.state     := 0
+                    rbRef.origin    := 0
+                    rbRef.eligibleK := -1  // was AIRB's pending eligibility -- now a real IRB, must wait for a fresh same-direction swing
+                    array.set(rbs, pendBullAirb, rbRef)
+                    pendBullAirb := -1
+                else
+                    pendBullAirb := -1
+                if not pendRbStillAlive and lastSWLidx >= 0
                     // IRB: opposite reference (swing LOW) is the far swing
                     // relative to the high that just broke. Independent of
                     // whether an AIFOB got promoted instead of a scanned
                     // IFOB above -- RB only needs the opposite swing to exist.
-                    addRBFromSwing(lastSWLidx, false, k, 0)
+                    rbLo = math.min(math.min(lastSWLidx, k), swhIdx)
+                    rbHi = math.max(math.max(lastSWLidx, k), swhIdx)
+                    if not existsAirbInRange(rbLo, rbHi, true) and not swingClaimed(lastSWLidx, true)
+                        addRBFromSwing(lastSWLidx, false, k, 0)
                 haveSWH := false
                 swhCons := true
 
@@ -839,6 +929,7 @@ if not skipBar and bar_index != lastProcessedBI
                     swhPrice := pEv2.price
                     swhIdx   := pEv2.swingIdx
                     pendBullAifob := -1
+                    pendBullAirb  := -1
                     tryBearAOB(prevReg, aobSWLi, pEv2.swingIdx, pEv2.price, k)
                     tryBearAFVG(prevReg, aobSWLi, pEv2.swingIdx, pEv2.price, k)
                     tryBearARB(prevReg, aobSWLi, pEv2.swingIdx, pEv2.price, k)
@@ -847,11 +938,16 @@ if not skipBar and bar_index != lastProcessedBI
                         r2 = tryBearAIFOB(prevReg, haveSWL, aobSWLi, lastSWHidx, pEv2.swingIdx, k)
                         if r2 != -1
                             pendBearAifob := r2
+                    if pendBearAirb == -1
+                        rr2 = tryBearAIRB(prevReg, haveSWL, aobSWLi, lastSWHidx, pEv2.swingIdx, k)
+                        if rr2 != -1
+                            pendBearAirb := rr2
                 else
                     haveSWL  := true
                     swlPrice := pEv2.price
                     swlIdx   := pEv2.swingIdx
                     pendBearAifob := -1
+                    pendBearAirb  := -1
                     tryBullAOB(prevReg, aobSWHi, pEv2.swingIdx, pEv2.price, k)
                     tryBullAFVG(prevReg, aobSWHi, pEv2.swingIdx, pEv2.price, k)
                     tryBullARB(prevReg, aobSWHi, pEv2.swingIdx, pEv2.price, k)
@@ -860,6 +956,10 @@ if not skipBar and bar_index != lastProcessedBI
                         r3 = tryBullAIFOB(prevReg, haveSWH, aobSWHi, lastSWLidx, pEv2.swingIdx, k)
                         if r3 != -1
                             pendBullAifob := r3
+                    if pendBullAirb == -1
+                        rr3 = tryBullAIRB(prevReg, haveSWH, aobSWHi, lastSWLidx, pEv2.swingIdx, k)
+                        if rr3 != -1
+                            pendBullAirb := rr3
                 peek2 += 1
 
             // Second break: SWL
@@ -905,8 +1005,23 @@ if not skipBar and bar_index != lastProcessedBI
                             oB = array.get(O_, best2)
                             cB = array.get(C_, best2)
                             addOB(best2, math.min(oB, cB), math.max(oB, cB), false, k, 0)
-                if lastSWHidx >= 0
-                    addRBFromSwing(lastSWHidx, true, k, 0)
+                pendRbStillAlive2 = false
+                if pendBearAirb != -1
+                    pendRbStillAlive2 := array.get(rbs, pendBearAirb).state == 4
+                if pendRbStillAlive2
+                    rbRef2 = array.get(rbs, pendBearAirb)
+                    rbRef2.state     := 0
+                    rbRef2.origin    := 0
+                    rbRef2.eligibleK := -1
+                    array.set(rbs, pendBearAirb, rbRef2)
+                    pendBearAirb := -1
+                else
+                    pendBearAirb := -1
+                if not pendRbStillAlive2 and lastSWHidx >= 0
+                    rbLo2 = math.min(math.min(lastSWHidx, k), swlIdx)
+                    rbHi2 = math.max(math.max(lastSWHidx, k), swlIdx)
+                    if not existsAirbInRange(rbLo2, rbHi2, false) and not swingClaimed(lastSWHidx, false)
+                        addRBFromSwing(lastSWHidx, true, k, 0)
                 haveSWL := false
                 swlCons := true
 
@@ -954,8 +1069,23 @@ if not skipBar and bar_index != lastProcessedBI
                             oB = array.get(O_, best3)
                             cB = array.get(C_, best3)
                             addOB(best3, math.min(oB, cB), math.max(oB, cB), false, k, 0)
-                if lastSWHidx >= 0
-                    addRBFromSwing(lastSWHidx, true, k, 0)
+                pendRbStillAlive3 = false
+                if pendBearAirb != -1
+                    pendRbStillAlive3 := array.get(rbs, pendBearAirb).state == 4
+                if pendRbStillAlive3
+                    rbRef3 = array.get(rbs, pendBearAirb)
+                    rbRef3.state     := 0
+                    rbRef3.origin    := 0
+                    rbRef3.eligibleK := -1
+                    array.set(rbs, pendBearAirb, rbRef3)
+                    pendBearAirb := -1
+                else
+                    pendBearAirb := -1
+                if not pendRbStillAlive3 and lastSWHidx >= 0
+                    rbLo3 = math.min(math.min(lastSWHidx, k), swlIdx)
+                    rbHi3 = math.max(math.max(lastSWHidx, k), swlIdx)
+                    if not existsAirbInRange(rbLo3, rbHi3, false) and not swingClaimed(lastSWHidx, false)
+                        addRBFromSwing(lastSWHidx, true, k, 0)
                 haveSWL := false
                 swlCons := true
 
@@ -970,6 +1100,7 @@ if not skipBar and bar_index != lastProcessedBI
                     swhPrice := pEv3.price
                     swhIdx   := pEv3.swingIdx
                     pendBullAifob := -1
+                    pendBullAirb  := -1
                     tryBearAOB(prevReg, aobSWLi, pEv3.swingIdx, pEv3.price, k)
                     tryBearAFVG(prevReg, aobSWLi, pEv3.swingIdx, pEv3.price, k)
                     tryBearARB(prevReg, aobSWLi, pEv3.swingIdx, pEv3.price, k)
@@ -978,11 +1109,16 @@ if not skipBar and bar_index != lastProcessedBI
                         r4 = tryBearAIFOB(prevReg, haveSWL, aobSWLi, lastSWHidx, pEv3.swingIdx, k)
                         if r4 != -1
                             pendBearAifob := r4
+                    if pendBearAirb == -1
+                        rr4 = tryBearAIRB(prevReg, haveSWL, aobSWLi, lastSWHidx, pEv3.swingIdx, k)
+                        if rr4 != -1
+                            pendBearAirb := rr4
                 else
                     haveSWL  := true
                     swlPrice := pEv3.price
                     swlIdx   := pEv3.swingIdx
                     pendBearAifob := -1
+                    pendBearAirb  := -1
                     tryBullAOB(prevReg, aobSWHi, pEv3.swingIdx, pEv3.price, k)
                     tryBullAFVG(prevReg, aobSWHi, pEv3.swingIdx, pEv3.price, k)
                     tryBullARB(prevReg, aobSWHi, pEv3.swingIdx, pEv3.price, k)
@@ -991,6 +1127,10 @@ if not skipBar and bar_index != lastProcessedBI
                         r5 = tryBullAIFOB(prevReg, haveSWH, aobSWHi, lastSWLidx, pEv3.swingIdx, k)
                         if r5 != -1
                             pendBullAifob := r5
+                    if pendBullAirb == -1
+                        rr5 = tryBullAIRB(prevReg, haveSWH, aobSWHi, lastSWLidx, pEv3.swingIdx, k)
+                        if rr5 != -1
+                            pendBullAirb := rr5
                 peek3 += 1
 
             // Second break: SWH
@@ -1036,8 +1176,23 @@ if not skipBar and bar_index != lastProcessedBI
                             oB = array.get(O_, best4)
                             cB = array.get(C_, best4)
                             addOB(best4, math.min(oB, cB), math.max(oB, cB), true, k, 0)
-                if lastSWLidx >= 0
-                    addRBFromSwing(lastSWLidx, false, k, 0)
+                pendRbStillAlive4 = false
+                if pendBullAirb != -1
+                    pendRbStillAlive4 := array.get(rbs, pendBullAirb).state == 4
+                if pendRbStillAlive4
+                    rbRef4 = array.get(rbs, pendBullAirb)
+                    rbRef4.state     := 0
+                    rbRef4.origin    := 0
+                    rbRef4.eligibleK := -1
+                    array.set(rbs, pendBullAirb, rbRef4)
+                    pendBullAirb := -1
+                else
+                    pendBullAirb := -1
+                if not pendRbStillAlive4 and lastSWLidx >= 0
+                    rbLo4 = math.min(math.min(lastSWLidx, k), swhIdx)
+                    rbHi4 = math.max(math.max(lastSWLidx, k), swhIdx)
+                    if not existsAirbInRange(rbLo4, rbHi4, true) and not swingClaimed(lastSWLidx, true)
+                        addRBFromSwing(lastSWLidx, false, k, 0)
                 haveSWH := false
                 swhCons := true
 
@@ -1120,7 +1275,7 @@ if not skipBar and bar_index != lastProcessedBI
                     if zr < 0 or zr >= rbSz
                         continue
                     rbZ = array.get(rbs, zr)
-                    if rbZ.bullish and rbZ.state == 0 and rbZ.eligibleK == -1 and k > rbZ.triggerK
+                    if rbZ.bullish and (rbZ.state == 0 or rbZ.state == 4) and rbZ.eligibleK == -1 and k > rbZ.triggerK
                         rbZ.eligibleK := k
                         array.set(rbs, zr, rbZ)
                 viSz = array.size(vis)
@@ -1158,7 +1313,7 @@ if not skipBar and bar_index != lastProcessedBI
                     if zr2 < 0 or zr2 >= rbSz2
                         continue
                     rbZ2 = array.get(rbs, zr2)
-                    if not rbZ2.bullish and rbZ2.state == 0 and rbZ2.eligibleK == -1 and k > rbZ2.triggerK
+                    if not rbZ2.bullish and (rbZ2.state == 0 or rbZ2.state == 4) and rbZ2.eligibleK == -1 and k > rbZ2.triggerK
                         rbZ2.eligibleK := k
                         array.set(rbs, zr2, rbZ2)
                 viSz2 = array.size(vis)
@@ -1325,8 +1480,11 @@ if not skipBar and bar_index != lastProcessedBI
 
             // STRANDING -> ORB: origin decides the rule -- IRB-style
             // (origin 0) strands far-side, mirroring IFOB; ARB-style
-            // (origin 1) strands near-side, mirroring AOB.
-            if (rbZ3.state == 0 or rbZ3.state == 1) and rbZ3.eligibleK != -1
+            // (origin 1) strands near-side, mirroring AOB. AIRB (state==4,
+            // origin==4 while pending) falls into the far-side/IRB-style
+            // bucket via the same origin!=1 check -- matches OB, where
+            // AIFOB is treated as far-side/IFOB-style, not near-side.
+            if (rbZ3.state == 0 or rbZ3.state == 1 or rbZ3.state == 4) and rbZ3.eligibleK != -1
                 isIRB = rbZ3.origin != 1
                 for e2 = evBeforeSwing to evTotal - 1
                     if e2 < 0 or e2 >= evTotal
@@ -1695,7 +1853,9 @@ if barstate.islast
         if rbD.stopK != -1 and rbD.stopK < nArr
             rightTR := array.get(BT, rbD.stopK)
 
-        colR = dStR == 2 ? color.red : dStR == 1 ? color.green : (rbD.bullish ? color.blue : color.black)
+        // Orange = still-pending AIRB (dStR==4, not yet promoted to IRB) --
+        // same treatment OB gives AIFOB, kept visible for verification.
+        colR = dStR == 2 ? color.red : dStR == 1 ? color.green : dStR == 4 ? color.orange : (rbD.bullish ? color.blue : color.black)
 
         bxR = box.new(leftTR, rbD.zt, rightTR, rbD.zb, border_color=colR, border_width=1,
                       border_style=line.style_dashed, bgcolor=na, xloc=xloc.bar_time)
