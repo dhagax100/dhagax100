@@ -11,10 +11,10 @@ namespace cAlgo.Robots.ICT_S1
     public class RiskManager
     {
         private readonly Symbol _symbol;
-        private readonly Account _account;
+        private readonly IAccount _account;
         private readonly double _riskPercent;
 
-        public RiskManager(Symbol symbol, Account account, double riskPercent)
+        public RiskManager(Symbol symbol, IAccount account, double riskPercent)
         {
             _symbol = symbol;
             _account = account;

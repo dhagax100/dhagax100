@@ -69,9 +69,9 @@ namespace cAlgo.Robots.ICT_S1
             _eventLogPath = Path.Combine(baseDir, "S1_EventLog_" + runId + ".csv");
             _debugLogPath = Path.Combine(baseDir, "S1_Debug_" + runId + ".log");
 
-            File.WriteAllText(_eventLogPath, EventLogHeader + Environment.NewLine);
-            File.WriteAllText(_tradeSummaryPath, TradeSummaryHeader + Environment.NewLine);
-            File.WriteAllText(_opportunitySummaryPath, OpportunitySummaryHeader + Environment.NewLine);
+            System.IO.File.WriteAllText(_eventLogPath, EventLogHeader + Environment.NewLine);
+            System.IO.File.WriteAllText(_tradeSummaryPath, TradeSummaryHeader + Environment.NewLine);
+            System.IO.File.WriteAllText(_opportunitySummaryPath, OpportunitySummaryHeader + Environment.NewLine);
         }
 
         public string RunDirectory => Path.GetDirectoryName(_eventLogPath);
@@ -186,28 +186,28 @@ namespace cAlgo.Robots.ICT_S1
         private void FlushEventLog()
         {
             if (_eventLogBuffer.Count == 0) return;
-            File.AppendAllLines(_eventLogPath, _eventLogBuffer);
+            System.IO.File.AppendAllLines(_eventLogPath, _eventLogBuffer);
             _eventLogBuffer.Clear();
         }
 
         private void FlushTradeSummary()
         {
             if (_tradeSummaryBuffer.Count == 0) return;
-            File.AppendAllLines(_tradeSummaryPath, _tradeSummaryBuffer);
+            System.IO.File.AppendAllLines(_tradeSummaryPath, _tradeSummaryBuffer);
             _tradeSummaryBuffer.Clear();
         }
 
         private void FlushOpportunitySummary()
         {
             if (_opportunitySummaryBuffer.Count == 0) return;
-            File.AppendAllLines(_opportunitySummaryPath, _opportunitySummaryBuffer);
+            System.IO.File.AppendAllLines(_opportunitySummaryPath, _opportunitySummaryBuffer);
             _opportunitySummaryBuffer.Clear();
         }
 
         private void FlushDebugLog()
         {
             if (_debugBuffer.Count == 0) return;
-            File.AppendAllLines(_debugLogPath, _debugBuffer);
+            System.IO.File.AppendAllLines(_debugLogPath, _debugBuffer);
             _debugBuffer.Clear();
         }
 
