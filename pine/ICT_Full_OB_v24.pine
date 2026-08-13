@@ -285,17 +285,6 @@ tryCreateAFVGs(int lo, int hi, bool bullish, int triggerK, float guardPrice) =>
                     if h1 < guardPrice and h3 < guardPrice
                         addFVG(c1, h1, l3, false, triggerK, 1)
 
-// NOTE (issue 3, FVG side resolved, OB side still open): AFVG's bull/
-// bear tag in ICT_Full_FVG_Indicator.pine was switched from intent-based
-// (which hunt found it) to shape-based (raw gap direction), matching
-// IFVG's own convention. AOB below still uses the OLD intent-based
-// convention (tryBullAOB always tags bull=true, even though the
-// candle it's built from is a genuine up-close/green candle it picked
-// FOR that reason -- so AOB doesn't have AFVG's shape/intent conflict
-// the same way). IFOB is intent-based too, and picks the OPPOSITE-
-// colored candle on purpose (matches real ICT terminology). Whether
-// AOB/IFOB naming should also change is an open question for the user
-// to decide later -- not changed here, flagged only.
 // --- AOB HUNT: Bullish ---
 tryBullAOB(int pReg, int aobSWHi, int newSwlI, float newSwlP, int k) =>
     if pReg == 1 and aobSWHi >= 0

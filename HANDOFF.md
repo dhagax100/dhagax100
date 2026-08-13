@@ -186,16 +186,21 @@ not a per-zone conditional.
   IFVG zones (gated by `state==0`/`origin!=1`), and live AFVG boxes are
   colored green regardless of `bullish` (unchanged).
 
-**Not touched:** the FVG code duplicated inside `ICT_Full_OB_v24.pine`
-(still the older, pre-session copy per the note above) — per the
-existing rule, FVG fixes don't get ported there until FVG is fully
-settled and the user asks. AOB/IFOB naming in the OB engine is also
-untouched — a comment was added above `tryBullAOB` flagging this as an
-open follow-up, not resolved. AOB doesn't have AFVG's exact problem
-(it picks an actual candle whose color already matches its label,
-by construction of the scan), and IFOB's opposite-color pick matches
-real ICT terminology on purpose — so this isn't a guaranteed same-fix,
-it needs its own decision later.
+**Not touched:** `ICT_Full_OB_v24.pine` — never edited, per the user's
+standing rule: the main indicator does not get touched while a
+diagnostic file is being worked. Its FVG section stays the older,
+pre-session copy (not ported until FVG is fully settled and the user
+asks), and its AOB/IFOB naming stays exactly as it was. The open
+follow-up on AOB/IFOB naming is tracked here in HANDOFF only, not as a
+comment in the file:
+
+AOB doesn't have AFVG's exact shape/intent conflict — it picks an
+actual candle whose color already matches its label, by construction
+of the scan (only up-close candles qualify for a "bullish" pick).
+IFOB's opposite-color pick (it deliberately picks the strongest
+down-candle for a "bullish" IFOB) matches real ICT terminology on
+purpose. So AOB/IFOB naming isn't a guaranteed same-fix as AFVG's —
+it needs its own decision from the user later, not assumed.
 
 ## How this user wants to work (do not skip this)
 
@@ -224,6 +229,11 @@ it needs its own decision later.
 - **Numbered issues persist across the conversation** — the user refers
   back to "issue 2," "gap 1," etc. Keep a running list, don't lose the
   numbering.
+- **Never touch the main indicator (`ICT_Full_OB_v24.pine`) while
+  working a diagnostic file.** Fixes, and even flagging comments, stay
+  in the diagnostic being worked (e.g. `ICT_Full_FVG_Indicator.pine`)
+  or in this HANDOFF doc. Nothing gets ported or noted in the main file
+  until the user explicitly asks for that merge.
 
 ## Quick orientation for whichever file comes next
 
