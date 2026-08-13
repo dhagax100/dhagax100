@@ -134,7 +134,7 @@ debug-label one, a structural one):
   eligibility/lifecycle rule changed, only which zones get walked each
   bar.
 
-### Issue 3 — "bullish AFVG in a downward leg" (OPEN, fundamental — let the user decide)
+### Issue 3 — "bullish AFVG in a downward leg" (SOLVED — user decided shape-based)
 
 Not a code bug. A naming/classification disagreement, raised while
 verifying a real AFVG gap found inside a down-pullback leg within a
@@ -159,17 +159,43 @@ given (this matches real ICT terminology — a bullish order block is
 often literally a down-candle, named for what it sets up next, not its
 own color) was **not accepted or rejected** — the chat ended there.
 
-**Do not re-litigate by re-asserting the AOB-mirroring argument as if
-it settles things.** The fundamental question is genuinely open and is
-the user's call to make, not something to argue back into: should
-AFVG/AOB naming stay intent-based (buy zone / sell zone, matching
-current code and matching AOB), or should it switch to shape-based
-naming (matching how IFVG's bull/bear tag already works — tied to the
-raw direction of the candles, not the anticipated trade)? Whichever the
-user picks, note that IFVG and AFVG currently use two DIFFERENT naming
-conventions for the same "bullish"/"bearish" field in the same file —
-that inconsistency is real and worth surfacing plainly, without
-pushing the user toward either resolution.
+**Decision:** shape-based. AFVG's `bullish` tag now matches IFVG's own
+convention exactly — rising-shape gap (`high[c1] < low[c3]`) = bullish,
+falling-shape gap (`low[c1] > high[c3]`) = bearish — regardless of
+which hunt (bullish-context/uptrend-pullback vs bearish-context/
+downtrend-pullback) found it. Since a bullish-context hunt only ever
+finds falling-shape gaps and a bearish-context hunt only ever finds
+rising-shape gaps, this is a full inversion of the old labels for AFVG,
+not a per-zone conditional.
+
+**Implemented in `pine/ICT_Full_FVG_Indicator.pine`:**
+- `tryCreateAFVGs`: the two `addFVG(...)` calls now pass the flipped
+  boolean (bullish-context hunt → `false`/bearish tag; bearish-context
+  hunt → `true`/bullish tag). The `bullish` parameter itself still means
+  hunt context, not the final label — commented inline to avoid future
+  confusion.
+- STRANDING (`else` branch, AFVG/origin==1 zones): the `bullf`/
+  `not bullf` conditions were swapped to compensate. This branch decides
+  which geometric side (new swing high below zb, or new swing low above
+  zt) counts as stranded — that geometric truth didn't change, only
+  which label now points at which side of it. Left un-swapped, AFVG
+  stranding would have silently checked the wrong side after the label
+  flip.
+- Nothing else reads AFVG's `bullish` field in a way that mattered: the
+  eligibility-arming code and CLOSE-THROUGH check only ever run for
+  IFVG zones (gated by `state==0`/`origin!=1`), and live AFVG boxes are
+  colored green regardless of `bullish` (unchanged).
+
+**Not touched:** the FVG code duplicated inside `ICT_Full_OB_v24.pine`
+(still the older, pre-session copy per the note above) — per the
+existing rule, FVG fixes don't get ported there until FVG is fully
+settled and the user asks. AOB/IFOB naming in the OB engine is also
+untouched — a comment was added above `tryBullAOB` flagging this as an
+open follow-up, not resolved. AOB doesn't have AFVG's exact problem
+(it picks an actual candle whose color already matches its label,
+by construction of the scan), and IFOB's opposite-color pick matches
+real ICT terminology on purpose — so this isn't a guaranteed same-fix,
+it needs its own decision later.
 
 ## How this user wants to work (do not skip this)
 

@@ -174,13 +174,24 @@ tryCreateIFVGs(int lo, int hi, bool bullish, int triggerK) =>
 // qualifying 3-candle gap left by the retracement leg ITSELF continuing
 // in its own direction (NOT a counter-trend wiggle -- that's what AOB
 // picks, this deliberately does the opposite, confirmed by user request).
-// A bullish hunt (uptrend, down-pullback) scans for the falling-shape gap
-// (low[c1] > high[c3]) that an ordinary down-leg leaves behind; a bearish
-// hunt (downtrend, up-pullback) scans for the rising-shape gap
-// (high[c1] < low[c3]) an ordinary up-leg leaves behind. Both still get
-// classified by hunt direction (bull hunt -> bullish zone), since the
-// zone's job downstream (support once price returns, stranding side,
-// etc.) is about the trend being hunted, not the raw candle shape.
+// A bullish-CONTEXT hunt (uptrend, down-pullback) scans for the
+// falling-shape gap (low[c1] > high[c3]) that an ordinary down-leg
+// leaves behind; a bearish-context hunt (downtrend, up-pullback) scans
+// for the rising-shape gap (high[c1] < low[c3]) an ordinary up-leg
+// leaves behind.
+//
+// NAMING (issue 3, resolved): the STORED bull/bear tag is now by RAW
+// GAP SHAPE, matching IFVG's own convention exactly (rising gap =
+// bullish, falling gap = bearish) -- not by which hunt found it. Since
+// a bullish-context hunt only ever finds falling-shape gaps, its zones
+// end up tagged bearish; a bearish-context hunt only ever finds
+// rising-shape gaps, its zones end up tagged bullish. The `bullish`
+// parameter below still means HUNT CONTEXT (which shape to scan for),
+// not the zone's final label -- see the flipped booleans in the
+// addFVG calls. (AOB/IFOB in the OB engine still use the OLD
+// intent-based convention -- flagged there for the user to decide on
+// separately, not changed here.)
+//
 // Per-gap version of AOB's near-side straddle guard still applies: a gap
 // is dropped if EITHER boundary candle's wick already reaches guardPrice
 // (the price of the swing that triggered this hunt), since either edge
@@ -191,19 +202,23 @@ tryCreateAFVGs(int lo, int hi, bool bullish, int triggerK, float guardPrice) =>
         for c3 = lo + 2 to hi
             c1 = c3 - 2
             if bullish
+                // Bullish-context hunt -- always a falling-shape gap ->
+                // tagged BEARISH (shape-based, issue 3).
                 l1 = array.get(L_, c1)
                 h3 = array.get(H_, c3)
                 if l1 > h3
                     l3 = array.get(L_, c3)
                     if l1 > guardPrice and l3 > guardPrice
-                        addFVG(c1, h3, l1, true, triggerK, 1)
+                        addFVG(c1, h3, l1, false, triggerK, 1)
             else
+                // Bearish-context hunt -- always a rising-shape gap ->
+                // tagged BULLISH (shape-based, issue 3).
                 h1 = array.get(H_, c1)
                 l3 = array.get(L_, c3)
                 if h1 < l3
                     h3 = array.get(H_, c3)
                     if h1 < guardPrice and h3 < guardPrice
-                        addFVG(c1, h1, l3, false, triggerK, 1)
+                        addFVG(c1, h1, l3, true, triggerK, 1)
 
 // --- AFVG HUNT: Bullish -- mirrors tryBullAOB's range + reference-
 // validity gate one-for-one (the OB candle-picking parts aren't needed
@@ -579,6 +594,18 @@ if not skipBar and bar_index != lastProcessedBI
             // (origin 1) strands on the NEAR side, mirroring AOB. Origin
             // never changes after creation, so this stays correct even
             // though state itself (0 or 1) is what's being checked here.
+            //
+            // AFVG branch below reads `not bullf` / `bullf` -- INVERTED
+            // vs the IFVG branch's `bullf` / `not bullf` -- because
+            // AFVG's bull tag is now SHAPE-based (issue 3 fix, see
+            // tryCreateAFVGs), not hunt-based. A zone actually sitting
+            // BELOW price (created by the bullish-context/uptrend-
+            // pullback hunt) is now tagged bearish (falling gap), so the
+            // geometric near-side check it needs (new swing high
+            // confirming below zb) now lives under `not bullf`. Same
+            // physical rule as before the naming fix, just re-keyed to
+            // the new label -- do not "simplify" this back to match the
+            // IFVG branch, they're deliberately different now.
             if not becameSpent and (fvgZ3.state == 0 or fvgZ3.state == 1) and fvgZ3.eligibleK != -1
                 isIfvgLike = fvgZ3.origin != 1
                 for e2 = evBeforeSwing to evTotal - 1
@@ -594,9 +621,9 @@ if not skipBar and bar_index != lastProcessedBI
                         if not bullf and stEv.kind == 0 and stEv.price < zbf
                             strandedF := true
                     else
-                        if bullf and stEv.kind == 0 and stEv.price < zbf
+                        if not bullf and stEv.kind == 0 and stEv.price < zbf
                             strandedF := true
-                        if not bullf and stEv.kind == 1 and stEv.price > ztf
+                        if bullf and stEv.kind == 1 and stEv.price > ztf
                             strandedF := true
                     if strandedF
                         fvgZ3.state := 2
