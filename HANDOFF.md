@@ -1,8 +1,8 @@
 # Handoff — ICT indicator debugging
 
 Repo: `dhagax100/dhagax100`
-Branch: `claude/afvg-rendering-bug-ctjnuq`
-Latest commit: `2e88f5d`
+Branch: `claude/afvg-rendering-bug-ctjnuq-7m0y12`
+Latest commit: `9bf85ec`
 FVG file status: **finalized with ONLY issue 2 solved, by explicit user
 decision.** Issue 1 and issue 3 were both investigated extensively in a
 later session (see below) but their code changes were reverted — the
@@ -11,6 +11,13 @@ still open. Do not reapply either fix without the user asking again.
 This finalized state (issue 2 + the earlier scan-range extension) has
 now been **merged into `ICT_Full_OB_v24.pine`** too, at the user's
 explicit request — see file 1 below for exactly what changed there.
+
+Since that merge, two more fixes landed: the **AOB naming fix** (issue
+3's shape-based decision, applied to AOB instead of AFVG — see the "AOB
+naming" section below), in both the OB diagnostic and the main
+indicator; and a from-scratch **AIRB** build in the RB diagnostic,
+designed as a deliberate mirror of AIFOB (see item 4 below). Neither has
+been checked against a live chart yet.
 
 This file exists so a fresh chat can pick up exactly where this one left
 off, without the user having to re-explain any of it. Read this whole
@@ -42,6 +49,13 @@ file before touching any code.
      was touched — verify with `git diff` if in doubt, the change
      should be small and land only in FVG-specific code.
 
+   **AOB naming fix also ported in** (commit `6bd87e5`), at the user's
+   explicit request — same fix as `ICT_OB_Diagnostic.pine` commit
+   `9600a67` (see below): `tryBullAOB`/`tryBearAOB` naming flipped
+   intent-based → shape-based, STRANDING branch swapped to compensate.
+   This one **does** touch OB code, explicitly authorized — don't treat
+   the "FVG only" scope above as still holding for this specific change.
+
 2. **`pine/ICT_OB_Diagnostic.pine`** — standalone OB-only diagnostic.
    Superseded by the merge into main (`e33df62`). Not actively worked on
    unless a fresh OB-specific bug turns up.
@@ -55,18 +69,59 @@ file before touching any code.
 4. **`pine/ICT_RB_Diagnostic.pine`** — standalone RB-only diagnostic.
    **RESET to a user-provided baseline (commit `ae8801a`)** — the user
    supplied the file directly, replacing everything that had accumulated
-   in prior sessions. This baseline has **only IRB and ARB** — no AIRB
-   (type field, hunts, pending pointers, promotion logic all removed)
+   in prior sessions. That baseline had **only IRB and ARB** — no AIRB
    and no debug-label tooling (`InpDebugValues`/`InpFocusRB` gone).
    Wick-based zones off a fixed swing pivot, no scanning, no picking.
-   Written verbatim from the user's upload — not hand-derived, don't
-   "clean it up" or reconcile it against the old AIRB-era commits
-   (`fafc402` and everything back through the AIRB rebuild history) —
-   those are superseded, not a reference to merge back in.
+   Don't reconcile against the old pre-reset AIRB-era commits (`fafc402`
+   and back) — those are superseded, not a reference to merge back in.
 
-   **Currently being actively checked by the user against this
-   baseline** — no known open bugs catalogued yet. Ask directly what's
-   broken before proposing anything, same as before.
+   User checked this baseline and reported it good — **ARB and IRB
+   needed no changes**, confirmed already correct (shape-based/raw-wick
+   naming from the start).
+
+   **AIRB rebuilt from scratch since then (commit `9bf85ec`)** — this
+   time deliberately designed as a mirror of AIFOB (see the OB naming
+   section below for how that mapping was derived), not a port of the
+   old removed AIRB code:
+   - New `state==4`. Fires at ARB's MID-ARM moment, same gates as
+     AIFOB (`pReg`, `pHave*`, `pSwhI`/`pSwlI`, the "already broke it in
+     the same breath" exception).
+   - No scan — the zone is the wick of `pLastSWLi`/`pLastSWHi` directly
+     (the same reference swing IFOB's own scan range would use as a
+     bound), not a picked candle.
+   - Naming needed no fix, unlike AOB — raw wick type already lines up
+     with AIFOB's intent-label automatically (checked, not assumed).
+   - Pending at creation, no immediate eligibility (mirrors AIFOB, not
+     ARB). Promoted to a real IRB at break-confirmation if still alive
+     (`state==4`); a fresh IRB is created instead if it already died.
+     `pendBullAirb`/`pendBearAirb` mirror `pendBullAifob`/
+     `pendBearAifob` exactly, including the mid-MID-ARM-loop resets.
+   - New helpers `swingClaimed`/`existsAirbInRange` mirror OB's
+     `candleClaimed`/`existsAifobInRange` — needed once AIRB can
+     duplicate-claim the same reference swing as a fresh-fallback IRB.
+   - STEP2 eligibility-arming and STEP3 stranding-eligibility gate both
+     extended to include `state==4`.
+   - **Strands far-side, like IFOB — not near-side like AOB** — despite
+     firing at ARB's MID-ARM moment. This mirrors a real, non-obvious
+     detail in the OB benchmark: AIFOB's `origState` is 4, and the
+     stranding-side check is just `origState != 1`, so AIFOB (4) falls
+     into the same far-side bucket as IFOB (0); only AOB (1) is
+     near-side. AIRB copies this via `origin` born as `4`, reset to `0`
+     on promotion.
+   - Drawing: orange while pending (mirrors AIFOB's orange), promotes
+     to IRB's blue/black once confirmed.
+   - **Known, harmless discrepancy in the OB benchmark itself** (not
+     introduced here, just noted so it isn't mistaken for a new bug):
+     `existsAifobInRange`'s comment claims `origState` "keeps ==4
+     forever, even after promotion," but the actual promotion code
+     resets `origState := 0`. The comment is stale — the real code
+     resets both `state` and `origState` together, so they never
+     diverge and no behavioral bug results. AIRB's `existsAirbInRange`
+     was written to match the actual code (checks `state==4`), not the
+     comment.
+   - **Not verified against a live chart yet** — built and reasoned
+     through carefully against the AIFOB benchmark, but no chart check
+     has happened. Ask the user to verify before trusting it live.
 
 ## FVG status — three numbered issues this session
 
@@ -288,9 +343,18 @@ IFOB naming was left alone — it already matches real ICT convention on
 purpose (opposite-color pick, intent-based label) and was never in
 question.
 
-**Not verified against a live chart yet.** Applied in
-`ICT_OB_Diagnostic.pine` only, per the "never touch main code" rule —
-not ported to `ICT_Full_OB_v24.pine` unless/until asked.
+**Not verified against a live chart yet.** Ported into
+`ICT_Full_OB_v24.pine` too (commit `6bd87e5`), at the user's explicit
+request — see item 1 above for what changed there.
+
+### AIRB — added to `ICT_RB_Diagnostic.pine`, mirroring AIFOB (commit `9bf85ec`)
+
+Full design/implementation details are under item 4 above (the RB file
+section) — not duplicated here. Short version: same MID-ARM trigger and
+pending/promotion machinery as AIFOB, wick instead of scanned body,
+strands far-side (like IFOB) not near-side (like AOB/ARB) despite firing
+at ARB's moment, naming needed no fix. Not verified against a live chart
+yet. Not ported to the main indicator — not asked for yet.
 
 ## How this user wants to work (do not skip this)
 
