@@ -53,14 +53,20 @@ file before touching any code.
    locked at commit `2e88f5d`.
 
 4. **`pine/ICT_RB_Diagnostic.pine`** — standalone RB-only diagnostic.
-   **This is the next thing to work on**, per explicit user instruction.
-   Last commit `fafc402` ("RB Diagnostic: stop rbClaimed from deleting
-   legitimate IRB zones"). An earlier RB session (before this one) had a
-   lot of back-and-forth that frustrated the user — see "How this user
-   wants to work" below for what NOT to repeat. **This handoff does not
-   catalogue specific open RB bugs** — the previous RB session's context
-   was not carried into this one. Ask the user directly what's still
-   broken in RB before proposing anything.
+   **RESET to a user-provided baseline (commit `ae8801a`)** — the user
+   supplied the file directly, replacing everything that had accumulated
+   in prior sessions. This baseline has **only IRB and ARB** — no AIRB
+   (type field, hunts, pending pointers, promotion logic all removed)
+   and no debug-label tooling (`InpDebugValues`/`InpFocusRB` gone).
+   Wick-based zones off a fixed swing pivot, no scanning, no picking.
+   Written verbatim from the user's upload — not hand-derived, don't
+   "clean it up" or reconcile it against the old AIRB-era commits
+   (`fafc402` and everything back through the AIRB rebuild history) —
+   those are superseded, not a reference to merge back in.
+
+   **Currently being actively checked by the user against this
+   baseline** — no known open bugs catalogued yet. Ask directly what's
+   broken before proposing anything, same as before.
 
 ## FVG status — three numbered issues this session
 
