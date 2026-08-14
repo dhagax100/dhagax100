@@ -58,6 +58,7 @@ namespace cAlgo.Robots.ICT_S1
         private readonly Chart _chart;
         private readonly VisualizationMode _mode;
         private readonly HashSet<string> _activeOnlyNames = new HashSet<string>();
+        private int _phaseTransitionCounter = 0; // each transition is its own permanent historical marker, not an update-in-place object
 
         public VisualizationManager(Chart chart, VisualizationMode mode)
         {
@@ -198,6 +199,25 @@ namespace cAlgo.Robots.ICT_S1
             }
         }
 
+        // Strategy clarification (follow-up round), Part 39: success (a new
+        // protected H4 structure superseded this reaction) is visually
+        // distinct from failure (UpdateH4SetupTerminal, dark red) -- green,
+        // matching the POI-retirement success color.
+        public void UpdateH4SetupSuperseded(H4Setup setup, DateTime time)
+        {
+            if (_mode == VisualizationMode.Off) return;
+            RedrawProtectedSwingLine(setup, time); // final, exact extent
+            var name = "PROT_" + setup.H4SetupId + "_end";
+            _chart.DrawText(name, $"SUPERSEDED (new protected swing {setup.SupersededBySwingPrice})", time, setup.ProtectedSwingPrice, Color.Green);
+            Track(name);
+
+            if (_mode == VisualizationMode.ActiveOnly)
+            {
+                RemoveIfActiveOnly("PROT_" + setup.H4SetupId);
+                RemoveIfActiveOnly("PROT_" + setup.H4SetupId + "_lbl");
+            }
+        }
+
         // Called once from OnStop for every H4Setup still non-Terminated at
         // the end of the run.
         public void FinalizeOpenSetups(IEnumerable<H4Setup> stillOpen, DateTime asOf)
@@ -269,6 +289,29 @@ namespace cAlgo.Robots.ICT_S1
             Track(baseName + "_entry");
             Track(baseName + "_sl");
             Track(baseName + "_tp");
+        }
+
+        // ============================= Directional Phase =============================
+        //
+        // Strategy clarification (follow-up round), Part 49: "the report
+        // must make Control understandable as market behavior, not just
+        // object mutation." One permanent text marker per transition
+        // (unlike the update-in-place lifecycle objects above -- each
+        // transition is its own distinct historical moment, not a single
+        // evolving object's current extent).
+        public void DrawPhaseTransition(DirectionalPhaseEvent ev)
+        {
+            if (_mode == VisualizationMode.Off) return;
+            var name = "PHASE_" + (++_phaseTransitionCounter);
+            var color = ev.NewState == ControlState.BuyControl ? Color.Blue
+                      : ev.NewState == ControlState.SellControl ? Color.Black
+                      : Color.Gray;
+            var price = ev.SourcePoi != null
+                ? (ev.NewState == ControlState.BuyControl ? ev.SourcePoi.Zt : ev.SourcePoi.Zb)
+                : (double?)null;
+            if (price == null) return; // no price to anchor the label to (e.g. a Neutral transition with no source POI) -- journal still has it
+            _chart.DrawText(name, $"PHASE -> {ev.NewState} ({ev.Reason})", ev.Time, price.Value, color);
+            Track(name);
         }
 
         private static Color ColorForLifecycle(S1PoiLifecycleState state, Direction dir)

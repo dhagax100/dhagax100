@@ -2,49 +2,43 @@
 // sections 3, 4, 6. Repaired per the 2026-08-13 audit (see repair notes
 // inline at each fix).
 //
-// DIRECTIONAL CONTROL — CORRECTED MODEL (audit Critical 3 / Findings 8,9):
-// Control is narrative-scoped, never global (Section 10/11 concurrency
-// stands). Within its OWN narrative it DOES have a real consequence: a
-// WeeklyOpportunity may only authorize NEW H4Setups while its own Control
-// currently matches its own base Direction (enforced in H4SetupEngine).
-// Existing already-open H4Setups/M5Attempts are not force-closed when
-// Control moves away -- they continue under their own independent rules.
-// This was previously implemented as journal-only (documented as a
-// deliberate reading at the time); the audit correctly identified that
-// reading as wrong given the doc's own NEUTRAL example ("SELL entries =
-// OFF and BUY entries = OFF for THAT narrative").
+// DIRECTIONAL CONTROL — ARCHITECTURE REBUILT (strategy owner clarification,
+// follow-up round, 2026-08-13, Parts 17-37): earlier rounds modeled Control
+// as narrative-scoped per WeeklyOpportunity ("audit Critical 3 / Findings
+// 8,9" -- see git history), on the reading that Section 10/11 concurrency
+// required each Weekly opportunity to carry its own independent Control.
+// The strategy owner corrected this directly: several bullish Weekly POIs
+// that are simply sequential locations inside the same current uptrend do
+// NOT need independent parallel BUY_CONTROL universes (Part 21) -- that was
+// itself an over-fragmented reading, proven by the actual failure mode
+// (a late-activating same-direction Weekly opportunity blindly defaulting
+// to BuyControl even while an in-progress counter-reaction had already
+// moved the REAL current phase toward SellControl/Neutral, since each
+// opportunity computed its own Control independently of the others).
 //
-// ROUND 2 (audit sections 21, 23):
-// (1) RESOLVED via the same strategy-owner clarification that fixed
-//     H4SetupEngine's Weekly->H4 fan-out (see that file's header, follow-up
-//     round, 2026-08-13): which opposite-direction opportunity(ies) a new
-//     counter-POI's own narrative is contesting is decided once, at
-//     creation, and stored as ContestingOfWeeklyOpportunityIds. Zone
-//     overlap can't be the test (a counter-POI typically forms well away
-//     from the original zone after price has moved), and no confirmed rule
-//     picks a single opposite-direction "owner" among several simultaneously
-//     in control -- but this no longer needs one: the strategy owner's
-//     answer was "preserve lineage across every supporting narrative,
-//     dedupe execution at the H4 reaction level" -- and Control changes
-//     don't themselves execute trades, they only affect which Weeklies are
-//     ELIGIBLE to authorize a future H4Setup. Since H4SetupEngine now
-//     dedupes at the H4-reaction layer regardless of how many Weeklies are
-//     simultaneously eligible, linking a retiring counter-narrative's
-//     control handback to every opposite-direction opportunity it could
-//     apply to is exactly "preserving lineage without duplicating
-//     execution" -- no separate fix needed here.
-// (2) NEUTRAL detection no longer uses the raw Weekly regime flag (that
-//     heuristic is removed per Finding 8 -- Pine regime and S1 Control are
-//     NOT confirmed equivalent). It now directly follows the doc's own
-//     worked example: the current controlling direction's own next
-//     opposite-kind swing (SellControl ends on the next Weekly Swing Low,
-//     BuyControl ends on the next Weekly Swing High) ends that phase.
-// (3) Reactivation FROM Neutral is no longer "any retouch" (audit section
-//     23 -- that was too broad). It now requires the triggering POI to be
-//     In-Favor or Aggressive-In-Favor (OriginBucket 0/4, i.e. the exact
-//     "I..."/"AI..." type families) -- matching the doc's own NEUTRAL
-//     worked example ("a valid bullish/bearish location subsequently
-//     qualifies"), not any POI type whatsoever.
+// The corrected model: DirectionalPhase (Models.cs) is ONE object per run,
+// not one per WeeklyOpportunity. POI validity/lineage (WeeklyOpportunity)
+// and directional trade permission (DirectionalPhase) are separate
+// concepts (Part 21-23). Section 10/11 concurrency is preserved by this
+// split, not by giving Control multiple simultaneous instances:
+//   - "Multiple independent WeeklyOpportunities coexist freely, including
+//     simultaneous opposite directions" -- WeeklyOpportunity objects are
+//     fully independent of Phase.State; a bearish WeeklyOpportunity's own
+//     POIs stay tracked/valid regardless of what the current phase is, and
+//     it becomes eligible to authorize a NEW H4Setup the moment the phase
+//     (singular) reaches SellControl -- exactly the confirmed IVI->IFVG
+//     worked example (Part 18), generalized across directions.
+//   - "Simultaneous opposite-direction positions allowed" -- an existing
+//     open position from BEFORE the phase flipped keeps running to its own
+//     SL/3R TP (Part 41); the CURRENT phase only gates NEW entries. This is
+//     literally how a BUY position and a SELL position end up open at the
+//     same time under a single evolving phase, with no need for two
+//     simultaneous "in control" phase objects.
+// If a genuine conflict with Section 10 concurrency had been found here,
+// the mandate was to STOP and ask (Part 30/53) rather than pick an
+// architecture alone -- none was found: every previously-confirmed
+// concurrency guarantee is satisfied by the POI-validity/position-lifecycle
+// split above, without requiring more than one simultaneous phase.
 
 using System;
 using System.Collections.Generic;
@@ -55,7 +49,6 @@ namespace cAlgo.Robots.ICT_S1
     {
         Activated,
         Retouched,
-        ControlChanged,
         Terminated
     }
 
@@ -68,13 +61,29 @@ namespace cAlgo.Robots.ICT_S1
         public string Note;
     }
 
+    // Separate event stream for DirectionalPhase transitions -- these are
+    // NOT about any one WeeklyOpportunity (Opportunity may be null even
+    // when TriggeringPoi isn't, e.g. a Neutral transition has a source
+    // swing but no single "owning" POI/opportunity to attach the event to).
+    public class DirectionalPhaseEvent
+    {
+        public ControlState NewState;
+        public ControlState? OldState;
+        public S1PoiSnapshot SourcePoi;
+        public DateTime Time;
+        public string Reason;
+    }
+
     public class WeeklyOpportunityEngine
     {
         private readonly PoiMarketEngine _engine;
         private readonly PoiLifecycleTracker _tracker;
 
         public readonly List<WeeklyOpportunity> Opportunities = new List<WeeklyOpportunity>();
+        public readonly DirectionalPhase Phase = new DirectionalPhase();
+
         private readonly Queue<WeeklyOpportunityEvent> _eventQueue = new Queue<WeeklyOpportunityEvent>();
+        private readonly Queue<DirectionalPhaseEvent> _phaseEventQueue = new Queue<DirectionalPhaseEvent>();
 
         // Cursor into _engine.Events for incremental Neutral-detection scans
         // (Finding 8 fix) -- avoids rescanning all history every cycle.
@@ -90,6 +99,13 @@ namespace cAlgo.Robots.ICT_S1
         {
             var list = new List<WeeklyOpportunityEvent>(_eventQueue.Count);
             while (_eventQueue.Count > 0) list.Add(_eventQueue.Dequeue());
+            return list;
+        }
+
+        public List<DirectionalPhaseEvent> DrainPhaseEvents()
+        {
+            var list = new List<DirectionalPhaseEvent>(_phaseEventQueue.Count);
+            while (_phaseEventQueue.Count > 0) list.Add(_phaseEventQueue.Dequeue());
             return list;
         }
 
@@ -114,11 +130,11 @@ namespace cAlgo.Robots.ICT_S1
                         break;
                     case PoiEventType.Retired:
                         HandleTerminal(ev);
-                        ComputeControlTransitionOnRetire(ev);
+                        ComputeGlobalControlTransitionOnRetire(ev);
                         break;
                 }
             }
-            ComputeNeutralTransitions();
+            ComputeGlobalNeutralTransition();
         }
 
         private void HandleNewImpact(PoiLifecycleEvent ev)
@@ -130,7 +146,7 @@ namespace cAlgo.Robots.ICT_S1
                 snap.WeeklyOpportunityId = joinable.WeeklyOpportunityId;
                 snap.PoiClusterId = joinable.SupportingCluster.PoiClusterId;
                 joinable.SupportingCluster.Members.Add(snap);
-                ReactivateFromNeutralIfDue(joinable, snap, ev.Time);
+                ReactivateGlobalPhaseIfDue(snap, ev.Time);
                 _eventQueue.Enqueue(new WeeklyOpportunityEvent { Type = WeeklyOpportunityEventType.Retouched, Opportunity = joinable, TriggeringPoi = snap, Time = ev.Time, Note = $"Joined existing cluster ({snap.TypeAtActivation})" });
                 return;
             }
@@ -143,17 +159,26 @@ namespace cAlgo.Robots.ICT_S1
                 WeeklyOpportunityId = IdGenerator.NextWeeklyOpportunityId(),
                 Direction = snap.Direction,
                 ActivationTime = ev.Time,
-                SupportingCluster = cluster,
-                Control = snap.Direction == Direction.Buy ? ControlState.BuyControl : ControlState.SellControl
+                SupportingCluster = cluster
             };
             snap.WeeklyOpportunityId = opp.WeeklyOpportunityId;
             snap.PoiClusterId = cluster.PoiClusterId;
-
-            // Finding 9 fix: establish the contesting relationship ONCE, now,
-            // explicitly -- not re-guessed later by recency at retirement.
-            LinkContestingNarrativeIfAny(opp, ev.Time);
-
             Opportunities.Add(opp);
+
+            // Bootstrap ONLY: the very first Weekly opportunity ever
+            // activated establishes the initial phase (there is nothing
+            // else for the phase to have been derived from yet). Every
+            // SUBSEQUENT same-direction activation does NOT reset/re-claim
+            // the phase merely by activating -- this is exactly the bug
+            // being fixed (Part 21): a new bullish Weekly POI activating
+            // mid-SELL-phase must NOT silently flip trade permission back
+            // to BUY. It just becomes a tracked, independently-valid
+            // narrative that's eligible to authorize a new H4Setup the
+            // moment the (unique, shared) phase reaches its own direction.
+            if (Phase.State == null)
+                SetPhase(snap.Direction == Direction.Buy ? ControlState.BuyControl : ControlState.SellControl,
+                          null, snap, ev.Time, $"Bootstrap: first-ever Weekly opportunity activation ({snap.TypeAtActivation} {snap.S1PoiId})");
+
             _eventQueue.Enqueue(new WeeklyOpportunityEvent { Type = WeeklyOpportunityEventType.Activated, Opportunity = opp, TriggeringPoi = snap, Time = ev.Time, Note = $"Activated by {snap.TypeAtActivation}" });
         }
 
@@ -179,53 +204,24 @@ namespace cAlgo.Robots.ICT_S1
             return null;
         }
 
-        // Finding 9: a counter-direction POI's zone typically does NOT
-        // overlap the original narrative's zone (price has already moved
-        // away by the time a counter-POI forms) -- so overlap can't be the
-        // contesting test. Instead: at the moment this counter-direction
-        // opportunity is created, link it to every ACTIVE opposite-
-        // direction opportunity currently holding control in its own
-        // direction (the ones genuinely "in play" right now).
-        //
-        // RESOLVED (final audit Part 14 -- see file header): the old "most
-        // recently activated opposite" tie-break is REMOVED. Multiplicity
-        // is preserved (this counter-narrative links to EVERY qualifying
-        // opposite-direction opportunity, and its own retirement hands
-        // control back to all of them -- see ComputeControlTransitionOnRetire)
-        // -- correct per the strategy owner's clarification since Control
-        // handback isn't itself a trade; H4SetupEngine dedupes execution at
-        // the H4-reaction layer regardless of how many Weeklies are
-        // eligible.
-        private void LinkContestingNarrativeIfAny(WeeklyOpportunity newOpp, DateTime now)
-        {
-            var oppositeDir = newOpp.Direction == Direction.Buy ? Direction.Sell : Direction.Buy;
-            foreach (var opp in Opportunities)
-            {
-                if (opp.Status != WeeklyOpportunityStatus.Active) continue;
-                if (opp.Direction != oppositeDir) continue;
-                bool inOwnControl = (opp.Control == ControlState.BuyControl && opp.Direction == Direction.Buy)
-                                  || (opp.Control == ControlState.SellControl && opp.Direction == Direction.Sell);
-                if (!inOwnControl) continue;
-
-                newOpp.ContestingOfWeeklyOpportunityIds.Add(opp.WeeklyOpportunityId);
-                opp.ContestingClusters.Add(newOpp.SupportingCluster);
-            }
-        }
-
         private void HandleRetouch(PoiLifecycleEvent ev)
         {
             var opp = FindOwningOpportunity(ev.Snapshot);
             if (opp == null) return;
             opp.RetouchCounter++;
-            ReactivateFromNeutralIfDue(opp, ev.Snapshot, ev.Time);
+            ReactivateGlobalPhaseIfDue(ev.Snapshot, ev.Time);
             _eventQueue.Enqueue(new WeeklyOpportunityEvent { Type = WeeklyOpportunityEventType.Retouched, Opportunity = opp, TriggeringPoi = ev.Snapshot, Time = ev.Time, Note = $"Weekly retouch #{opp.RetouchCounter}" });
         }
 
         // "Valid bullish/bearish location subsequently qualifies" (doc's own
-        // NEUTRAL -> BUY_CONTROL example) -- a fresh same-direction POI
-        // activity under THIS opportunity's own cluster is what ends a
-        // Neutral phase and restores control to this narrative's own
-        // direction.
+        // NEUTRAL -> BUY_CONTROL example) -- a fresh In-Favor/Aggressive-
+        // In-Favor POI reached WHILE Neutral is what ends the phase and
+        // establishes control in THAT POI's own direction (either
+        // direction can reactivate from Neutral -- the confirmed worked
+        // example only shows the opposite-of-pre-Neutral direction
+        // reactivating, but nothing restricts it to that case, and the
+        // symmetric reading matches "new SELL entries = OFF and new BUY
+        // entries = OFF" being genuinely direction-agnostic while Neutral).
         //
         // Round 2 fix (audit section 23): NOT "any retouch". The doc's own
         // example is specifically "a valid bullish/bearish LOCATION" --
@@ -237,21 +233,14 @@ namespace cAlgo.Robots.ICT_S1
         // POI impact or retouch does NOT qualify.
         private static bool IsInFavorOrigin(int originBucket) => originBucket == 0 || originBucket == 4;
 
-        private void ReactivateFromNeutralIfDue(WeeklyOpportunity opp, S1PoiSnapshot triggeringSnap, DateTime time)
+        private void ReactivateGlobalPhaseIfDue(S1PoiSnapshot triggeringSnap, DateTime time)
         {
-            if (opp.Control != ControlState.Neutral) return;
+            if (Phase.State != ControlState.Neutral) return;
             if (!IsInFavorOrigin(triggeringSnap.OriginBucket)) return;
 
-            var restored = opp.Direction == Direction.Buy ? ControlState.BuyControl : ControlState.SellControl;
-            opp.Control = restored;
-            _eventQueue.Enqueue(new WeeklyOpportunityEvent
-            {
-                Type = WeeklyOpportunityEventType.ControlChanged,
-                Opportunity = opp,
-                TriggeringPoi = triggeringSnap,
-                Time = time,
-                Note = $"Control -> {restored} (valid own-direction In-Favor/Aggressive-In-Favor location reached: {triggeringSnap.TypeAtActivation})"
-            });
+            var restored = triggeringSnap.Direction == Direction.Buy ? ControlState.BuyControl : ControlState.SellControl;
+            SetPhase(restored, ControlState.Neutral, triggeringSnap, time,
+                      $"Valid own-direction In-Favor/Aggressive-In-Favor location reached: {triggeringSnap.TypeAtActivation} {triggeringSnap.S1PoiId}");
         }
 
         // PARENT TERMINATION PROPAGATION (Part 19 audit, verified not
@@ -267,7 +256,9 @@ namespace cAlgo.Robots.ICT_S1
         // diverge (a Weekly's own zone-cluster can go fully terminal while
         // a child H4Setup/M5Attempt it already spawned keeps running under
         // its own protected-swing/POI-terminal rules). No existing pending
-        // order or open position is force-closed by this.
+        // order or open position is force-closed by this. It also does NOT
+        // touch DirectionalPhase -- one POI-lineage object going terminal
+        // says nothing about the current market-wide directional phase.
         //
         // What DOES change once Status flips to Terminated: no NEW child
         // activity can start under this narrative going forward --
@@ -291,94 +282,81 @@ namespace cAlgo.Robots.ICT_S1
         }
 
         // A counter-direction POI just RETIRED (respected + reaction swing
-        // confirmed) -- per spec section 3, this establishes Control in its
-        // direction for EVERY narrative it was EXPLICITLY linked to at
-        // creation (Finding 9 fix + Round 2 multiplicity fix -- no recency
-        // search, no single-target collapse; fans out to all contested
-        // targets independently).
-        private void ComputeControlTransitionOnRetire(PoiLifecycleEvent ev)
+        // confirmed) -- per spec section 3, this is the event that flips
+        // the CURRENT global phase to the counter-POI's own direction.
+        // Global model (Part 25): no "contesting" linkage bookkeeping is
+        // needed anymore -- ANY Old/Aggressive-family POI (NOT In-Favor/AIF
+        // -- those are continuation-type, not counter-type) whose OWN
+        // direction is opposite the CURRENT phase, retiring, is exactly
+        // "the market encountered a counter-direction location and
+        // respected it" (Part 25's worked example), regardless of which
+        // WeeklyOpportunity object it happens to be filed under.
+        private void ComputeGlobalControlTransitionOnRetire(PoiLifecycleEvent ev)
         {
             var snap = ev.Snapshot;
-            var owner = FindOwningOpportunity(snap);
-            if (owner == null || owner.ContestingOfWeeklyOpportunityIds.Count == 0) return;
+            if (Phase.State == null) return; // no phase established yet -- nothing to contest
+            if (IsInFavorOrigin(snap.OriginBucket)) return; // continuation-type POIs don't "contest" the phase
 
             var newControl = snap.Direction == Direction.Buy ? ControlState.BuyControl : ControlState.SellControl;
-            foreach (var contestedId in owner.ContestingOfWeeklyOpportunityIds)
-            {
-                var contested = FindById(contestedId);
-                if (contested == null || contested.Status != WeeklyOpportunityStatus.Active) continue;
-                if (contested.Control == newControl) continue;
+            bool isOpposite = (Phase.State == ControlState.BuyControl && snap.Direction == Direction.Sell)
+                            || (Phase.State == ControlState.SellControl && snap.Direction == Direction.Buy);
+            if (!isOpposite) return; // same-direction Old/Aggressive retirement, or already Neutral -- not a contest of the current phase
 
-                contested.Control = newControl;
-                contested.ControlSourcePoiId = snap.S1PoiId;
-                contested.ControlSwingType = snap.RelevantReactionSwingType;
-                contested.ControlSwingPrice = snap.RelevantReactionSwingPrice;
-                contested.ControlSwingTime = snap.RelevantReactionSwingConfirmationTime;
-
-                _eventQueue.Enqueue(new WeeklyOpportunityEvent
-                {
-                    Type = WeeklyOpportunityEventType.ControlChanged,
-                    Opportunity = contested,
-                    TriggeringPoi = snap,
-                    Time = ev.Time,
-                    Note = $"Control -> {newControl} (source {snap.TypeAtActivation} {snap.S1PoiId})"
-                });
-            }
+            SetPhase(newControl, Phase.State, snap, ev.Time,
+                      $"Counter-POI respected + reaction swing confirmed: {snap.TypeAtActivation} {snap.S1PoiId}");
         }
 
         // Finding 8 fix: NEUTRAL is no longer derived from the raw Weekly
         // regime flag (Pine regime and S1 Control were never confirmed
         // equivalent). Instead, directly follows the doc's own worked
-        // example: whichever direction currently controls a narrative ends
-        // that phase on ITS OWN next opposite-kind Weekly swing --
-        // SellControl ends on the next Weekly Swing Low, BuyControl ends on
-        // the next Weekly Swing High -- confirmed strictly after control was
-        // established. Incremental cursor scan, not a full rescan each call.
-        private void ComputeNeutralTransitions()
+        // example: the CURRENT global phase ends on ITS OWN next opposite-
+        // kind Weekly swing -- SellControl ends on the next Weekly Swing
+        // Low, BuyControl ends on the next Weekly Swing High -- confirmed
+        // strictly after the phase was established. Incremental cursor
+        // scan, not a full rescan each call. Global model: ONE phase to
+        // check, not one per opportunity.
+        private void ComputeGlobalNeutralTransition()
         {
+            if (Phase.State == null || Phase.State == ControlState.Neutral) return;
+
             int total = _engine.Events.Count;
             for (int i = _lastSwingCheckIdx + 1; i < total; i++)
             {
+                if (Phase.State == null || Phase.State == ControlState.Neutral) break;
+
                 var swingEv = _engine.Events[i];
                 DateTime evTime = swingEv.ConfirmIdx >= 0 && swingEv.ConfirmIdx < _engine.BT.Count
                     ? _engine.BT[swingEv.ConfirmIdx]
                     : default(DateTime);
 
-                foreach (var opp in Opportunities)
-                {
-                    if (opp.Status != WeeklyOpportunityStatus.Active) continue;
-                    if (opp.Control == ControlState.Neutral) continue;
+                int endingKind = Phase.State == ControlState.SellControl ? 1 : 0; // 1=Low ends Sell, 0=High ends Buy
+                if (swingEv.Kind != endingKind) continue;
 
-                    int endingKind = opp.Control == ControlState.SellControl ? 1 : 0; // 1=Low ends Sell, 0=High ends Buy
-                    if (swingEv.Kind != endingKind) continue;
+                DateTime controlSince = Phase.SourceSwingTime ?? Phase.EstablishedTime ?? default(DateTime);
+                if (evTime <= controlSince) continue; // must be a NEW swing after this phase was established
 
-                    DateTime controlSince = opp.ControlSwingTime ?? opp.ActivationTime;
-                    if (evTime <= controlSince) continue; // must be a NEW swing after control was established
-
-                    opp.Control = ControlState.Neutral;
-                    _eventQueue.Enqueue(new WeeklyOpportunityEvent
-                    {
-                        Type = WeeklyOpportunityEventType.ControlChanged,
-                        Opportunity = opp,
-                        Time = evTime,
-                        Note = $"Control -> Neutral ({(endingKind == 1 ? "Swing Low" : "Swing High")} confirmed @ {swingEv.Price}, no fresh own-direction POI yet)"
-                    });
-                }
+                SetPhase(ControlState.Neutral, Phase.State, null, evTime,
+                          $"{(endingKind == 1 ? "Swing Low" : "Swing High")} confirmed @ {swingEv.Price}, no fresh own-direction POI yet");
             }
             _lastSwingCheckIdx = total - 1;
+        }
+
+        private void SetPhase(ControlState newState, ControlState? oldState, S1PoiSnapshot sourceSnap, DateTime time, string reason)
+        {
+            Phase.State = newState;
+            Phase.EstablishedTime = time;
+            Phase.SourcePoiId = sourceSnap?.S1PoiId;
+            Phase.SourceSwingType = sourceSnap?.RelevantReactionSwingType;
+            Phase.SourceSwingPrice = sourceSnap?.RelevantReactionSwingPrice;
+            Phase.SourceSwingTime = sourceSnap?.RelevantReactionSwingConfirmationTime;
+            Phase.TransitionReason = reason;
+            _phaseEventQueue.Enqueue(new DirectionalPhaseEvent { NewState = newState, OldState = oldState, SourcePoi = sourceSnap, Time = time, Reason = reason });
         }
 
         private WeeklyOpportunity FindOwningOpportunity(S1PoiSnapshot snap)
         {
             foreach (var opp in Opportunities)
                 if (opp.WeeklyOpportunityId == snap.WeeklyOpportunityId) return opp;
-            return null;
-        }
-
-        private WeeklyOpportunity FindById(string id)
-        {
-            foreach (var opp in Opportunities)
-                if (opp.WeeklyOpportunityId == id) return opp;
             return null;
         }
     }

@@ -54,6 +54,14 @@ namespace cAlgo.Robots.ICT_S1
         // execution window (re)opens for a setup -- the boundary
         // TryGetRelevantSwings now enforces (see H4Setup.M5ExecutionActivationTime).
         public event Action<H4Setup, DateTime> M5ExecutionActivated;
+        // Strategy clarification (follow-up round), Parts 6/11/38: fires
+        // once, the moment post-entry structure proves the execution
+        // thesis -- see CheckM5ExecutionCompletion.
+        public event Action<H4Setup> M5ExecutionCompleted;
+
+        // Per-setup resume cursor into _m5Engine.Events for completion
+        // scanning -- avoids rescanning the whole Events list every cycle.
+        private readonly Dictionary<string, int> _completionEventCursor = new Dictionary<string, int>();
 
         public M5ExecutionEngine(PoiMarketEngine m5Engine, H4SetupEngine h4Engine, ITradeExecutor executor)
         {
@@ -69,16 +77,113 @@ namespace cAlgo.Robots.ICT_S1
         // not just the instant it changed).
         public void Update()
         {
+            // Strategy clarification (follow-up round): scan for structural
+            // completion BEFORE deciding whether to open a new attempt this
+            // cycle, so a completion detected on this very bar immediately
+            // blocks a same-bar re-entry attempt -- not just from the next
+            // cycle onward.
+            CheckM5ExecutionCompletion();
+
             foreach (var setup in _h4Engine.Setups)
             {
-                if (setup.Status == H4SetupStatus.Impacted)
+                // Strategy clarification (follow-up round), Part 6/11/38:
+                // CompletedStructurally means this reaction's M5 execution
+                // job is done -- no new attempt may originate from it, even
+                // though setup.Status is still Impacted (an already-open
+                // position, if any, is untouched -- see ProcessAttempt below,
+                // which keeps running whatever attempt is already tracked).
+                if (setup.Status == H4SetupStatus.Impacted && setup.M5ExecutionState == M5ExecutionState.Active)
                     EnsureAttemptTracking(setup);
                 else if (setup.Status == H4SetupStatus.Terminated)
                     CancelLiveAttemptIfAny(setup, "Parent H4Setup terminated");
+                else if (setup.Status == H4SetupStatus.Superseded)
+                    // Part 15: only a still-PENDING order is cancelled here
+                    // (CancelLiveAttemptIfAny already leaves Triggered/Open
+                    // alone) -- an already-open position is not force-closed.
+                    CancelLiveAttemptIfAny(setup, "H4 reaction superseded by new protected H4 structure");
             }
 
             foreach (var kvp in _liveAttemptByH4Setup)
                 ProcessAttempt(kvp.Value);
+        }
+
+        // Strategy clarification (follow-up round), Parts 6/9-13/38:
+        // post-entry structural-completion detection. Only evaluated for
+        // setups with an active M5 execution window AND at least one FILLED
+        // attempt (InitialEntryTime != null) -- there's nothing to detect
+        // before a trade has actually opened (Part 13: pending-order moves
+        // and post-entry completion are different phases).
+        //
+        // BUY: continuation Swing High (H2) confirmed after entry, THEN a
+        // Swing Low (L2) confirmed after H2, with L2 > the CURRENT trade's
+        // own stop-swing reference (InitialStopSwingPrice) -> completed.
+        // SELL is the exact mirror (Swing Low then Swing High, H2 < stop
+        // reference). A pullback that does NOT beat the reference does not
+        // permanently fail the check -- the search resets and watches for
+        // the next continuation/pullback pair, since price can still
+        // structurally advance later.
+        private void CheckM5ExecutionCompletion()
+        {
+            var events = _m5Engine.Events;
+
+            foreach (var setup in _h4Engine.Setups)
+            {
+                if (setup.M5ExecutionState != M5ExecutionState.Active) continue;
+                if (setup.InitialEntryTime == null) continue; // no fill yet under this setup
+
+                bool bull = setup.Direction == Direction.Buy;
+                int continuationKind = bull ? 0 : 1; // High continues a BUY leg, Low continues a SELL leg
+                int pullbackKind = bull ? 1 : 0;
+
+                _completionEventCursor.TryGetValue(setup.H4SetupId, out int fromIdx);
+
+                for (int i = fromIdx; i < events.Count; i++)
+                {
+                    var e = events[i];
+                    var t = BarTime(e.ConfirmIdx);
+
+                    if (setup.PostEntryContinuationSwingIdx == null)
+                    {
+                        if (e.Kind == continuationKind && t > setup.InitialEntryTime.Value)
+                        {
+                            setup.PostEntryContinuationSwingIdx = e.SwingIdx;
+                            setup.PostEntryContinuationSwingPrice = e.Price;
+                            setup.PostEntryContinuationSwingTime = t;
+                        }
+                        continue;
+                    }
+
+                    if (t <= setup.PostEntryContinuationSwingTime.Value) continue;
+                    if (e.Kind != pullbackKind) continue;
+
+                    bool completed = bull
+                        ? e.Price > setup.InitialStopSwingPrice
+                        : e.Price < setup.InitialStopSwingPrice;
+
+                    if (completed)
+                    {
+                        setup.CompletionPullbackSwingIdx = e.SwingIdx;
+                        setup.CompletionPullbackSwingPrice = e.Price;
+                        setup.CompletionPullbackSwingTime = t;
+                        setup.M5ExecutionState = M5ExecutionState.CompletedStructurally;
+                        setup.M5ExecutionCompletedTime = t;
+                        setup.M5ExecutionCompletionReason = bull
+                            ? $"Post-entry structure advanced: H2={setup.PostEntryContinuationSwingPrice} then L2={e.Price} > L1(initial stop)={setup.InitialStopSwingPrice}"
+                            : $"Post-entry structure advanced: L2={setup.PostEntryContinuationSwingPrice} then H2={e.Price} < H1(initial stop)={setup.InitialStopSwingPrice}";
+                        M5ExecutionCompleted?.Invoke(setup);
+                    }
+                    else
+                    {
+                        // Pullback didn't beat the reference -- reset and
+                        // keep watching for a fresh continuation/pullback pair.
+                        setup.PostEntryContinuationSwingIdx = null;
+                        setup.PostEntryContinuationSwingPrice = null;
+                        setup.PostEntryContinuationSwingTime = null;
+                    }
+                }
+
+                _completionEventCursor[setup.H4SetupId] = events.Count;
+            }
         }
 
         private void EnsureAttemptTracking(H4Setup setup)
@@ -201,9 +306,11 @@ namespace cAlgo.Robots.ICT_S1
             attempt.EntrySwingType = bull ? SwingType.High : SwingType.Low;
             attempt.EntrySwingPrice = entryPrice;
             attempt.EntrySwingTime = entryTime;
+            attempt.EntrySwingIdx = entryIdx;
             attempt.StopSwingType = bull ? SwingType.Low : SwingType.High;
             attempt.StopSwingPrice = stopPrice;
             attempt.StopSwingTime = stopTime;
+            attempt.StopSwingIdx = stopIdx;
             attempt.RequestedEntryPrice = entryPrice;
             attempt.SLPrice = sl;
             attempt.TPPrice = tp;
@@ -327,6 +434,31 @@ namespace cAlgo.Robots.ICT_S1
             attempt.ActualFillPrice = fillPrice;
             attempt.EntryTime = fillTime;
             attempt.Status = M5AttemptStatus.Open;
+
+            // Strategy clarification (follow-up round), Part 12: (re)anchor
+            // this reaction's M5-completion baseline to THIS attempt's own
+            // entry/stop swing pair -- every fresh fill resets it, since
+            // completion is evaluated against whichever trade is CURRENTLY
+            // live, not whichever attempt happened to be first.
+            var setup = FindSetup(attempt.H4SetupId);
+            if (setup != null)
+            {
+                setup.InitialEntrySwingIdx = attempt.EntrySwingIdx;
+                setup.InitialEntrySwingPrice = attempt.EntrySwingPrice;
+                setup.InitialStopSwingIdx = attempt.StopSwingIdx;
+                setup.InitialStopSwingPrice = attempt.StopSwingPrice;
+                setup.InitialEntryTime = fillTime;
+                setup.PostEntryContinuationSwingIdx = null;
+                setup.PostEntryContinuationSwingPrice = null;
+                setup.PostEntryContinuationSwingTime = null;
+                setup.CompletionPullbackSwingIdx = null;
+                setup.CompletionPullbackSwingPrice = null;
+                setup.CompletionPullbackSwingTime = null;
+                // Resume completion scanning from "now" -- events before
+                // this fill are irrelevant to this attempt's own baseline.
+                _completionEventCursor[setup.H4SetupId] = _m5Engine.Events.Count;
+            }
+
             AttemptFilled?.Invoke(attempt);
         }
 
@@ -349,15 +481,22 @@ namespace cAlgo.Robots.ICT_S1
             _liveAttemptByH4Setup.Remove(h4SetupId);
             AttemptClosed?.Invoke(attempt);
 
-            // Re-entry: only on SL, and only if the parent H4Setup is still
-            // live -- +3R does NOT re-arm (confirmed rule; EnsureAttemptTracking
-            // will simply not fire again until a fresh H4 POI impact creates
-            // a new H4Setup).
+            // Re-entry: only on SL, only if the parent H4Setup is still live,
+            // and -- strategy clarification, follow-up round, Parts 5-10 --
+            // only if the M5 execution thesis has NOT already structurally
+            // completed. SL alone does not authorize a retry by itself
+            // (Part 5); it also does not forbid one by itself (Part 4) --
+            // completion is the actual gate, checked independently on every
+            // Update() cycle by CheckM5ExecutionCompletion, but re-checked
+            // here too since a completion could already be known by the
+            // time THIS specific SL closes. +3R does NOT re-arm regardless
+            // (confirmed rule; EnsureAttemptTracking will simply not fire
+            // again until a fresh H4 POI impact creates a new H4Setup).
             if (reason == ExitReason.StopLoss)
             {
                 foreach (var setup in _h4Engine.Setups)
                 {
-                    if (setup.H4SetupId == h4SetupId && setup.Status == H4SetupStatus.Impacted)
+                    if (setup.H4SetupId == h4SetupId && setup.Status == H4SetupStatus.Impacted && setup.M5ExecutionState == M5ExecutionState.Active)
                         EnsureAttemptTracking(setup);
                 }
             }

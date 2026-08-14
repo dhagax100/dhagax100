@@ -70,23 +70,29 @@ namespace cAlgo.Robots.ICT_S1
         // lineage on every trade row, so a reviewer can answer "why did
         // this exact trade exist" from this file alone -- WeeklyPoiIds/
         // H4PoiIds list every supporting POI (not just the bounding box),
-        // ControlAtTradeTime/ControlSourcePoiId capture the narrative state
-        // that authorized it, H4ProtectedSwingIdx is the stable reaction
-        // identity (Part 15), M5ExecutionActivationTime is the swing-pairing
-        // window boundary, and ExitPriceSource proves which of
-        // HistoricalTrade/QuoteFallback actually supplied ExitPrice (Part 21).
+        // ControlAtTradeTime/ControlSourcePoiId capture the single global
+        // DirectionalPhase's state at journal-write time (follow-up round,
+        // Parts 17-37 -- no longer a per-Weekly-opportunity field),
+        // H4ProtectedSwingIdx is the stable reaction identity (Part 15),
+        // M5ExecutionActivationTime is the swing-pairing window boundary,
+        // and ExitPriceSource proves which of HistoricalTrade/QuoteFallback
+        // actually supplied ExitPrice (Part 21).
         private const string TradeSummaryHeader = "StrategyVersion,Symbol,TradeID,PositionID,WeeklyOpportunityID,SupportingWeeklyOpportunityIDs,WeeklyPoiIds,PoiClusterID,H4SetupID,H4PoiIds,H4ProtectedSwingIdx,M5AttemptID,AttemptNumber," +
             "TradeDirection,WeeklyOpportunityDirection,WeeklyActivationTime,WeeklyPOITop,WeeklyPOIBottom,ControlAtTradeTime,ControlSourcePoiId," +
-            "H4Route,H4ProtectedSwingType,H4ProtectedSwingPrice,H4ProtectedSwingTime,WeeklyRetouchNumber," +
+            "H4Route,H4ProtectedSwingType,H4ProtectedSwingPrice,H4ProtectedSwingTime,WeeklyRetouchNumber,H4SetupStatusAtClose,M5ExecutionStateAtClose," +
             "M5ExecutionActivationTime,M5EntrySwingType,M5EntrySwingPrice,M5EntrySwingTime,M5StopSwingType,M5StopSwingPrice,M5StopSwingTime," +
             "FirstPendingOrderCreatedTime,PendingOrderCreatedTime,PendingOrderModificationCount,EntryTime,RequestedEntryPrice,ActualFillPrice," +
             "SLPrice,TPPrice,TargetR,RiskPercent,PositionVolume," +
             "ExitTime,ExitPrice,ExitPriceSource,ExitReason,GrossPnL,NetPnL,RealizedR";
 
         // Same schema for both files -- History is the append-every-change
-        // log, Summary is the one-row-latest-state view of it.
+        // log, Summary is the one-row-latest-state view of it. No Control
+        // columns here anymore (follow-up round, Parts 17-37): Control is
+        // no longer a WeeklyOpportunity property -- see
+        // S1_DirectionalPhaseHistory_<run>.csv for the single global phase's
+        // transition history instead.
         private const string OpportunitySummaryHeader = "Symbol,WeeklyOpportunityID,Direction,ActivationTime,Status,TerminationTime,TerminationReason," +
-            "Control,ControlSourcePoiId,SupportingPoiCount,H4SetupCount,RetouchCounter";
+            "SupportingPoiCount,H4SetupCount,RetouchCounter";
 
         public string SymbolName;
         public string StrategyVersion = "S1-v1";
@@ -130,6 +136,19 @@ namespace cAlgo.Robots.ICT_S1
             WriteOpportunityRow(o);
         }
 
+        // Strategy clarification (follow-up round, Parts 21-34, 49): the
+        // single global DirectionalPhase's own transition history --
+        // "the report must make Control understandable as market behavior,
+        // not just object mutation" (Part 49). Direction column is blank
+        // (a phase transition isn't itself a Buy/Sell POI event); NewState/
+        // PreviousState carry the actual transition.
+        public void LogPhaseTransition(DirectionalPhaseEvent ev)
+        {
+            WriteEventRow(ev.Time, "Weekly", "DIRECTIONAL_PHASE_CHANGED", "",
+                "", "", ev.SourcePoi?.S1PoiId ?? "", "", "", "",
+                "", "", "", ev.OldState?.ToString(), ev.NewState.ToString(), ev.Reason, "");
+        }
+
         // Round 2 fix (audit section 27): raw swing-confirmation / MSS
         // events, mechanically drained from PoiMarketEngine.Events/Msses
         // (already-computed data, not a new detection rule) -- previously a
@@ -154,6 +173,18 @@ namespace cAlgo.Robots.ICT_S1
             WriteEventRow(time, "M5", "M5_EXECUTION_ACTIVATED", setup.Direction.ToString(),
                 setup.WeeklyOpportunityId, setup.SupportingCluster?.PoiClusterId, "", setup.H4SetupId, "", "",
                 "", "", "", "", setup.Status.ToString(), "M5 swing-pairing window opened", "");
+        }
+
+        // Strategy clarification (follow-up round), Parts 6/11/38: the
+        // execution thesis proved itself structurally -- distinct from any
+        // individual attempt's own SL/TP outcome, and distinct from the H4
+        // reaction's own lifecycle state (still Impacted; an open position,
+        // if any, is untouched).
+        public void LogM5ExecutionCompleted(H4Setup setup, DateTime time)
+        {
+            WriteEventRow(time, "M5", "M5_EXECUTION_COMPLETED_STRUCTURALLY", setup.Direction.ToString(),
+                setup.WeeklyOpportunityId, setup.SupportingCluster?.PoiClusterId, "", setup.H4SetupId, "", "",
+                "", "", "", "", setup.M5ExecutionState.ToString(), setup.M5ExecutionCompletionReason, "");
         }
 
         public void LogH4SetupEvent(H4SetupEvent ev)
@@ -205,7 +236,10 @@ namespace cAlgo.Robots.ICT_S1
         }
 
         // ---------------- Trade Summary ----------------
-        public void LogTradeClosed(M5Attempt attempt, H4Setup setup, WeeklyOpportunity weekly)
+        // `phase` (follow-up round, Parts 17-37): the single global
+        // DirectionalPhase, not per-Weekly anymore -- ControlAtTradeTime/
+        // ControlSourcePoiId now reflect its state at journal-write time.
+        public void LogTradeClosed(M5Attempt attempt, H4Setup setup, WeeklyOpportunity weekly, DirectionalPhase phase)
         {
             // Weekly zone bounding box across all supporting cluster members
             // -- lets the trade be checked directly against the chart
@@ -248,8 +282,8 @@ namespace cAlgo.Robots.ICT_S1
                 Csv(weekly?.WeeklyOpportunityId), Csv(supportingWeeklyIds), Csv(weeklyPoiIds), Csv(setup?.SupportingCluster?.PoiClusterId), Csv(setup?.H4SetupId), Csv(h4PoiIds), Csv(setup?.ProtectedSwingIdx.ToString()),
                 Csv(attempt.M5AttemptId), Csv(attempt.AttemptNumber.ToString()),
                 Csv(attempt.Direction.ToString()), Csv(weekly?.Direction.ToString()), Csv(weekly?.ActivationTime.ToString("O")), Csv(weeklyTop), Csv(weeklyBottom),
-                Csv(weekly?.Control.ToString()), Csv(weekly?.ControlSourcePoiId),
-                Csv(setup?.Route.ToString()), Csv(setup?.ProtectedSwingType.ToString()), Csv(setup?.ProtectedSwingPrice.ToString()), Csv(setup?.ProtectedSwingTime.ToString("O")), Csv(setup?.WeeklyRetouchNumber.ToString()),
+                Csv(phase?.State?.ToString()), Csv(phase?.SourcePoiId),
+                Csv(setup?.Route.ToString()), Csv(setup?.ProtectedSwingType.ToString()), Csv(setup?.ProtectedSwingPrice.ToString()), Csv(setup?.ProtectedSwingTime.ToString("O")), Csv(setup?.WeeklyRetouchNumber.ToString()), Csv(setup?.Status.ToString()), Csv(setup?.M5ExecutionState.ToString()),
                 Csv(setup?.M5ExecutionActivationTime?.ToString("O")), Csv(attempt.EntrySwingType.ToString()), Csv(attempt.EntrySwingPrice.ToString()), Csv(attempt.EntrySwingTime.ToString("O")), Csv(attempt.StopSwingType.ToString()), Csv(attempt.StopSwingPrice.ToString()), Csv(attempt.StopSwingTime.ToString("O")),
                 Csv(attempt.FirstPendingOrderCreatedTime?.ToString("O")), Csv(attempt.PendingOrderCreatedTime?.ToString("O")), Csv(attempt.PendingOrderModificationCount.ToString()), Csv(attempt.EntryTime?.ToString("O")), Csv(attempt.RequestedEntryPrice.ToString()), Csv(attempt.ActualFillPrice?.ToString()),
                 Csv(attempt.SLPrice.ToString()), Csv(attempt.TPPrice.ToString()), Csv("3"), Csv(RiskPercentConfigured.ToString()), Csv(attempt.PositionVolume?.ToString()),
@@ -286,7 +320,7 @@ namespace cAlgo.Robots.ICT_S1
             {
                 Csv(SymbolName), Csv(o.WeeklyOpportunityId), Csv(o.Direction.ToString()), Csv(o.ActivationTime.ToString("O")), Csv(o.Status.ToString()),
                 Csv(o.TerminationTime?.ToString("O")), Csv(o.TerminationReason),
-                Csv(o.Control.ToString()), Csv(o.ControlSourcePoiId), Csv(o.SupportingCluster?.Members.Count.ToString()), Csv(o.H4Setups.Count.ToString()), Csv(o.RetouchCounter.ToString())
+                Csv(o.SupportingCluster?.Members.Count.ToString()), Csv(o.H4Setups.Count.ToString()), Csv(o.RetouchCounter.ToString())
             });
 
             _opportunityHistoryBuffer.Add(row);

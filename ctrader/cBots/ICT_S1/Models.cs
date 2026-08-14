@@ -78,7 +78,31 @@ namespace cAlgo.Robots.ICT_S1
     {
         Watching,   // parent Weekly active, no MSS/AggPOI impact yet
         Impacted,   // H4 POI cluster impacted, M5 execution active
-        Terminated
+        // Strategy clarification (follow-up round): a SUCCESSFUL structural
+        // outcome -- a new same-kind H4 protected swing confirms beyond
+        // (better than) this reaction's own -- is not the same thing as
+        // INVALIDATED (a failure outcome). Superseded means R1's execution
+        // job is done and the market has moved on to a new H4 structure; it
+        // is not "wrong", it's "finished". No new M5 attempts originate
+        // from a Superseded setup; an already-open position is untouched.
+        Superseded,
+        Terminated  // failure path: protected swing violated, or all supporting POIs terminal
+    }
+
+    // Strategy clarification (follow-up round), Part 38: attempt-level
+    // status (M5AttemptStatus) and execution-WINDOW-level status are
+    // different concepts and must not be overloaded onto one enum. One H4
+    // reaction's M5 execution window can span several sequential Attempts
+    // (each with its own SL/TP/Cancelled outcome) before the window itself
+    // completes.
+    public enum M5ExecutionState
+    {
+        Active,
+        // Post-entry structure has successfully advanced (Part 6/11): the
+        // execution thesis is proven and no further M5 attempt may
+        // originate from this H4 reaction, regardless of what happens to
+        // whichever attempt is currently open.
+        CompletedStructurally
     }
 
     public enum M5AttemptStatus
@@ -210,6 +234,14 @@ namespace cAlgo.Robots.ICT_S1
         }
     }
 
+    // Strategy clarification (follow-up round, 2026-08-13, Parts 17-37):
+    // WeeklyOpportunity is now PURELY a POI-validity/lineage object --
+    // individual family-specific validity, invalidation, lifecycle,
+    // retouch history. It NO LONGER carries its own Control -- that was
+    // the confirmed bug ("an independent simultaneous BUY_CONTROL universe"
+    // per Weekly POI, Part 21). Directional trade PERMISSION now lives on
+    // the single global DirectionalPhase object (see below), which
+    // WeeklyOpportunityEngine owns one instance of.
     public class WeeklyOpportunity
     {
         public string WeeklyOpportunityId;
@@ -220,42 +252,34 @@ namespace cAlgo.Robots.ICT_S1
         public PoiCluster SupportingCluster;
         public readonly List<H4Setup> H4Setups = new List<H4Setup>();
 
-        // Directional Control -- spec section 3. Starts matching this
-        // opportunity's own direction (it IS the current control when it
-        // activates); may flip when a counter-direction Old/Aggressive POI
-        // is respected and its reaction swing confirms.
-        public ControlState Control;
-        public string ControlSourcePoiId;
-        public SwingType? ControlSwingType;
-        public double? ControlSwingPrice;
-        public DateTime? ControlSwingTime;
-
-        // The counter-direction cluster(s) currently being contested for
-        // control of this narrative (if any) -- separate from
-        // SupportingCluster, which supports the ORIGINAL direction. Round 2
-        // fix: plural, since more than one counter-narrative can contest
-        // the same opportunity over time (display/bookkeeping only -- not
-        // consumed by any control-transition decision).
-        public readonly List<PoiCluster> ContestingClusters = new List<PoiCluster>();
-
-        // Explicit reverse link(s) (Finding 9 fix; Round 2 multiplicity fix,
-        // audit section 21): set on THIS opportunity when it was itself
-        // created as a counter-direction POI's own narrative, pointing at
-        // EVERY opposite-direction opportunity that was genuinely in its
-        // own control at that moment. Established once, at creation time --
-        // never inferred later by recency. The old "most recently activated
-        // opposite" tie-break is REMOVED: if more than one opposite-direction
-        // narrative qualified, this counter-narrative is genuinely
-        // contesting ALL of them, and its own retirement/reaction-swing
-        // hands control back to every one of them independently (same
-        // multiplicity-preservation reasoning as H4SetupEngine's Weekly->H4
-        // authorization fix).
-        public readonly List<string> ContestingOfWeeklyOpportunityIds = new List<string>();
-
         public DateTime? TerminationTime;
         public string TerminationReason;
 
         public int RetouchCounter = 0; // WeeklyRetouchNumber source
+    }
+
+    // Strategy clarification (follow-up round, 2026-08-13, Parts 21-33):
+    // "current market directional phase" (singular, Part 21/29's own
+    // phrasing) -- ONE instance per run, not one per WeeklyOpportunity.
+    // Separates POI VALIDITY (WeeklyOpportunity, above -- fully independent
+    // regardless of phase, spec section 10's concurrency preserved intact)
+    // from DIRECTIONAL TRADE PERMISSION (this object -- gates whether a
+    // valid same-direction WeeklyOpportunity may currently authorize a NEW
+    // H4Setup). State is never a hard-coded permanent bias (Part 29): it
+    // transitions BuyControl <-> SellControl via Neutral exactly per spec
+    // section 3's confirmed state machine, just evaluated once globally
+    // instead of independently per Weekly opportunity.
+    public class DirectionalPhase
+    {
+        // Null = no phase has ever been established yet (bootstrap, before
+        // the very first Weekly opportunity activates).
+        public ControlState? State;
+        public DateTime? EstablishedTime;
+        public string SourcePoiId;
+        public SwingType? SourceSwingType;
+        public double? SourceSwingPrice;
+        public DateTime? SourceSwingTime;
+        public string TransitionReason;
     }
 
     public enum RejectionCode
@@ -318,6 +342,45 @@ namespace cAlgo.Robots.ICT_S1
         public DateTime? TerminatedTime;
         public string TerminationReason;
 
+        // ==================== M5 EXECUTION COMPLETION (Part 12) ====================
+        // Scoped to the H4 reaction, not any one M5Attempt, because it spans
+        // however many sequential Attempts occur before either completion
+        // or the reaction's own termination/supersession.
+        public M5ExecutionState M5ExecutionState = M5ExecutionState.Active;
+
+        // Completion baseline: (re)anchored to whichever M5Attempt most
+        // recently FILLED under this setup (M5ExecutionEngine.OnAttemptFilled)
+        // -- each fresh fill (e.g. after a non-completing SL re-entry) resets
+        // this to that attempt's OWN entry/stop swing pair, since completion
+        // is evaluated relative to "has price advanced past what would
+        // invalidate THIS live trade's own thesis", not the very first
+        // attempt ever made under this reaction.
+        public int InitialEntrySwingIdx = -1;
+        public double InitialEntrySwingPrice;
+        public int InitialStopSwingIdx = -1;
+        public double InitialStopSwingPrice;
+        public DateTime? InitialEntryTime; // fill time
+
+        // H2 (BUY) / L2 (SELL) -- the continuation swing confirmed after entry.
+        public int? PostEntryContinuationSwingIdx;
+        public double? PostEntryContinuationSwingPrice;
+        public DateTime? PostEntryContinuationSwingTime;
+
+        // L2 (BUY) / H2 (SELL) -- the pullback swing confirmed after the
+        // continuation swing; its price relative to Initial*StopSwingPrice
+        // is the actual completion test.
+        public int? CompletionPullbackSwingIdx;
+        public double? CompletionPullbackSwingPrice;
+        public DateTime? CompletionPullbackSwingTime;
+
+        public DateTime? M5ExecutionCompletedTime;
+        public string M5ExecutionCompletionReason;
+
+        // ==================== H4 SUPERSESSION (Part 15) ====================
+        public int? SupersededBySwingIdx;
+        public double? SupersededBySwingPrice;
+        public DateTime? SupersededTime;
+
         public int WeeklyRetouchNumber; // which Weekly retouch spawned this setup
 
         public bool HasOpenAttempt
@@ -343,10 +406,12 @@ namespace cAlgo.Robots.ICT_S1
         public SwingType EntrySwingType;
         public double EntrySwingPrice;
         public DateTime EntrySwingTime;
+        public int EntrySwingIdx = -1; // stable structural identity -- Part 12, so H4Setup's completion baseline can reference it exactly
 
         public SwingType StopSwingType;
         public double StopSwingPrice;
         public DateTime StopSwingTime;
+        public int StopSwingIdx = -1;
 
         // Transient -- set by M5ExecutionEngine.TryMoveOrder immediately
         // before it overwrites Entry/StopSwing* with the new pairing, so

@@ -85,7 +85,12 @@ namespace cAlgo.Robots.ICT_S1
         Created,
         Impacted,
         Retouched,
-        Terminated
+        Terminated,
+        // Strategy clarification (follow-up round), Parts 14-16, 39: a
+        // SUCCESS outcome -- distinct from Terminated (failure) -- the
+        // market structurally advanced past this reaction's own protected
+        // swing.
+        Superseded
     }
 
     public class H4SetupEvent
@@ -107,6 +112,7 @@ namespace cAlgo.Robots.ICT_S1
         public readonly List<H4Setup> Setups = new List<H4Setup>();
         private readonly Queue<H4SetupEvent> _eventQueue = new Queue<H4SetupEvent>();
         private readonly Queue<RejectionEvent> _rejectionQueue = new Queue<RejectionEvent>();
+        private int _h4SwingCheckIdx = -1; // incremental cursor for CheckSupersession
 
         public H4SetupEngine(PoiMarketEngine h4Engine, PoiLifecycleTracker h4Tracker, WeeklyOpportunityEngine weeklyEngine, double pipSize)
         {
@@ -135,6 +141,13 @@ namespace cAlgo.Robots.ICT_S1
         // see WeeklyOpportunityEngine.Update for the same pattern).
         public void Update(List<PoiLifecycleEvent> poiEvents)
         {
+            // Checked BEFORE processing this cycle's POI events, so a
+            // supersession detected on this very bar already blocks a
+            // same-bar HandleNewImpact from joining the just-superseded
+            // reaction (FindLiveSetupForSwing already excludes non-Impacted
+            // setups, but ordering here keeps the sequence causally clean).
+            CheckSupersession();
+
             foreach (var ev in poiEvents)
             {
                 switch (ev.Type)
@@ -151,6 +164,51 @@ namespace cAlgo.Robots.ICT_S1
                         break;
                 }
             }
+        }
+
+        // Strategy clarification (follow-up round), Parts 14-16, 39, 44: a
+        // live H4 reaction is SUPERSEDED (a SUCCESS outcome, not a failure)
+        // the moment a NEW H4-timeframe swing of its OWN protected-swing
+        // kind confirms BEYOND (better than) its own protected level -- the
+        // market has structurally advanced past this reaction's own
+        // reference, and new H4 POIs now belong to that new structure
+        // (they'll naturally create/join a DIFFERENT H4Setup via
+        // FindLiveSetupForSwing's swing-identity keying -- this method only
+        // needs to stop R1 from continuing to accept fresh M5 attempts in
+        // parallel with R2). Incremental cursor scan over the H4 engine's
+        // own raw swing Events (same technique as
+        // WeeklyOpportunityEngine.ComputeGlobalNeutralTransition) -- a pure
+        // structural fact, independent of whether any new H4 POI has
+        // actually impacted yet.
+        private void CheckSupersession()
+        {
+            var events = _h4Engine.Events;
+            for (int i = _h4SwingCheckIdx + 1; i < events.Count; i++)
+            {
+                var ev = events[i];
+                var t = ev.ConfirmIdx >= 0 && ev.ConfirmIdx < _h4Engine.BT.Count ? _h4Engine.BT[ev.ConfirmIdx] : default(DateTime);
+
+                foreach (var setup in Setups)
+                {
+                    if (setup.Status != H4SetupStatus.Impacted && setup.Status != H4SetupStatus.Watching) continue;
+
+                    bool bull = setup.Direction == Direction.Buy;
+                    int wantKind = bull ? 1 : 0; // BUY protected by a Low -> superseded by a NEW higher Low; SELL protected by a High -> superseded by a NEW lower High
+                    if (ev.Kind != wantKind) continue;
+                    if (ev.SwingIdx == setup.ProtectedSwingIdx) continue; // same swing, not a new one
+                    if (t <= setup.ProtectedSwingTime) continue; // must be genuinely newer
+
+                    bool supersedes = bull ? ev.Price > setup.ProtectedSwingPrice : ev.Price < setup.ProtectedSwingPrice;
+                    if (!supersedes) continue;
+
+                    setup.Status = H4SetupStatus.Superseded;
+                    setup.SupersededBySwingIdx = ev.SwingIdx;
+                    setup.SupersededBySwingPrice = ev.Price;
+                    setup.SupersededTime = t;
+                    _eventQueue.Enqueue(new H4SetupEvent { Type = H4SetupEventType.Superseded, Setup = setup, TriggeringPoi = null, Time = t, Note = $"New protected H4 {setup.ProtectedSwingType} @ {ev.Price} supersedes this reaction's own {setup.ProtectedSwingType} @ {setup.ProtectedSwingPrice}" });
+                }
+            }
+            _h4SwingCheckIdx = events.Count - 1;
         }
 
         // Call every tick with current quotes and the ACTUAL current time
@@ -285,8 +343,9 @@ namespace cAlgo.Robots.ICT_S1
             t == PoiTypeLabel.IFOB || t == PoiTypeLabel.IFVG || t == PoiTypeLabel.IRB || t == PoiTypeLabel.IVI;
 
         // CRITICAL 2 + CRITICAL 3: returns EVERY currently-qualifying Weekly
-        // opportunity (temporally valid AND currently in its own control) --
-        // no tie-break, no single "chosen" winner (Round 2 fix, see
+        // opportunity (temporally valid AND the current global
+        // DirectionalPhase currently permits this direction -- Parts 21-34)
+        // -- no tie-break, no single "chosen" winner (Round 2 fix, see
         // HandleNewImpact). The bool tells the caller whether ANY temporally-
         // valid same-direction candidate existed at all (for accurate
         // rejection-code selection: NO_WEEKLY_PARENT vs NOT_IN_CONTROL).
@@ -308,9 +367,17 @@ namespace cAlgo.Robots.ICT_S1
 
                 anyTemporallyValid = true;
 
-                bool inOwnControl = (opp.Control == ControlState.BuyControl && opp.Direction == Direction.Buy)
-                                  || (opp.Control == ControlState.SellControl && opp.Direction == Direction.Sell);
-                if (!inOwnControl) continue; // Critical 3 gate: not currently in control of its own narrative
+                // Strategy clarification (follow-up round, Parts 21-34):
+                // directional trade permission now comes from the single
+                // global DirectionalPhase, not from a per-opportunity
+                // Control field -- POI validity (this opportunity being
+                // Active) and directional permission (the phase currently
+                // matching this opportunity's own direction) are separate
+                // gates, both required.
+                var phaseState = _weeklyEngine.Phase.State;
+                bool phasePermits = (phaseState == ControlState.BuyControl && opp.Direction == Direction.Buy)
+                                  || (phaseState == ControlState.SellControl && opp.Direction == Direction.Sell);
+                if (!phasePermits) continue; // Critical 3 gate: current phase does not currently permit this direction
 
                 qualifying.Add(opp);
             }
@@ -362,7 +429,12 @@ namespace cAlgo.Robots.ICT_S1
             // the first one found.
             foreach (var setup in FindOwningSetups(ev.Snapshot))
             {
-                if (setup.Status == H4SetupStatus.Terminated) continue;
+                // Strategy clarification (follow-up round): Superseded is a
+                // SUCCESS outcome, already final -- do not overwrite it with
+                // a failure-labeled Terminated just because its supporting
+                // POIs eventually go terminal too. Its execution job is
+                // already done either way.
+                if (setup.Status == H4SetupStatus.Terminated || setup.Status == H4SetupStatus.Superseded) continue;
                 if (setup.SupportingCluster.HasLiveMember) continue;
 
                 Terminate(setup, $"All supporting H4 POIs terminal (last: {ev.Snapshot.TypeAtActivation} {ev.Type})", ev.Time);
