@@ -309,7 +309,12 @@ namespace cAlgo.Robots.ICT_S1
             {
                 var setup = FindSetup(a.H4SetupId);
                 var weekly = setup != null ? FindWeekly(setup.WeeklyOpportunityId) : null;
-                _journal.LogTradeClosed(a, setup, weekly, _weeklyOppEngine.Phase);
+                // Concurrency mandate (Owner Answer A): Control is per-
+                // context now -- resolve the SPECIFIC context that governed
+                // `weekly` (this trade's own primary Weekly opportunity),
+                // not a single shared phase.
+                var context = _weeklyOppEngine.GetContext(weekly?.DirectionalContextId);
+                _journal.LogTradeClosed(a, setup, weekly, context);
                 _viz.DrawAttemptClosed(a, Server.Time);
             };
             _tradeManager.ManualInterventionDetected += (a, detail) => _journal.LogManualIntervention(a, detail, Server.Time);

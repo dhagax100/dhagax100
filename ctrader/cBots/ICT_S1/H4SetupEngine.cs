@@ -261,7 +261,6 @@ namespace cAlgo.Robots.ICT_S1
                 var code = anyTemporallyValidCandidate
                     ? RejectionCode.H4_POI_REJECTED_NARRATIVE_NOT_IN_CONTROL
                     : RejectionCode.H4_POI_REJECTED_NO_WEEKLY_PARENT;
-                var phase = _weeklyEngine.Phase;
                 var rejection = new RejectionEvent
                 {
                     Code = code,
@@ -274,14 +273,24 @@ namespace cAlgo.Robots.ICT_S1
                 };
                 if (anyTemporallyValidCandidate)
                 {
-                    // Part 48: full phase-forensic context, so a SELL-suppression
-                    // audit pass can answer "why" from the journal alone.
-                    rejection.PhaseStateAtRejection = phase.State;
-                    rejection.PhaseEstablishedTime = phase.EstablishedTime;
-                    rejection.PhaseSourcePoiId = phase.SourcePoiId;
-                    rejection.PhaseSourcePoiType = phase.SourcePoiType;
+                    // Part 48, concurrency-mandate update: Control is now
+                    // per-context (Owner Answer A), so there is no single
+                    // shared "the phase" to record -- each temporally-valid
+                    // same-direction candidate can belong to a DIFFERENT
+                    // context. Parallel/index-aligned lists let a SELL-
+                    // suppression audit pass answer "why" (which context,
+                    // in what state) for every candidate, from the journal
+                    // alone.
                     rejection.TemporallyValidSameDirectionWeeklyIds = new List<string>();
-                    foreach (var w in temporallyValid) rejection.TemporallyValidSameDirectionWeeklyIds.Add(w.WeeklyOpportunityId);
+                    rejection.TemporallyValidContextIds = new List<string>();
+                    rejection.TemporallyValidContextStates = new List<string>();
+                    foreach (var w in temporallyValid)
+                    {
+                        var ctx = _weeklyEngine.GetContext(w.DirectionalContextId);
+                        rejection.TemporallyValidSameDirectionWeeklyIds.Add(w.WeeklyOpportunityId);
+                        rejection.TemporallyValidContextIds.Add(w.DirectionalContextId);
+                        rejection.TemporallyValidContextStates.Add(ctx?.State?.ToString());
+                    }
                 }
                 _rejectionQueue.Enqueue(rejection);
                 return;
@@ -359,6 +368,12 @@ namespace cAlgo.Robots.ICT_S1
                 if (setup.SupportingWeeklyOpportunityIds.Contains(weekly.WeeklyOpportunityId)) continue;
                 setup.SupportingWeeklyOpportunityIds.Add(weekly.WeeklyOpportunityId);
                 weekly.H4Setups.Add(setup); // Finding 11 fix -- same shared setup object, not a copy
+
+                // Concurrency mandate Part 38: record which context(s)
+                // actually authorized this reaction, supplementing (not
+                // replacing) the Weekly lineage above.
+                if (weekly.DirectionalContextId != null && !setup.SupportingDirectionalContextIds.Contains(weekly.DirectionalContextId))
+                    setup.SupportingDirectionalContextIds.Add(weekly.DirectionalContextId);
             }
         }
 
@@ -366,12 +381,20 @@ namespace cAlgo.Robots.ICT_S1
             t == PoiTypeLabel.IFOB || t == PoiTypeLabel.IFVG || t == PoiTypeLabel.IRB || t == PoiTypeLabel.IVI;
 
         // CRITICAL 2 + CRITICAL 3: returns EVERY currently-qualifying Weekly
-        // opportunity (temporally valid AND the current global
-        // DirectionalPhase currently permits this direction -- Parts 21-34)
-        // -- no tie-break, no single "chosen" winner (Round 2 fix, see
-        // HandleNewImpact). The bool tells the caller whether ANY temporally-
-        // valid same-direction candidate existed at all (for accurate
-        // rejection-code selection: NO_WEEKLY_PARENT vs NOT_IN_CONTROL).
+        // opportunity (temporally valid AND ITS OWN DirectionalPhaseContext
+        // currently permits this direction) -- no tie-break, no single
+        // "chosen" winner (Round 2 fix, see HandleNewImpact). The bool
+        // tells the caller whether ANY temporally-valid same-direction
+        // candidate existed at all (for accurate rejection-code selection:
+        // NO_WEEKLY_PARENT vs NOT_IN_CONTROL).
+        //
+        // Concurrency mandate (2026-08-13, Owner Answer A): each opportunity
+        // is checked against its OWN context (WeeklyOpportunity.
+        // DirectionalContextId), not one shared global phase -- this is
+        // exactly what lets a genuinely independent fresh BUY narrative and
+        // a genuinely independent fresh SELL narrative both qualify at the
+        // same historical moment, each governed by its own context's own
+        // Control evolution.
         private (List<WeeklyOpportunity> qualifying, List<WeeklyOpportunity> temporallyValid) FindArmingWeeklyOpportunities(Direction dir, DateTime h4EventTime)
         {
             var qualifying = new List<WeeklyOpportunity>();
@@ -390,17 +413,15 @@ namespace cAlgo.Robots.ICT_S1
 
                 temporallyValid.Add(opp); // Part 48 forensic journal: every temporally-valid same-direction candidate, not just a bool
 
-                // Strategy clarification (follow-up round, Parts 21-34):
-                // directional trade permission now comes from the single
-                // global DirectionalPhase, not from a per-opportunity
-                // Control field -- POI validity (this opportunity being
-                // Active) and directional permission (the phase currently
-                // matching this opportunity's own direction) are separate
-                // gates, both required.
-                var phaseState = _weeklyEngine.Phase.State;
-                bool phasePermits = (phaseState == ControlState.BuyControl && opp.Direction == Direction.Buy)
-                                  || (phaseState == ControlState.SellControl && opp.Direction == Direction.Sell);
-                if (!phasePermits) continue; // Critical 3 gate: current phase does not currently permit this direction
+                // POI validity (this opportunity being Active) and
+                // directional permission (this opportunity's OWN context
+                // currently matching its own direction) are separate gates,
+                // both required.
+                var ctx = _weeklyEngine.GetContext(opp.DirectionalContextId);
+                var contextState = ctx?.State;
+                bool contextPermits = (contextState == ControlState.BuyControl && opp.Direction == Direction.Buy)
+                                    || (contextState == ControlState.SellControl && opp.Direction == Direction.Sell);
+                if (!contextPermits) continue; // Critical 3 gate: this opportunity's own context does not currently permit this direction
 
                 qualifying.Add(opp);
             }

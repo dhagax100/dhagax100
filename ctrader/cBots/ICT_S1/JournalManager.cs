@@ -74,10 +74,16 @@ namespace cAlgo.Robots.ICT_S1
         // lineage on every trade row, so a reviewer can answer "why did
         // this exact trade exist" from this file alone -- WeeklyPoiIds/
         // H4PoiIds list every supporting POI (not just the bounding box),
-        // ControlAtTradeTime/ControlSourcePoiId capture the single global
-        // DirectionalPhase's state at journal-write time (follow-up round,
-        // Parts 17-37 -- no longer a per-Weekly-opportunity field),
-        // H4ProtectedSwingIdx is the stable reaction identity (Part 15),
+        // ControlAtTradeTime/ControlSourcePoiId/ControlContextId capture
+        // the governing DirectionalPhaseContext's state at journal-write
+        // time (concurrency mandate, 2026-08-13, Owner Answer A: Control is
+        // scoped per-context, not one global phase as the immediately-prior
+        // round had it -- ControlContextId records WHICH context),
+        // AuthorizingDirectionalContextIds lists every context that
+        // actually authorized this H4 reaction (supplementing, not
+        // replacing, SupportingWeeklyOpportunityIDs -- Part 38 of the
+        // concurrency mandate), H4ProtectedSwingIdx is the stable reaction
+        // identity (Part 15),
         // M5ExecutionActivationTime is the swing-pairing window boundary,
         // and ExitPriceSource proves which of HistoricalTrade/QuoteFallback
         // actually supplied ExitPrice (Part 21).
@@ -100,7 +106,7 @@ namespace cAlgo.Robots.ICT_S1
         // what new swing -- its own H4 reaction was later superseded. No
         // existing column was reordered or removed.
         private const string TradeSummaryHeader = "StrategyVersion,Symbol,TradeID,PositionID,WeeklyOpportunityID,SupportingWeeklyOpportunityIDs,WeeklyPoiIds,PoiClusterID,H4SetupID,H4PoiIds,H4ProtectedSwingIdx,M5AttemptID,AttemptNumber," +
-            "TradeDirection,WeeklyOpportunityDirection,WeeklyActivationTime,WeeklyPOITop,WeeklyPOIBottom,ControlAtTradeTime,ControlSourcePoiId," +
+            "TradeDirection,WeeklyOpportunityDirection,WeeklyActivationTime,WeeklyPOITop,WeeklyPOIBottom,ControlAtTradeTime,ControlSourcePoiId,ControlContextId,AuthorizingDirectionalContextIds," +
             "H4Route,H4ProtectedSwingType,H4ProtectedSwingPrice,H4ProtectedSwingTime,WeeklyRetouchNumber,H4SetupStatusAtClose,M5ExecutionStateAtClose," +
             "M5ExecutionActivationTime,M5EntrySwingType,M5EntrySwingPrice,M5EntrySwingTime,M5StopSwingType,M5StopSwingPrice,M5StopSwingTime," +
             "FirstPendingOrderCreatedTime,PendingOrderCreatedTime,PendingOrderModificationCount,EntryTime,RequestedEntryPrice,ActualFillPrice," +
@@ -112,26 +118,40 @@ namespace cAlgo.Robots.ICT_S1
 
         // Same schema for both files -- History is the append-every-change
         // log, Summary is the one-row-latest-state view of it. No Control
-        // columns here anymore (follow-up round, Parts 17-37): Control is
-        // no longer a WeeklyOpportunity property -- see
-        // S1_DirectionalPhaseHistory_<run>.csv for the single global phase's
-        // transition history instead.
+        // columns here: Control is not a WeeklyOpportunity property -- see
+        // S1_DirectionalPhaseHistory_<run>.csv for the governing
+        // DirectionalPhaseContext(s)' transition history instead.
         private const string OpportunitySummaryHeader = "Symbol,WeeklyOpportunityID,Direction,ActivationTime,Status,TerminationTime,TerminationReason," +
             "SupportingPoiCount,H4SetupCount,RetouchCounter";
 
-        // Part 47: full DirectionalPhase transition history -- every field
-        // needed to spot a misclassified source POI (e.g. an Old-family POI
-        // that shouldn't have reactivated Neutral) immediately, without
-        // cross-referencing other files.
-        private const string PhaseHistoryHeader = "Symbol,Timestamp,PreviousState,NewState," +
+        // Part 47: full DirectionalPhaseContext transition history -- every
+        // field needed to spot a misclassified source POI (e.g. an Old-
+        // family POI that shouldn't have reactivated Neutral) immediately,
+        // without cross-referencing other files. ContextId column added
+        // (concurrency mandate, Owner Answer A): with Control scoped per
+        // context rather than one shared global phase, a row is meaningless
+        // without saying WHICH context transitioned. ContextOriginMssToUp/
+        // ContextOriginMssPrice let a reviewer see which Weekly Market
+        // Structure Shift (if any -- blank for the one pre-MSS bootstrap
+        // context) this context's own boundary came from, directly on every
+        // row, without cross-referencing a separate context-registry file
+        // (none exists -- Contexts live only in memory/these rows).
+        private const string PhaseHistoryHeader = "Symbol,Timestamp,ContextId,ContextOriginMssToUp,ContextOriginMssPrice,PreviousState,NewState," +
             "SourcePoiId,SourcePoiType,SourcePoiDirection,SourcePoiFamily,SourcePoiOriginBucket,SourcePoiLifecycleState," +
             "SourceReactionSwingType,SourceReactionSwingPrice,SourceReactionSwingTime,TransitionReason";
 
         // Part 48: every H4_POI_REJECTED_NARRATIVE_NOT_IN_CONTROL rejection
         // with full phase-forensic context -- proves numerically WHY each
         // SELL (or BUY) candidate was suppressed, from this file alone.
+        // Concurrency mandate update: the single PhaseStateAtRejection/
+        // PhaseSourcePoiId columns no longer make sense once Control is
+        // per-context -- replaced with the semicolon-joined, index-aligned
+        // TemporallyValidContextIDs/TemporallyValidContextStates (one entry
+        // per WeeklyID in TemporallyValidSameDirectionWeeklyIDs), so a
+        // reviewer can see EXACTLY which context each candidate belonged to
+        // and why that specific context didn't permit it.
         private const string H4PhaseRejectionHeader = "Symbol,Timestamp,H4PoiId,H4PoiType,Direction,H4SourceSwingIdx," +
-            "TemporallyValidSameDirectionWeeklyIDs,PhaseStateAtRejection,PhaseEstablishedTime,PhaseSourcePoiId,PhaseSourcePoiType,RejectionNote";
+            "TemporallyValidSameDirectionWeeklyIDs,TemporallyValidContextIDs,TemporallyValidContextStates,RejectionNote";
 
         public string SymbolName;
         public string StrategyVersion = "S1-v1";
@@ -179,16 +199,20 @@ namespace cAlgo.Robots.ICT_S1
             WriteOpportunityRow(o);
         }
 
-        // Strategy clarification (follow-up round, Parts 21-34, 49): the
-        // single global DirectionalPhase's own transition history --
-        // "the report must make Control understandable as market behavior,
-        // not just object mutation" (Part 49). Direction column is blank
-        // (a phase transition isn't itself a Buy/Sell POI event); NewState/
-        // PreviousState carry the actual transition.
+        // Concurrency mandate (2026-08-13, Owner Answer A), Parts 21-34, 49:
+        // a DirectionalPhaseContext's own transition history -- "the report
+        // must make Control understandable as market behavior, not just
+        // object mutation" (Part 49). Direction column is blank (a phase
+        // transition isn't itself a Buy/Sell POI event); NewState/
+        // PreviousState carry the actual transition. EventLog's PoiId
+        // column (7th positional arg) now carries ContextId (not
+        // SourcePoiId) since a reader needs to know WHICH context
+        // transitioned at least as much as which POI triggered it -- the
+        // dedicated PhaseHistory row below carries both explicitly.
         public void LogPhaseTransition(DirectionalPhaseEvent ev)
         {
             WriteEventRow(ev.Time, "Weekly", "DIRECTIONAL_PHASE_CHANGED", "",
-                "", "", ev.SourcePoi?.S1PoiId ?? "", "", "", "",
+                "", "", ev.ContextId ?? "", "", "", "",
                 "", "", "", ev.OldState?.ToString(), ev.NewState.ToString(), ev.Reason, "");
             LogPhaseHistoryRow(ev);
         }
@@ -196,13 +220,13 @@ namespace cAlgo.Robots.ICT_S1
         // Part 47: dedicated file, full forensic detail per transition --
         // proves at a glance whether a source POI was correctly classified
         // (e.g. an Old-family POI must never appear here as a reactivation
-        // source).
+        // source), and (concurrency mandate) which context it happened in.
         private void LogPhaseHistoryRow(DirectionalPhaseEvent ev)
         {
             var s = ev.SourcePoi;
             var row = string.Join(",", new[]
             {
-                Csv(SymbolName), Csv(ev.Time.ToString("O")), Csv(ev.OldState?.ToString()), Csv(ev.NewState.ToString()),
+                Csv(SymbolName), Csv(ev.Time.ToString("O")), Csv(ev.ContextId), Csv(ev.ContextOriginMssToUp?.ToString()), Csv(ev.ContextOriginMssPrice?.ToString()), Csv(ev.OldState?.ToString()), Csv(ev.NewState.ToString()),
                 Csv(s?.S1PoiId), Csv(s?.TypeAtActivation.ToString()), Csv(s?.Direction.ToString()), Csv(s?.Family.ToString()), Csv(s?.OriginBucket.ToString()), Csv(s?.LifecycleState.ToString()),
                 Csv(s?.RelevantReactionSwingType?.ToString()), Csv(s?.RelevantReactionSwingPrice?.ToString()), Csv(s?.RelevantReactionSwingConfirmationTime?.ToString("O")), Csv(ev.Reason)
             });
@@ -289,11 +313,17 @@ namespace cAlgo.Robots.ICT_S1
 
         private void LogH4PhaseRejectionRow(RejectionEvent rej)
         {
+            // Concurrency mandate: three parallel/index-aligned semicolon-
+            // joined lists instead of one shared PhaseStateAtRejection --
+            // each temporally-valid candidate can belong to a different
+            // context now.
             string weeklyIds = rej.TemporallyValidSameDirectionWeeklyIds != null ? string.Join(";", rej.TemporallyValidSameDirectionWeeklyIds) : "";
+            string contextIds = rej.TemporallyValidContextIds != null ? string.Join(";", rej.TemporallyValidContextIds) : "";
+            string contextStates = rej.TemporallyValidContextStates != null ? string.Join(";", rej.TemporallyValidContextStates) : "";
             var row = string.Join(",", new[]
             {
                 Csv(SymbolName), Csv(rej.Time.ToString("O")), Csv(rej.PoiId), Csv(rej.PoiType?.ToString()), Csv(rej.Direction.ToString()), Csv(rej.SourceSwingIdx.ToString()),
-                Csv(weeklyIds), Csv(rej.PhaseStateAtRejection?.ToString()), Csv(rej.PhaseEstablishedTime?.ToString("O")), Csv(rej.PhaseSourcePoiId), Csv(rej.PhaseSourcePoiType?.ToString()), Csv(rej.Note)
+                Csv(weeklyIds), Csv(contextIds), Csv(contextStates), Csv(rej.Note)
             });
             _h4PhaseRejectionBuffer.Add(row);
             if (_h4PhaseRejectionBuffer.Count >= 20) FlushH4PhaseRejection();
@@ -315,10 +345,15 @@ namespace cAlgo.Robots.ICT_S1
         }
 
         // ---------------- Trade Summary ----------------
-        // `phase` (follow-up round, Parts 17-37): the single global
-        // DirectionalPhase, not per-Weekly anymore -- ControlAtTradeTime/
-        // ControlSourcePoiId now reflect its state at journal-write time.
-        public void LogTradeClosed(M5Attempt attempt, H4Setup setup, WeeklyOpportunity weekly, DirectionalPhase phase)
+        // `phase` (concurrency mandate, 2026-08-13, Owner Answer A): the
+        // specific DirectionalPhaseContext that governed `weekly` (the
+        // trade's own primary Weekly opportunity) -- resolved by the
+        // caller via WeeklyOpportunityEngine.GetContext(weekly.
+        // DirectionalContextId), since JournalManager itself has no
+        // reference to the engine. ControlAtTradeTime/ControlSourcePoiId/
+        // ControlContextId reflect THAT context's state at journal-write
+        // time -- not a single shared global phase, which no longer exists.
+        public void LogTradeClosed(M5Attempt attempt, H4Setup setup, WeeklyOpportunity weekly, DirectionalPhaseContext phase)
         {
             // Weekly zone bounding box across all supporting cluster members
             // -- lets the trade be checked directly against the chart
@@ -354,6 +389,10 @@ namespace cAlgo.Robots.ICT_S1
             // lineage -- every Weekly opportunity that supports this trade's
             // H4 reaction, not just the display-primary one in WeeklyOpportunityID.
             string supportingWeeklyIds = setup?.SupportingWeeklyOpportunityIds != null ? string.Join(";", setup.SupportingWeeklyOpportunityIds) : "";
+            // Concurrency mandate Part 38: every context that authorized
+            // this reaction (supplements, does not replace, the Weekly
+            // lineage above).
+            string authorizingContextIds = setup?.SupportingDirectionalContextIds != null ? string.Join(";", setup.SupportingDirectionalContextIds) : "";
 
             var row = string.Join(",", new[]
             {
@@ -361,7 +400,7 @@ namespace cAlgo.Robots.ICT_S1
                 Csv(weekly?.WeeklyOpportunityId), Csv(supportingWeeklyIds), Csv(weeklyPoiIds), Csv(setup?.SupportingCluster?.PoiClusterId), Csv(setup?.H4SetupId), Csv(h4PoiIds), Csv(setup?.ProtectedSwingIdx.ToString()),
                 Csv(attempt.M5AttemptId), Csv(attempt.AttemptNumber.ToString()),
                 Csv(attempt.Direction.ToString()), Csv(weekly?.Direction.ToString()), Csv(weekly?.ActivationTime.ToString("O")), Csv(weeklyTop), Csv(weeklyBottom),
-                Csv(phase?.State?.ToString()), Csv(phase?.SourcePoiId),
+                Csv(phase?.State?.ToString()), Csv(phase?.SourcePoiId), Csv(phase?.ContextId), Csv(authorizingContextIds),
                 Csv(setup?.Route.ToString()), Csv(setup?.ProtectedSwingType.ToString()), Csv(setup?.ProtectedSwingPrice.ToString()), Csv(setup?.ProtectedSwingTime.ToString("O")), Csv(setup?.WeeklyRetouchNumber.ToString()), Csv(setup?.Status.ToString()), Csv(setup?.M5ExecutionState.ToString()),
                 Csv(setup?.M5ExecutionActivationTime?.ToString("O")), Csv(attempt.EntrySwingType.ToString()), Csv(attempt.EntrySwingPrice.ToString()), Csv(attempt.EntrySwingTime.ToString("O")), Csv(attempt.StopSwingType.ToString()), Csv(attempt.StopSwingPrice.ToString()), Csv(attempt.StopSwingTime.ToString("O")),
                 Csv(attempt.FirstPendingOrderCreatedTime?.ToString("O")), Csv(attempt.PendingOrderCreatedTime?.ToString("O")), Csv(attempt.PendingOrderModificationCount.ToString()), Csv(attempt.EntryTime?.ToString("O")), Csv(attempt.RequestedEntryPrice.ToString()), Csv(attempt.ActualFillPrice?.ToString()),
