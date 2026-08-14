@@ -51,12 +51,9 @@ namespace cAlgo.Robots.ICT_S1
         Retired
     }
 
-    // Directional Control -- spec section 3. Strategy-owner-confirmed
-    // (concurrency mandate, 2026-08-13, Owner Answer A): scoped per genuinely-
-    // independent DirectionalPhaseContext, not one system-wide gate and not
-    // one instance per WeeklyOpportunity (that was the earlier, over-
-    // fragmented model, corrected once already -- see DirectionalPhaseContext
-    // below for the current model and why it isn't either extreme).
+    // Directional Control -- spec section 3. Scoped per-narrative (one
+    // instance lives on the WeeklyOpportunity that is being contested),
+    // never a system-wide gate.
     public enum ControlState
     {
         BuyControl,
@@ -152,9 +149,6 @@ namespace cAlgo.Robots.ICT_S1
         public static string NextM5AttemptId() => "M5" + (++_m5Attempt).ToString("D5");
         public static string NextTradeId() => "T" + (++_trade).ToString("D5");
         public static string NextOrderId() => "O" + (++_order).ToString("D5");
-
-        private static int _directionalContext = 0;
-        public static string NextDirectionalContextId() => "CTX" + (++_directionalContext).ToString("D4");
     }
 
     // Frozen S1 representation of a POI -- spec section 2.1. Created once,
@@ -241,18 +235,13 @@ namespace cAlgo.Robots.ICT_S1
     }
 
     // Strategy clarification (follow-up round, 2026-08-13, Parts 17-37):
-    // WeeklyOpportunity is PURELY a POI-validity/lineage object --
+    // WeeklyOpportunity is now PURELY a POI-validity/lineage object --
     // individual family-specific validity, invalidation, lifecycle,
-    // retouch history. It does NOT carry its own Control -- that was the
-    // confirmed bug from an earlier round ("an independent simultaneous
-    // BUY_CONTROL universe" per Weekly POI, Part 21). Directional trade
-    // PERMISSION lives on whichever DirectionalPhaseContext this
-    // opportunity belongs to (DirectionalContextId, below) -- CONFIRMED
-    // UPDATED (concurrency mandate, 2026-08-13, Owner Answer A): Control
-    // is scoped per-context, not one single system-wide instance as the
-    // immediately-prior round had it. A context can own many
-    // WeeklyOpportunities of BOTH directions (Part 10: "same context does
-    // not mean same POI"); this field just says which one.
+    // retouch history. It NO LONGER carries its own Control -- that was
+    // the confirmed bug ("an independent simultaneous BUY_CONTROL universe"
+    // per Weekly POI, Part 21). Directional trade PERMISSION now lives on
+    // the single global DirectionalPhase object (see below), which
+    // WeeklyOpportunityEngine owns one instance of.
     public class WeeklyOpportunity
     {
         public string WeeklyOpportunityId;
@@ -263,93 +252,34 @@ namespace cAlgo.Robots.ICT_S1
         public PoiCluster SupportingCluster;
         public readonly List<H4Setup> H4Setups = new List<H4Setup>();
 
-        // Which DirectionalPhaseContext this opportunity's activation/
-        // retouch/retirement events feed into and are governed by -- set
-        // once, at activation (WeeklyOpportunityEngine.HandleNewImpact),
-        // never reassigned afterward (an opportunity does not change which
-        // narrative it belongs to mid-life).
-        public string DirectionalContextId;
-
         public DateTime? TerminationTime;
         public string TerminationReason;
 
         public int RetouchCounter = 0; // WeeklyRetouchNumber source
     }
 
-    // CONCURRENCY MANDATE, 2026-08-13, OWNER ANSWER A ("both fresh streams
-    // allowed") -- REPLACES the immediately-prior round's single global
-    // DirectionalPhase (ONE instance per run). That model could not
-    // represent a genuinely independent fresh BUY narrative and a
-    // genuinely independent fresh SELL narrative both existing at once
-    // (Owner-confirmed: this must be possible). It is also NOT a return to
-    // "one Control per WeeklyOpportunity" (the earlier, already-discredited
-    // over-fragmented model, Part 4/56 of the concurrency mandate) -- that
-    // model's own documented failure was a late-activating same-direction
-    // opportunity independently claiming Control while a real, already-in-
-    // progress counter-reaction elsewhere said otherwise.
-    //
-    // CONTEXT-MEMBERSHIP RULE (owner selected "B -- coarser movement-based
-    // grouping needed" over the zero-invention "1:1 WeeklyOpportunity"
-    // option, and asked this engineer to propose the rule -- ENGINEERING-
-    // PROPOSED, not independently owner-verified beyond that selection;
-    // flag for owner review):
-    //   A DirectionalPhaseContext's boundary is the Weekly timeframe's own
-    //   Market Structure Shift (MssEv, PoiMarketEngine.Msses) -- an
-    //   already-computed, Pine-native structural fact, not a new invented
-    //   rule. Every Weekly POI/opportunity that activates between one MSS
-    //   and the next OPPOSITE-direction MSS shares ONE context, regardless
-    //   of price overlap -- this is what actually captures "several Weekly
-    //   POIs inside the SAME current uptrend" (original owner clarification,
-    //   Part 27 of the forensic-audit mandate) beyond the narrower,
-    //   overlap-only WeeklyOpportunity/PoiCluster grouping (Finding 4).
-    //   A same-direction MSS re-confirmation does NOT open a new context
-    //   (still the same movement). When a NEW context opens, the OLD one is
-    //   not terminated or force-reset -- its existing members keep
-    //   evolving its Control independently using only their own events
-    //   (Part 63/64: POI validity/narrative state is never invalidated by
-    //   a newer, unrelated development) -- this is exactly what allows an
-    //   older still-live context and the newest context to simultaneously
-    //   hold opposite Control states, satisfying Owner Answer A.
-    //   Before the very first MSS ever fires, one bootstrap context (no MSS
-    //   provenance) is used, mirroring the prior round's global-bootstrap
-    //   rule exactly, just scoped.
-    //   A counter-direction Old/Aggressive-family POI's retirement flips
-    //   the Control of whichever context IT ITSELF is already a member of
-    //   (assigned at its own activation, like any other POI) -- never a
-    //   different context, and never fanned to every live context. This
-    //   answers Part 26 of the concurrency mandate ("do not fan X to all
-    //   contexts") without inventing a separate routing rule: membership
-    //   answers it because a counter-POI is simply a member of whichever
-    //   context was current when it activated, exactly like any continuation
-    //   POI is.
-    //
-    // This rule is ENGINEERING-PROPOSED (Part 54 labeling discipline) --
-    // it was not independently spelled out by the owner beyond selecting
-    // "propose the rule" -- and should be treated as reviewable, not as
-    // settled OWNER-CONFIRMED fact, until exercised against a real backtest.
-    public class DirectionalPhaseContext
+    // Strategy clarification (follow-up round, 2026-08-13, Parts 21-33):
+    // "current market directional phase" (singular, Part 21/29's own
+    // phrasing) -- ONE instance per run, not one per WeeklyOpportunity.
+    // Separates POI VALIDITY (WeeklyOpportunity, above -- fully independent
+    // regardless of phase, spec section 10's concurrency preserved intact)
+    // from DIRECTIONAL TRADE PERMISSION (this object -- gates whether a
+    // valid same-direction WeeklyOpportunity may currently authorize a NEW
+    // H4Setup). State is never a hard-coded permanent bias (Part 29): it
+    // transitions BuyControl <-> SellControl via Neutral exactly per spec
+    // section 3's confirmed state machine, just evaluated once globally
+    // instead of independently per Weekly opportunity.
+    public class DirectionalPhase
     {
-        public string ContextId;
-
-        // Null = no Control established yet in this context (bootstrap not
-        // yet reached -- mirrors the prior round's global-bootstrap null).
+        // Null = no phase has ever been established yet (bootstrap, before
+        // the very first Weekly opportunity activates).
         public ControlState? State;
         public DateTime? EstablishedTime;
-
-        // Provenance: how this CONTEXT (not its Control state) came into
-        // existence -- either the one pre-MSS bootstrap context, or a
-        // genuine Weekly MSS. Distinct from Source*/TransitionReason below,
-        // which describe the MOST RECENT Control transition inside this
-        // context, not the context's own origin.
-        public bool BootstrapOrigin;
-        public int OriginMssAtIdx = -1;
-        public double? OriginMssPrice;
-        public bool? OriginMssToUp;
-        public DateTime? OriginMssTime;
-
-        // Same forensic Source*/TransitionReason shape the prior round's
-        // single DirectionalPhase carried (Parts 47/48) -- now per-context.
         public string SourcePoiId;
+        // Part 47/48 forensic-journal enrichment: the frozen identity of
+        // the POI that established the CURRENT phase, captured directly
+        // (not re-derived by ID lookup later) so it's always available in
+        // exactly one place.
         public PoiTypeLabel? SourcePoiType;
         public Direction? SourcePoiDirection;
         public PoiFamily? SourcePoiFamily;
@@ -382,25 +312,15 @@ namespace cAlgo.Robots.ICT_S1
         // Part 48 forensic-journal fields -- populated only for
         // H4_POI_REJECTED_NARRATIVE_NOT_IN_CONTROL (the phase-suppression
         // path); null/default for the other rejection codes, which don't
-        // involve Directional Control. Lets a SELL-suppression forensic
-        // pass answer "why was this SELL candidate rejected" from the
-        // journal alone, without re-deriving Control state from other files.
-        //
-        // CONCURRENCY MANDATE UPDATE: with Control scoped per
-        // DirectionalPhaseContext (Owner Answer A) rather than one shared
-        // global phase, there is no single "the phase" to record anymore --
-        // different temporally-valid same-direction Weekly candidates can
-        // belong to DIFFERENT contexts with different states. The three
-        // lists below are parallel/index-aligned: entry i of
-        // TemporallyValidContextIds/States describes the context that
-        // TemporallyValidSameDirectionWeeklyIds[i]'s own Weekly opportunity
-        // belongs to. A candidate is only actually REJECTED here if EVERY
-        // one of its candidate contexts' states failed to permit its
-        // direction -- these lists prove that from the journal alone.
+        // involve DirectionalPhase. Lets a SELL-suppression forensic pass
+        // answer "why was this SELL candidate rejected" from the journal
+        // alone, without re-deriving Phase state from other files.
         public int SourceSwingIdx = -1;
+        public ControlState? PhaseStateAtRejection;
+        public DateTime? PhaseEstablishedTime;
+        public string PhaseSourcePoiId;
+        public PoiTypeLabel? PhaseSourcePoiType;
         public List<string> TemporallyValidSameDirectionWeeklyIds;
-        public List<string> TemporallyValidContextIds;
-        public List<string> TemporallyValidContextStates;
     }
 
     public class H4Setup
@@ -414,12 +334,6 @@ namespace cAlgo.Robots.ICT_S1
         // qualifying Weekly is recorded here for audit, none is "the owner".
         public string WeeklyOpportunityId;
         public readonly List<string> SupportingWeeklyOpportunityIds = new List<string>();
-        // Concurrency mandate Part 38: which DirectionalPhaseContext(s)
-        // actually authorized this reaction -- supplements (does not
-        // replace) SupportingWeeklyOpportunityIds, since two contexts could
-        // in principle both support the same physical H4 reaction (Part 22
-        // of the concurrency mandate) just as multiple Weeklies already can.
-        public readonly List<string> SupportingDirectionalContextIds = new List<string>();
         public Direction Direction;
         public H4Route Route;
         public H4SetupStatus Status = H4SetupStatus.Watching;

@@ -261,6 +261,7 @@ namespace cAlgo.Robots.ICT_S1
                 var code = anyTemporallyValidCandidate
                     ? RejectionCode.H4_POI_REJECTED_NARRATIVE_NOT_IN_CONTROL
                     : RejectionCode.H4_POI_REJECTED_NO_WEEKLY_PARENT;
+                var phase = _weeklyEngine.Phase;
                 var rejection = new RejectionEvent
                 {
                     Code = code,
@@ -273,24 +274,14 @@ namespace cAlgo.Robots.ICT_S1
                 };
                 if (anyTemporallyValidCandidate)
                 {
-                    // Part 48, concurrency-mandate update: Control is now
-                    // per-context (Owner Answer A), so there is no single
-                    // shared "the phase" to record -- each temporally-valid
-                    // same-direction candidate can belong to a DIFFERENT
-                    // context. Parallel/index-aligned lists let a SELL-
-                    // suppression audit pass answer "why" (which context,
-                    // in what state) for every candidate, from the journal
-                    // alone.
+                    // Part 48: full phase-forensic context, so a SELL-suppression
+                    // audit pass can answer "why" from the journal alone.
+                    rejection.PhaseStateAtRejection = phase.State;
+                    rejection.PhaseEstablishedTime = phase.EstablishedTime;
+                    rejection.PhaseSourcePoiId = phase.SourcePoiId;
+                    rejection.PhaseSourcePoiType = phase.SourcePoiType;
                     rejection.TemporallyValidSameDirectionWeeklyIds = new List<string>();
-                    rejection.TemporallyValidContextIds = new List<string>();
-                    rejection.TemporallyValidContextStates = new List<string>();
-                    foreach (var w in temporallyValid)
-                    {
-                        var ctx = _weeklyEngine.GetContext(w.DirectionalContextId);
-                        rejection.TemporallyValidSameDirectionWeeklyIds.Add(w.WeeklyOpportunityId);
-                        rejection.TemporallyValidContextIds.Add(w.DirectionalContextId);
-                        rejection.TemporallyValidContextStates.Add(ctx?.State?.ToString());
-                    }
+                    foreach (var w in temporallyValid) rejection.TemporallyValidSameDirectionWeeklyIds.Add(w.WeeklyOpportunityId);
                 }
                 _rejectionQueue.Enqueue(rejection);
                 return;
@@ -353,7 +344,37 @@ namespace cAlgo.Robots.ICT_S1
             };
             Setups.Add(setup);
             AttachQualifyingWeeklies(setup, qualifying); // adds ALL qualifying Weeklies (including primary) to SupportingWeeklyOpportunityIds + their own H4Setups list
-            _eventQueue.Enqueue(new H4SetupEvent { Type = H4SetupEventType.Impacted, Setup = setup, TriggeringPoi = snap, Time = ev.Time, Note = $"{route} via {snap.TypeAtActivation} -- new H4 reaction, protected swing {snap.SourceSwingType}@{snap.SourceSwingPrice}, supported by {qualifying.Count} Weekly opportunit{(qualifying.Count == 1 ? "y" : "ies")}" });
+            _eventQueue.Enqueue(new H4SetupEvent { Type = H4SetupEventType.Impacted, Setup = setup, TriggeringPoi = snap, Time = ev.Time, Note = $"{route} via {snap.TypeAtActivation} -- new H4 reaction, protected swing {snap.SourceSwingType}@{snap.SourceSwingPrice}, supported by {qualifying.Count} Weekly opportunit{(qualifying.Count == 1 ? "y" : "ies")} [{DescribeQualifyingRoles(qualifying, _weeklyEngine.Phase.State)}]" });
+        }
+
+        // Concurrency mandate round 2 forensic aid (Part 20 -- "must satisfy
+        // ... correct Weekly role"): descriptive-only, not authorization
+        // logic (OpportunityQualifiesForRole already decided qualification;
+        // this just narrates WHICH role/member made each opportunity
+        // qualify), so the mandatory fresh-BUY+fresh-SELL-coexistence proof
+        // (Part 18) is readable directly from the EventLog Note column
+        // without re-deriving it from raw POI data. Free-text -- no CSV
+        // schema change.
+        private static string DescribeQualifyingRoles(List<WeeklyOpportunity> qualifying, ControlState? phaseState)
+        {
+            var parts = new List<string>();
+            foreach (var opp in qualifying)
+            {
+                string role = "Unknown";
+                foreach (var poi in opp.SupportingCluster.Members)
+                {
+                    if (poi.IsTerminal) continue;
+                    if (WeeklyOpportunityEngine.IsInFavorOrAggressiveInFavorType(poi.TypeAtActivation))
+                    {
+                        bool permits = (phaseState == ControlState.BuyControl && poi.Direction == Direction.Buy)
+                                     || (phaseState == ControlState.SellControl && poi.Direction == Direction.Sell);
+                        if (permits) { role = "Continuation"; break; }
+                    }
+                    else { role = "Counter"; break; }
+                }
+                parts.Add($"{opp.WeeklyOpportunityId}:{role}");
+            }
+            return string.Join(",", parts);
         }
 
         // Merges any newly-qualifying Weekly opportunities into an existing
@@ -368,12 +389,6 @@ namespace cAlgo.Robots.ICT_S1
                 if (setup.SupportingWeeklyOpportunityIds.Contains(weekly.WeeklyOpportunityId)) continue;
                 setup.SupportingWeeklyOpportunityIds.Add(weekly.WeeklyOpportunityId);
                 weekly.H4Setups.Add(setup); // Finding 11 fix -- same shared setup object, not a copy
-
-                // Concurrency mandate Part 38: record which context(s)
-                // actually authorized this reaction, supplementing (not
-                // replacing) the Weekly lineage above.
-                if (weekly.DirectionalContextId != null && !setup.SupportingDirectionalContextIds.Contains(weekly.DirectionalContextId))
-                    setup.SupportingDirectionalContextIds.Add(weekly.DirectionalContextId);
             }
         }
 
@@ -381,20 +396,30 @@ namespace cAlgo.Robots.ICT_S1
             t == PoiTypeLabel.IFOB || t == PoiTypeLabel.IFVG || t == PoiTypeLabel.IRB || t == PoiTypeLabel.IVI;
 
         // CRITICAL 2 + CRITICAL 3: returns EVERY currently-qualifying Weekly
-        // opportunity (temporally valid AND ITS OWN DirectionalPhaseContext
-        // currently permits this direction) -- no tie-break, no single
-        // "chosen" winner (Round 2 fix, see HandleNewImpact). The bool
-        // tells the caller whether ANY temporally-valid same-direction
-        // candidate existed at all (for accurate rejection-code selection:
-        // NO_WEEKLY_PARENT vs NOT_IN_CONTROL).
+        // opportunity -- no tie-break, no single "chosen" winner (Round 2
+        // fix, see HandleNewImpact). The bool tells the caller whether ANY
+        // temporally-valid same-direction candidate existed at all (for
+        // accurate rejection-code selection: NO_WEEKLY_PARENT vs
+        // NOT_IN_CONTROL).
         //
-        // Concurrency mandate (2026-08-13, Owner Answer A): each opportunity
-        // is checked against its OWN context (WeeklyOpportunity.
-        // DirectionalContextId), not one shared global phase -- this is
-        // exactly what lets a genuinely independent fresh BUY narrative and
-        // a genuinely independent fresh SELL narrative both qualify at the
-        // same historical moment, each governed by its own context's own
-        // Control evolution.
+        // CONCURRENCY MANDATE ROUND 2 (2026-08-13, owner's Weekly-direction/
+        // POI-role clarification): a Weekly opportunity's directional
+        // permission is NO LONGER a single symmetric "does Phase.State match
+        // opp.Direction" test applied identically to every same-direction
+        // opportunity. The owner confirmed Control was only ever meant to
+        // gate CONTINUATION-type opportunities (In-Favor/Aggressive-In-Favor
+        // source POIs); COUNTER-type opportunities (Old/plain-Aggressive
+        // source POIs) are self-authorizing once alive/valid, independent of
+        // Phase.State -- "It must be evaluated under its own confirmed
+        // counter-opportunity rules," not blocked "merely because
+        // continuation opportunities exist." OpportunityQualifiesForRole
+        // below implements exactly that OR: EITHER a live continuation
+        // member exists AND Phase currently permits its direction, OR a
+        // live counter member exists at all (no Phase check). This directly
+        // explains the prior round's 83-SELL-rejected evidence: SELL
+        // opportunities sourced from counter-role Old/Aggressive POIs during
+        // a BuyControl phase were being blocked by a check they should never
+        // have been subject to.
         private (List<WeeklyOpportunity> qualifying, List<WeeklyOpportunity> temporallyValid) FindArmingWeeklyOpportunities(Direction dir, DateTime h4EventTime)
         {
             var qualifying = new List<WeeklyOpportunity>();
@@ -413,19 +438,45 @@ namespace cAlgo.Robots.ICT_S1
 
                 temporallyValid.Add(opp); // Part 48 forensic journal: every temporally-valid same-direction candidate, not just a bool
 
-                // POI validity (this opportunity being Active) and
-                // directional permission (this opportunity's OWN context
-                // currently matching its own direction) are separate gates,
-                // both required.
-                var ctx = _weeklyEngine.GetContext(opp.DirectionalContextId);
-                var contextState = ctx?.State;
-                bool contextPermits = (contextState == ControlState.BuyControl && opp.Direction == Direction.Buy)
-                                    || (contextState == ControlState.SellControl && opp.Direction == Direction.Sell);
-                if (!contextPermits) continue; // Critical 3 gate: this opportunity's own context does not currently permit this direction
-
-                qualifying.Add(opp);
+                if (OpportunityQualifiesForRole(opp, _weeklyEngine.Phase.State))
+                    qualifying.Add(opp);
             }
             return (qualifying, temporallyValid);
+        }
+
+        // POI validity (this opportunity being Active, and each member's own
+        // lifecycle) and directional permission (role-dependent) are
+        // separate gates. A Weekly opportunity's cluster (Finding 4) can in
+        // principle contain member POIs of mixed role (e.g. an overlapping
+        // continuation IFVG and a counter OOB, both bullish) -- each live
+        // member is checked on its OWN role, not the opportunity as a
+        // monolithic unit, reusing the SAME authoritative classifier Neutral-
+        // reactivation already trusts (WeeklyOpportunityEngine.
+        // IsInFavorOrAggressiveInFavorType, Part 74: one classifier, used
+        // consistently).
+        private static bool OpportunityQualifiesForRole(WeeklyOpportunity opp, ControlState? phaseState)
+        {
+            foreach (var poi in opp.SupportingCluster.Members)
+            {
+                if (poi.IsTerminal) continue; // only live members can currently authorize anything
+
+                if (WeeklyOpportunityEngine.IsInFavorOrAggressiveInFavorType(poi.TypeAtActivation))
+                {
+                    // Continuation role -- still gated by Control, exactly
+                    // as before this round.
+                    bool phasePermits = (phaseState == ControlState.BuyControl && poi.Direction == Direction.Buy)
+                                      || (phaseState == ControlState.SellControl && poi.Direction == Direction.Sell);
+                    if (phasePermits) return true;
+                }
+                else
+                {
+                    // Counter role (Old/plain-Aggressive) -- self-
+                    // authorizing; Control was never meant to gate this
+                    // (owner clarification, concurrency mandate round 2).
+                    return true;
+                }
+            }
+            return false;
         }
 
         // RESOLVED (audit sections 7-9, 43 -- strategy owner clarification

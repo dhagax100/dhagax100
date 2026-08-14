@@ -2,32 +2,73 @@
 // sections 3, 4, 6. Repaired per the 2026-08-13 audit (see repair notes
 // inline at each fix).
 //
-// DIRECTIONAL CONTROL — ARCHITECTURE HISTORY:
-//   Round A: Control lived per-WeeklyOpportunity ("audit Critical 3 /
-//   Findings 8,9" -- see git history). Documented failure mode: a late-
-//   activating same-direction Weekly opportunity blindly defaulted to
-//   BuyControl even while an in-progress counter-reaction elsewhere had
-//   already moved the real narrative toward SellControl/Neutral, because
-//   each opportunity computed its own Control independently.
-//   Round B (forensic-audit mandate, Parts 17-37): collapsed to ONE
-//   DirectionalPhase per run. Fixed Round A's inconsistency, but could not
-//   represent two genuinely independent fresh opposite-direction narratives
-//   existing at once.
-//   Round C (concurrency mandate, 2026-08-13, OWNER ANSWER A -- "both fresh
-//   streams allowed"): Control is scoped per DirectionalPhaseContext
-//   (Models.cs) -- neither Round A's full fragmentation nor Round B's
-//   single instance. See DirectionalPhaseContext's own doc comment in
-//   Models.cs for the full context-membership rule (Weekly MSS-scoped,
-//   ENGINEERING-PROPOSED per the owner's explicit "propose the rule"
-//   answer) and why it avoids resurrecting Round A's failure mode: a
-//   counter-POI flips the Control of whichever context it is ALREADY a
-//   member of (assigned at its own activation), never a different one and
-//   never fanned to all live contexts.
+// DIRECTIONAL CONTROL — ARCHITECTURE REBUILT (strategy owner clarification,
+// follow-up round, 2026-08-13, Parts 17-37): earlier rounds modeled Control
+// as narrative-scoped per WeeklyOpportunity ("audit Critical 3 / Findings
+// 8,9" -- see git history), on the reading that Section 10/11 concurrency
+// required each Weekly opportunity to carry its own independent Control.
+// The strategy owner corrected this directly: several bullish Weekly POIs
+// that are simply sequential locations inside the same current uptrend do
+// NOT need independent parallel BUY_CONTROL universes (Part 21) -- that was
+// itself an over-fragmented reading, proven by the actual failure mode
+// (a late-activating same-direction Weekly opportunity blindly defaulting
+// to BuyControl even while an in-progress counter-reaction had already
+// moved the REAL current phase toward SellControl/Neutral, since each
+// opportunity computed its own Control independently of the others).
 //
-// POI VALIDITY (WeeklyOpportunity) and DIRECTIONAL TRADE PERMISSION
-// (DirectionalPhaseContext) remain separate concepts throughout every
-// round above -- only how many simultaneous Control instances exist, and
-// which POIs feed which one, has changed.
+// The corrected model: DirectionalPhase (Models.cs) is ONE object per run,
+// not one per WeeklyOpportunity. POI validity/lineage (WeeklyOpportunity)
+// and directional trade permission (DirectionalPhase) are separate
+// concepts (Part 21-23). Section 10/11 concurrency is preserved by this
+// split, not by giving Control multiple simultaneous instances:
+//   - "Multiple independent WeeklyOpportunities coexist freely, including
+//     simultaneous opposite directions" -- WeeklyOpportunity objects are
+//     fully independent of Phase.State; a bearish WeeklyOpportunity's own
+//     POIs stay tracked/valid regardless of what the current phase is, and
+//     it becomes eligible to authorize a NEW H4Setup the moment the phase
+//     (singular) reaches SellControl -- exactly the confirmed IVI->IFVG
+//     worked example (Part 18), generalized across directions.
+//   - "Simultaneous opposite-direction positions allowed" -- an existing
+//     open position from BEFORE the phase flipped keeps running to its own
+//     SL/3R TP (Part 41); the CURRENT phase only gates NEW entries. This is
+//     literally how a BUY position and a SELL position end up open at the
+//     same time under a single evolving phase, with no need for two
+//     simultaneous "in control" phase objects.
+// If a genuine conflict with Section 10 concurrency had been found here,
+// the mandate was to STOP and ask (Part 30/53) rather than pick an
+// architecture alone -- none was found: every previously-confirmed
+// concurrency guarantee is satisfied by the POI-validity/position-lifecycle
+// split above, without requiring more than one simultaneous phase.
+//
+// CONCURRENCY MANDATE ROUND 1 (2026-08-13, "Owner Answer A"): a follow-up
+// round briefly replaced this single Phase with per-context Control
+// (DirectionalPhaseContext, MSS-window-scoped) to let independent fresh
+// BUY and SELL streams coexist. The owner explicitly REJECTED that
+// specific mechanism in ROUND 2 (below) -- MSS windows were never
+// owner-confirmed as a context boundary, and were removed. This file is
+// back to the single global Phase exactly as ROUND above left it.
+//
+// CONCURRENCY MANDATE ROUND 2 (2026-08-13, owner's Weekly-direction/POI-
+// role clarification -- the actual resolution): fresh BUY and fresh SELL
+// streams CAN coexist, but not because Control needs multiple instances.
+// The owner clarified that Control was ALWAYS only ever meant to gate
+// CONTINUATION-type opportunities (In-Favor/Aggressive-In-Favor POIs,
+// `IsInFavorOrAggressiveInFavorType` below) -- exactly the state machine
+// this file already implements (Buy<->Sell via Neutral, established by a
+// continuation POI, interrupted by a counter-type POI's retirement,
+// resumed by a fresh continuation POI). COUNTER-type opportunities
+// (Old/plain-Aggressive POIs, the complement of that same predicate) were
+// NEVER supposed to need Control's permission at all -- they are
+// self-authorizing once they satisfy their own POI-validity/H4/M5 rules,
+// regardless of Phase.State. The single global Phase in THIS file needed
+// zero changes for this -- the fix is entirely in
+// H4SetupEngine.FindArmingWeeklyOpportunities, which previously applied
+// the SAME Control check to every same-direction opportunity regardless of
+// which role its member POI(s) actually played. That symmetric check was
+// the actual bug: it explains the 83-SELL-candidates-rejected evidence
+// exactly (SELL opportunities sourced from counter-role Old/Aggressive
+// POIs during a BuyControl phase were being blocked when they should never
+// have been checked against Phase at all).
 
 using System;
 using System.Collections.Generic;
@@ -50,22 +91,12 @@ namespace cAlgo.Robots.ICT_S1
         public string Note;
     }
 
-    // Separate event stream for DirectionalPhaseContext transitions -- these
-    // are NOT about any one WeeklyOpportunity (Opportunity may be null even
+    // Separate event stream for DirectionalPhase transitions -- these are
+    // NOT about any one WeeklyOpportunity (Opportunity may be null even
     // when TriggeringPoi isn't, e.g. a Neutral transition has a source
     // swing but no single "owning" POI/opportunity to attach the event to).
-    // ContextId (concurrency mandate): which context this transition
-    // belongs to -- required now that more than one can exist/transition.
     public class DirectionalPhaseEvent
     {
-        public string ContextId;
-        // Denormalized from the context's own OriginMss* fields at the
-        // moment this event is emitted (Models.cs DirectionalPhaseContext
-        // is the source of truth) -- carried here so JournalManager, which
-        // never holds a reference to WeeklyOpportunityEngine.Contexts, can
-        // write them onto the PhaseHistory row without a lookup.
-        public bool? ContextOriginMssToUp;
-        public double? ContextOriginMssPrice;
         public ControlState NewState;
         public ControlState? OldState;
         public S1PoiSnapshot SourcePoi;
@@ -79,25 +110,7 @@ namespace cAlgo.Robots.ICT_S1
         private readonly PoiLifecycleTracker _tracker;
 
         public readonly List<WeeklyOpportunity> Opportunities = new List<WeeklyOpportunity>();
-
-        // Concurrency mandate (Owner Answer A): replaces the single
-        // `Phase` instance. Every context ever created stays in this list
-        // for its own lifetime -- an older context superseded for NEW
-        // membership purposes keeps evolving here using only its existing
-        // members (see Models.cs DirectionalPhaseContext doc comment).
-        public readonly List<DirectionalPhaseContext> Contexts = new List<DirectionalPhaseContext>();
-
-        // The context newly-activating WeeklyOpportunities join. Null only
-        // before the very first-ever Weekly opportunity activation.
-        private DirectionalPhaseContext _currentContext;
-
-        public DirectionalPhaseContext GetContext(string contextId)
-        {
-            if (contextId == null) return null;
-            foreach (var c in Contexts)
-                if (c.ContextId == contextId) return c;
-            return null;
-        }
+        public readonly DirectionalPhase Phase = new DirectionalPhase();
 
         private readonly Queue<WeeklyOpportunityEvent> _eventQueue = new Queue<WeeklyOpportunityEvent>();
         private readonly Queue<DirectionalPhaseEvent> _phaseEventQueue = new Queue<DirectionalPhaseEvent>();
@@ -105,10 +118,6 @@ namespace cAlgo.Robots.ICT_S1
         // Cursor into _engine.Events for incremental Neutral-detection scans
         // (Finding 8 fix) -- avoids rescanning all history every cycle.
         private int _lastSwingCheckIdx = -1;
-
-        // Cursor into _engine.Msses for incremental context-boundary scans
-        // (concurrency mandate) -- same incremental-cursor technique.
-        private int _lastMssCheckIdx = -1;
 
         public WeeklyOpportunityEngine(PoiMarketEngine weeklyEngine, PoiLifecycleTracker weeklyTracker)
         {
@@ -136,12 +145,6 @@ namespace cAlgo.Robots.ICT_S1
         // out to this engine AND to Journal/Visualization directly).
         public void Update(List<PoiLifecycleEvent> poiEvents)
         {
-            // Checked BEFORE this cycle's POI events (same ordering pattern
-            // as H4SetupEngine.CheckSupersession) so a context boundary that
-            // opens on this very bar already applies to a same-bar fresh
-            // WeeklyOpportunity activation below.
-            CheckMssContextBoundary();
-
             foreach (var ev in poiEvents)
             {
                 switch (ev.Type)
@@ -157,41 +160,11 @@ namespace cAlgo.Robots.ICT_S1
                         break;
                     case PoiEventType.Retired:
                         HandleTerminal(ev);
-                        ComputeContextControlTransitionOnRetire(ev);
+                        ComputeGlobalControlTransitionOnRetire(ev);
                         break;
                 }
             }
-            ComputeContextNeutralTransitions();
-        }
-
-        // Concurrency mandate: a DirectionalPhaseContext boundary opens on
-        // every Weekly MSS (PoiMarketEngine.Msses -- an already-computed,
-        // Pine-native structural-shift fact) whose direction is OPPOSITE
-        // the currently-governing context's own origin direction. A same-
-        // direction MSS re-confirmation does not fragment the context
-        // (still the same movement, Part 27). See Models.cs
-        // DirectionalPhaseContext for the full rationale.
-        private void CheckMssContextBoundary()
-        {
-            int total = _engine.Msses.Count;
-            for (int i = _lastMssCheckIdx + 1; i < total; i++)
-            {
-                var mss = _engine.Msses[i];
-                if (_currentContext != null && _currentContext.OriginMssToUp == mss.ToUp) continue;
-
-                DateTime t = mss.AtIdx >= 0 && mss.AtIdx < _engine.BT.Count ? _engine.BT[mss.AtIdx] : default(DateTime);
-                var ctx = new DirectionalPhaseContext
-                {
-                    ContextId = IdGenerator.NextDirectionalContextId(),
-                    OriginMssAtIdx = mss.AtIdx,
-                    OriginMssPrice = mss.Price,
-                    OriginMssToUp = mss.ToUp,
-                    OriginMssTime = t,
-                };
-                Contexts.Add(ctx);
-                _currentContext = ctx;
-            }
-            _lastMssCheckIdx = total - 1;
+            ComputeGlobalNeutralTransition();
         }
 
         private void HandleNewImpact(PoiLifecycleEvent ev)
@@ -203,20 +176,9 @@ namespace cAlgo.Robots.ICT_S1
                 snap.WeeklyOpportunityId = joinable.WeeklyOpportunityId;
                 snap.PoiClusterId = joinable.SupportingCluster.PoiClusterId;
                 joinable.SupportingCluster.Members.Add(snap);
-                ReactivateContextIfDue(joinable, snap, ev.Time);
+                ReactivateGlobalPhaseIfDue(snap, ev.Time);
                 _eventQueue.Enqueue(new WeeklyOpportunityEvent { Type = WeeklyOpportunityEventType.Retouched, Opportunity = joinable, TriggeringPoi = snap, Time = ev.Time, Note = $"Joined existing cluster ({snap.TypeAtActivation})" });
                 return;
-            }
-
-            // Bootstrap ONLY: before the very first-ever MSS has fired,
-            // there is no context yet to join -- mirrors the prior round's
-            // "very first Weekly opportunity ever activated establishes the
-            // initial phase" rule, just as the seed context instead of a
-            // seed phase value.
-            if (_currentContext == null)
-            {
-                _currentContext = new DirectionalPhaseContext { ContextId = IdGenerator.NextDirectionalContextId(), BootstrapOrigin = true };
-                Contexts.Add(_currentContext);
             }
 
             var cluster = new PoiCluster { PoiClusterId = IdGenerator.NextPoiClusterId(), Direction = snap.Direction };
@@ -227,25 +189,25 @@ namespace cAlgo.Robots.ICT_S1
                 WeeklyOpportunityId = IdGenerator.NextWeeklyOpportunityId(),
                 Direction = snap.Direction,
                 ActivationTime = ev.Time,
-                SupportingCluster = cluster,
-                DirectionalContextId = _currentContext.ContextId
+                SupportingCluster = cluster
             };
             snap.WeeklyOpportunityId = opp.WeeklyOpportunityId;
             snap.PoiClusterId = cluster.PoiClusterId;
             Opportunities.Add(opp);
 
-            // Bootstrap ONLY: the very first member of THIS context
-            // establishes ITS OWN initial Control (there is nothing else
-            // for this context's Control to have been derived from yet).
-            // Every SUBSEQUENT same-context activation does NOT reset/
-            // re-claim Control merely by activating -- that is exactly the
-            // Round-A failure mode this model must not resurrect. This is
-            // scoped to `_currentContext` only, never to any OTHER context
-            // in `Contexts` -- an older, still-live context's Control is
-            // completely unaffected by a brand-new context's own bootstrap.
-            if (_currentContext.State == null)
-                SetContextPhase(_currentContext, snap.Direction == Direction.Buy ? ControlState.BuyControl : ControlState.SellControl,
-                          null, snap, ev.Time, $"Bootstrap: first activation in this context ({snap.TypeAtActivation} {snap.S1PoiId})");
+            // Bootstrap ONLY: the very first Weekly opportunity ever
+            // activated establishes the initial phase (there is nothing
+            // else for the phase to have been derived from yet). Every
+            // SUBSEQUENT same-direction activation does NOT reset/re-claim
+            // the phase merely by activating -- this is exactly the bug
+            // being fixed (Part 21): a new bullish Weekly POI activating
+            // mid-SELL-phase must NOT silently flip trade permission back
+            // to BUY. It just becomes a tracked, independently-valid
+            // narrative that's eligible to authorize a new H4Setup the
+            // moment the (unique, shared) phase reaches its own direction.
+            if (Phase.State == null)
+                SetPhase(snap.Direction == Direction.Buy ? ControlState.BuyControl : ControlState.SellControl,
+                          null, snap, ev.Time, $"Bootstrap: first-ever Weekly opportunity activation ({snap.TypeAtActivation} {snap.S1PoiId})");
 
             _eventQueue.Enqueue(new WeeklyOpportunityEvent { Type = WeeklyOpportunityEventType.Activated, Opportunity = opp, TriggeringPoi = snap, Time = ev.Time, Note = $"Activated by {snap.TypeAtActivation}" });
         }
@@ -256,10 +218,7 @@ namespace cAlgo.Robots.ICT_S1
         // opportunity qualifies" rule was an unconfirmed extension of the
         // H4-specific non-overlap rule -- that rule was never confirmed at
         // Weekly level, so the safe default (independent opportunities
-        // supported explicitly by section 10) applies instead. Unaffected
-        // by the concurrency mandate -- POI-cluster identity (Finding 4)
-        // and Control-context identity (this round) are separate axes; see
-        // Models.cs DirectionalPhaseContext doc comment.
+        // supported explicitly by section 10) applies instead.
         private WeeklyOpportunity FindJoinableOpportunity(S1PoiSnapshot snap)
         {
             foreach (var opp in Opportunities)
@@ -280,20 +239,19 @@ namespace cAlgo.Robots.ICT_S1
             var opp = FindOwningOpportunity(ev.Snapshot);
             if (opp == null) return;
             opp.RetouchCounter++;
-            ReactivateContextIfDue(opp, ev.Snapshot, ev.Time);
+            ReactivateGlobalPhaseIfDue(ev.Snapshot, ev.Time);
             _eventQueue.Enqueue(new WeeklyOpportunityEvent { Type = WeeklyOpportunityEventType.Retouched, Opportunity = opp, TriggeringPoi = ev.Snapshot, Time = ev.Time, Note = $"Weekly retouch #{opp.RetouchCounter}" });
         }
 
         // "Valid bullish/bearish location subsequently qualifies" (doc's own
         // NEUTRAL -> BUY_CONTROL example) -- a fresh In-Favor/Aggressive-
-        // In-Favor POI reached WHILE this POI's OWN context is Neutral is
-        // what ends that context's Neutral state and establishes Control in
-        // THAT POI's own direction (either direction can reactivate from
-        // Neutral -- the confirmed worked example only shows the opposite-
-        // of-pre-Neutral direction reactivating, but nothing restricts it to
-        // that case, and the symmetric reading matches "new SELL entries =
-        // OFF and new BUY entries = OFF" being genuinely direction-agnostic
-        // while Neutral).
+        // In-Favor POI reached WHILE Neutral is what ends the phase and
+        // establishes control in THAT POI's own direction (either
+        // direction can reactivate from Neutral -- the confirmed worked
+        // example only shows the opposite-of-pre-Neutral direction
+        // reactivating, but nothing restricts it to that case, and the
+        // symmetric reading matches "new SELL entries = OFF and new BUY
+        // entries = OFF" being genuinely direction-agnostic while Neutral).
         //
         // Round 2 fix (audit section 23): NOT "any retouch". The doc's own
         // example is specifically "a valid bullish/bearish LOCATION" -- read
@@ -322,23 +280,28 @@ namespace cAlgo.Robots.ICT_S1
         // Aggressive-route), but Part 32 explicitly requires THIS predicate
         // to include them as valid continuation types for Neutral
         // reactivation. Two different semantic questions, two predicates.
-        private static bool IsInFavorOrAggressiveInFavorType(PoiTypeLabel type) =>
+        //
+        // CONCURRENCY MANDATE ROUND 2 (2026-08-13, owner's Weekly-direction/
+        // POI-role clarification): this is now ALSO the authoritative
+        // Continuation-vs-Counter role classifier used by
+        // H4SetupEngine.FindArmingWeeklyOpportunities to decide whether a
+        // Weekly opportunity needs Control's permission at all (Continuation
+        // types do; Counter types -- the complement of this predicate --
+        // never do, see H4SetupEngine for the full reasoning). Widened from
+        // `private` to `internal` for that cross-file reuse -- deliberately
+        // the SAME method, not a duplicate, per Part 74 ("one authoritative
+        // semantic POI classifier, used consistently").
+        internal static bool IsInFavorOrAggressiveInFavorType(PoiTypeLabel type) =>
             type == PoiTypeLabel.IFOB || type == PoiTypeLabel.IFVG || type == PoiTypeLabel.IRB || type == PoiTypeLabel.IVI ||
             type == PoiTypeLabel.AIFOB || type == PoiTypeLabel.AIRB;
 
-        // Concurrency mandate: scoped to `owningOpp`'s OWN context only --
-        // never any other live context. This is what keeps Neutral
-        // reactivation from leaking across genuinely independent narratives
-        // (Part 29 of the concurrency mandate).
-        private void ReactivateContextIfDue(WeeklyOpportunity owningOpp, S1PoiSnapshot triggeringSnap, DateTime time)
+        private void ReactivateGlobalPhaseIfDue(S1PoiSnapshot triggeringSnap, DateTime time)
         {
-            var ctx = GetContext(owningOpp?.DirectionalContextId);
-            if (ctx == null) return;
-            if (ctx.State != ControlState.Neutral) return;
+            if (Phase.State != ControlState.Neutral) return;
             if (!IsInFavorOrAggressiveInFavorType(triggeringSnap.TypeAtActivation)) return;
 
             var restored = triggeringSnap.Direction == Direction.Buy ? ControlState.BuyControl : ControlState.SellControl;
-            SetContextPhase(ctx, restored, ControlState.Neutral, triggeringSnap, time,
+            SetPhase(restored, ControlState.Neutral, triggeringSnap, time,
                       $"Valid own-direction In-Favor/Aggressive-In-Favor location reached: {triggeringSnap.TypeAtActivation} {triggeringSnap.S1PoiId}");
         }
 
@@ -356,10 +319,8 @@ namespace cAlgo.Robots.ICT_S1
         // a child H4Setup/M5Attempt it already spawned keeps running under
         // its own protected-swing/POI-terminal rules). No existing pending
         // order or open position is force-closed by this. It also does NOT
-        // touch its DirectionalPhaseContext -- one POI-lineage object going
-        // terminal says nothing about that context's current Control (Part
-        // 31 of the concurrency mandate: WeeklyOpportunity termination
-        // remains POI-based, independent of Control).
+        // touch DirectionalPhase -- one POI-lineage object going terminal
+        // says nothing about the current market-wide directional phase.
         //
         // What DOES change once Status flips to Terminated: no NEW child
         // activity can start under this narrative going forward --
@@ -384,99 +345,79 @@ namespace cAlgo.Robots.ICT_S1
 
         // A counter-direction POI just RETIRED (respected + reaction swing
         // confirmed) -- per spec section 3, this is the event that flips
-        // the CURRENT Control of the context THIS POI ITSELF belongs to
-        // (its own WeeklyOpportunity's DirectionalContextId, assigned at
-        // its own activation in HandleNewImpact) to the counter-POI's own
-        // direction. Concurrency mandate: no fan-out to other contexts --
-        // membership alone answers "which narrative is this a counter-
-        // reaction WITHIN" (Part 26/43 of the concurrency mandate), because
-        // the counter-POI was already filed into whichever context was
-        // current at ITS OWN activation time, exactly like any other POI.
-        private void ComputeContextControlTransitionOnRetire(PoiLifecycleEvent ev)
+        // the CURRENT global phase to the counter-POI's own direction.
+        // Global model (Part 25): no "contesting" linkage bookkeeping is
+        // needed anymore -- ANY Old/Aggressive-family POI (NOT In-Favor/AIF
+        // -- those are continuation-type, not counter-type) whose OWN
+        // direction is opposite the CURRENT phase, retiring, is exactly
+        // "the market encountered a counter-direction location and
+        // respected it" (Part 25's worked example), regardless of which
+        // WeeklyOpportunity object it happens to be filed under.
+        private void ComputeGlobalControlTransitionOnRetire(PoiLifecycleEvent ev)
         {
             var snap = ev.Snapshot;
-            var opp = FindOwningOpportunity(snap);
-            if (opp == null) return;
-            var ctx = GetContext(opp.DirectionalContextId);
-            if (ctx == null || ctx.State == null) return; // no Control established yet in this context -- nothing to contest
-            if (IsInFavorOrAggressiveInFavorType(snap.TypeAtActivation)) return; // continuation-type POIs don't "contest" Control -- Part 31-34 fix, see ReactivateContextIfDue
+            if (Phase.State == null) return; // no phase established yet -- nothing to contest
+            if (IsInFavorOrAggressiveInFavorType(snap.TypeAtActivation)) return; // continuation-type POIs don't "contest" the phase -- Part 31-34 fix, see ReactivateGlobalPhaseIfDue
 
             var newControl = snap.Direction == Direction.Buy ? ControlState.BuyControl : ControlState.SellControl;
-            bool isOpposite = (ctx.State == ControlState.BuyControl && snap.Direction == Direction.Sell)
-                            || (ctx.State == ControlState.SellControl && snap.Direction == Direction.Buy);
-            if (!isOpposite) return; // same-direction Old/Aggressive retirement, or already Neutral -- not a contest of this context's Control
+            bool isOpposite = (Phase.State == ControlState.BuyControl && snap.Direction == Direction.Sell)
+                            || (Phase.State == ControlState.SellControl && snap.Direction == Direction.Buy);
+            if (!isOpposite) return; // same-direction Old/Aggressive retirement, or already Neutral -- not a contest of the current phase
 
-            SetContextPhase(ctx, newControl, ctx.State, snap, ev.Time,
+            SetPhase(newControl, Phase.State, snap, ev.Time,
                       $"Counter-POI respected + reaction swing confirmed: {snap.TypeAtActivation} {snap.S1PoiId}");
         }
 
-        // Finding 8 fix: NEUTRAL is not derived from the raw Weekly regime
-        // flag (Pine regime and S1 Control were never confirmed
+        // Finding 8 fix: NEUTRAL is no longer derived from the raw Weekly
+        // regime flag (Pine regime and S1 Control were never confirmed
         // equivalent). Instead, directly follows the doc's own worked
-        // example: a context's Control ends on ITS OWN next opposite-kind
-        // Weekly swing -- SellControl ends on the next Weekly Swing Low,
-        // BuyControl ends on the next Weekly Swing High -- confirmed
-        // strictly after THAT context's own Control was established.
-        // Concurrency mandate: now iterates every live (non-Neutral)
-        // context independently against the SAME shared swing-event scan
-        // (one incremental cursor over _engine.Events, Pine-mechanical
-        // order preserved, Task #35) -- a swing can end more than one
-        // context's Neutral window on the same bar without any cross-
-        // context interaction; each context's own condition is evaluated
-        // independently, order among contexts in the inner loop cannot
-        // change any individual context's outcome.
-        private void ComputeContextNeutralTransitions()
+        // example: the CURRENT global phase ends on ITS OWN next opposite-
+        // kind Weekly swing -- SellControl ends on the next Weekly Swing
+        // Low, BuyControl ends on the next Weekly Swing High -- confirmed
+        // strictly after the phase was established. Incremental cursor
+        // scan, not a full rescan each call. Global model: ONE phase to
+        // check, not one per opportunity.
+        private void ComputeGlobalNeutralTransition()
         {
+            if (Phase.State == null || Phase.State == ControlState.Neutral) return;
+
             int total = _engine.Events.Count;
             for (int i = _lastSwingCheckIdx + 1; i < total; i++)
             {
+                if (Phase.State == null || Phase.State == ControlState.Neutral) break;
+
                 var swingEv = _engine.Events[i];
                 DateTime evTime = swingEv.ConfirmIdx >= 0 && swingEv.ConfirmIdx < _engine.BT.Count
                     ? _engine.BT[swingEv.ConfirmIdx]
                     : default(DateTime);
 
-                foreach (var ctx in Contexts)
-                {
-                    if (ctx.State == null || ctx.State == ControlState.Neutral) continue;
+                int endingKind = Phase.State == ControlState.SellControl ? 1 : 0; // 1=Low ends Sell, 0=High ends Buy
+                if (swingEv.Kind != endingKind) continue;
 
-                    int endingKind = ctx.State == ControlState.SellControl ? 1 : 0; // 1=Low ends Sell, 0=High ends Buy
-                    if (swingEv.Kind != endingKind) continue;
+                DateTime controlSince = Phase.SourceSwingTime ?? Phase.EstablishedTime ?? default(DateTime);
+                if (evTime <= controlSince) continue; // must be a NEW swing after this phase was established
 
-                    DateTime controlSince = ctx.SourceSwingTime ?? ctx.EstablishedTime ?? default(DateTime);
-                    if (evTime <= controlSince) continue; // must be a NEW swing after THIS context's Control was established
-
-                    SetContextPhase(ctx, ControlState.Neutral, ctx.State, null, evTime,
-                              $"{(endingKind == 1 ? "Swing Low" : "Swing High")} confirmed @ {swingEv.Price}, no fresh own-direction POI yet");
-                }
+                SetPhase(ControlState.Neutral, Phase.State, null, evTime,
+                          $"{(endingKind == 1 ? "Swing Low" : "Swing High")} confirmed @ {swingEv.Price}, no fresh own-direction POI yet");
             }
             _lastSwingCheckIdx = total - 1;
         }
 
-        private void SetContextPhase(DirectionalPhaseContext ctx, ControlState newState, ControlState? oldState, S1PoiSnapshot sourceSnap, DateTime time, string reason)
+        private void SetPhase(ControlState newState, ControlState? oldState, S1PoiSnapshot sourceSnap, DateTime time, string reason)
         {
-            ctx.State = newState;
-            ctx.EstablishedTime = time;
-            ctx.SourcePoiId = sourceSnap?.S1PoiId;
-            ctx.SourcePoiType = sourceSnap?.TypeAtActivation;
-            ctx.SourcePoiDirection = sourceSnap?.Direction;
-            ctx.SourcePoiFamily = sourceSnap?.Family;
-            ctx.SourcePoiOriginBucket = sourceSnap?.OriginBucket;
-            ctx.SourcePoiLifecycleState = sourceSnap?.LifecycleState;
-            ctx.SourceSwingType = sourceSnap?.RelevantReactionSwingType;
-            ctx.SourceSwingPrice = sourceSnap?.RelevantReactionSwingPrice;
-            ctx.SourceSwingTime = sourceSnap?.RelevantReactionSwingConfirmationTime;
-            ctx.TransitionReason = reason;
-            _phaseEventQueue.Enqueue(new DirectionalPhaseEvent
-            {
-                ContextId = ctx.ContextId,
-                ContextOriginMssToUp = ctx.OriginMssToUp,
-                ContextOriginMssPrice = ctx.OriginMssPrice,
-                NewState = newState,
-                OldState = oldState,
-                SourcePoi = sourceSnap,
-                Time = time,
-                Reason = reason
-            });
+            Phase.State = newState;
+            Phase.EstablishedTime = time;
+            Phase.SourcePoiId = sourceSnap?.S1PoiId;
+            Phase.SourcePoiType = sourceSnap?.TypeAtActivation;
+            Phase.SourcePoiDirection = sourceSnap?.Direction;
+            Phase.SourcePoiFamily = sourceSnap?.Family;
+            Phase.SourcePoiOriginBucket = sourceSnap?.OriginBucket;
+            Phase.SourcePoiLifecycleState = sourceSnap?.LifecycleState;
+            Phase.SourceSwingType = sourceSnap?.RelevantReactionSwingType;
+            Phase.SourceSwingPrice = sourceSnap?.RelevantReactionSwingPrice;
+            Phase.SourceSwingTime = sourceSnap?.RelevantReactionSwingConfirmationTime;
+            Phase.TransitionReason = reason;
+            _phaseEventQueue.Enqueue(new DirectionalPhaseEvent { NewState = newState, OldState = oldState, SourcePoi = sourceSnap, Time = time, Reason = reason });
         }
 
         private WeeklyOpportunity FindOwningOpportunity(S1PoiSnapshot snap)

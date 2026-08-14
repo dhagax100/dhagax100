@@ -299,9 +299,6 @@ namespace cAlgo.Robots.ICT_S1
         // (unlike the update-in-place lifecycle objects above -- each
         // transition is its own distinct historical moment, not a single
         // evolving object's current extent).
-        // Concurrency mandate (2026-08-13, Owner Answer A), Part 39: label
-        // carries ContextId so a chart with multiple simultaneously-live
-        // contexts doesn't show anonymous, indistinguishable markers.
         public void DrawPhaseTransition(DirectionalPhaseEvent ev)
         {
             if (_mode == VisualizationMode.Off) return;
@@ -313,7 +310,7 @@ namespace cAlgo.Robots.ICT_S1
                 ? (ev.NewState == ControlState.BuyControl ? ev.SourcePoi.Zt : ev.SourcePoi.Zb)
                 : (double?)null;
             if (price == null) return; // no price to anchor the label to (e.g. a Neutral transition with no source POI) -- journal still has it
-            _chart.DrawText(name, $"{ev.ContextId} PHASE -> {ev.NewState} ({ev.Reason})", ev.Time, price.Value, color);
+            _chart.DrawText(name, $"PHASE -> {ev.NewState} ({ev.Reason})", ev.Time, price.Value, color);
             Track(name);
         }
 
