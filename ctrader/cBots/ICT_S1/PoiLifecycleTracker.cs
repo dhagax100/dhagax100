@@ -154,7 +154,22 @@ namespace cAlgo.Robots.ICT_S1
                 case 4: type = PoiTypeLabel.AIFOB; break;
                 default: type = PoiTypeLabel.IFOB; break;
             }
-            var snap = NewSnapshot(PoiFamily.OB, type, z.Bullish, z.Zb, z.Zt, z.OrigState, z.StopK, z.Candle, z.TriggerK, z.EligibleK, z.SourcePoiId, z.SourceSwingIdx);
+            // Proven bug fix (forensic audit, follow-up round, Part 31-34):
+            // OriginBucket must be the FROZEN bucket (PreSpentState), the
+            // exact same value `type` above was just derived from -- NOT
+            // z.OrigState (the bucket at ORIGINAL creation, before any
+            // later structural-stranding demotion to State==2). PoiMarketEngine's
+            // stranding-demotion path (`obZ3.State = 2`, RunEngine STEP 3)
+            // updates State but never touches OrigState, so a zone that
+            // started as an IFOB/AIFOB (bucket 0/4) candidate and later got
+            // structurally stranded before ever impacting would freeze with
+            // TypeAtActivation correctly reading OOB (Old, from PreSpentState)
+            // while OriginBucket kept reading its STALE original bucket --
+            // exactly the root cause of Old POIs (OOB/OFVG/etc.) falsely
+            // qualifying as "In-Favor" for DirectionalPhase reactivation.
+            // Root-caused once here (Part 74's "fix the model, not the
+            // symptom") rather than patched per-consumer.
+            var snap = NewSnapshot(PoiFamily.OB, type, z.Bullish, z.Zb, z.Zt, z.PreSpentState, z.StopK, z.Candle, z.TriggerK, z.EligibleK, z.SourcePoiId, z.SourceSwingIdx);
             z.S1SnapshotId = snap.S1PoiId;
         }
 
@@ -168,7 +183,9 @@ namespace cAlgo.Robots.ICT_S1
                 case 2: type = PoiTypeLabel.OFVG; break;
                 default: type = PoiTypeLabel.IFVG; break;
             }
-            var snap = NewSnapshot(PoiFamily.FVG, type, z.Bullish, z.Zb, z.Zt, z.Origin, z.StopK, z.LeftIdx, z.TriggerK, z.EligibleK, z.SourcePoiId, z.SourceSwingIdx);
+            // Same root-cause fix as FreezeOb -- z.PreSpentState, not
+            // z.Origin (stale at-creation bucket).
+            var snap = NewSnapshot(PoiFamily.FVG, type, z.Bullish, z.Zb, z.Zt, z.PreSpentState, z.StopK, z.LeftIdx, z.TriggerK, z.EligibleK, z.SourcePoiId, z.SourceSwingIdx);
             z.S1SnapshotId = snap.S1PoiId;
         }
 
@@ -185,7 +202,9 @@ namespace cAlgo.Robots.ICT_S1
             }
             // RB direction is used AS-IS from the raw engine's raw-wick
             // convention -- confirmed rule, no hunt-direction translation.
-            var snap = NewSnapshot(PoiFamily.RB, type, z.Bullish, z.Zb, z.Zt, z.Origin, z.StopK, z.LeftIdx, z.TriggerK, z.EligibleK, z.SourcePoiId, z.SourceSwingIdx);
+            // Same root-cause fix as FreezeOb -- z.PreSpentState, not
+            // z.Origin (stale at-creation bucket).
+            var snap = NewSnapshot(PoiFamily.RB, type, z.Bullish, z.Zb, z.Zt, z.PreSpentState, z.StopK, z.LeftIdx, z.TriggerK, z.EligibleK, z.SourcePoiId, z.SourceSwingIdx);
             z.S1SnapshotId = snap.S1PoiId;
         }
 
@@ -199,7 +218,9 @@ namespace cAlgo.Robots.ICT_S1
                 case 2: type = PoiTypeLabel.OVI; break;
                 default: type = PoiTypeLabel.IVI; break;
             }
-            var snap = NewSnapshot(PoiFamily.VI, type, z.Bullish, z.Zb, z.Zt, z.Origin, z.StopK, z.LeftIdx, z.TriggerK, z.EligibleK, z.SourcePoiId, z.SourceSwingIdx);
+            // Same root-cause fix as FreezeOb -- z.PreSpentState, not
+            // z.Origin (stale at-creation bucket).
+            var snap = NewSnapshot(PoiFamily.VI, type, z.Bullish, z.Zb, z.Zt, z.PreSpentState, z.StopK, z.LeftIdx, z.TriggerK, z.EligibleK, z.SourcePoiId, z.SourceSwingIdx);
             z.S1SnapshotId = snap.S1PoiId;
         }
 
@@ -286,6 +307,13 @@ namespace cAlgo.Robots.ICT_S1
 
             // Snapshot the list since items get removed from _unresolved mid-loop.
             var snapshot = _unresolved.ToArray();
+            var stillUnresolved = new List<S1PoiSnapshot>(snapshot.Length);
+
+            // --- Retouch + Invalidation first: purely per-POI, no cross-POI
+            // or DirectionalPhase interaction, so processing order here is
+            // provably harmless regardless of which POI happens to be first
+            // in _unresolved (Part 35-38 forensic audit -- only Retirement,
+            // below, needed reordering).
             foreach (var s in snapshot)
             {
                 if (s.LifecycleState != S1PoiLifecycleState.ImpactedUnresolved) continue;
@@ -312,10 +340,47 @@ namespace cAlgo.Robots.ICT_S1
 
                 // --- Invalidation (family-specific) ---
                 bool invalidated = CheckInvalidation(s, k, bull, cK, t);
-                if (invalidated) continue;
+                if (!invalidated) stillUnresolved.Add(s);
+            }
 
-                // --- Retirement (reaction swing confirmed) ---
-                CheckRetirement(s, k, bull, t);
+            // --- Retirement (reaction swing confirmed) ---
+            //
+            // PROVEN BUG FIX (forensic audit, follow-up round, Parts 35-38):
+            // this used to be driven by the OUTER _unresolved-list order
+            // (i.e. whichever POI happened to be FROZEN first), via a
+            // per-POI call that independently scanned _engine.Events for a
+            // matching swing. On a dual-active bar (an outside bar breaking
+            // both the prior high and low), the raw engine confirms BOTH a
+            // Swing Low (Kind=1) and a Swing High (Kind=0) on the SAME bar,
+            // in a specific, Pine-faithful order determined by that bar's
+            // OWN candle direction (RunEngine's `!isBull`/`else` branches:
+            // Low confirms before High on a down candle, High before Low on
+            // an up candle -- proven from the ported Pine logic itself, not
+            // invented). A bullish POI retiring on that Low and a bearish
+            // POI retiring on that High -- both on the SAME bar -- used to
+            // enqueue their PoiEventType.Retired events in _unresolved's
+            // incidental order, meaning DirectionalPhase's final state
+            // after that bar could depend on C# list-insertion order rather
+            // than which counter-move ACTUALLY happened first per Pine's
+            // own deterministic script evaluation. Fixed by driving
+            // Retirement from _engine.Events' OWN append order for this bar
+            // (already exactly Pine-mechanical) instead of from
+            // _unresolved's order -- every POI matching the FIRST-confirmed
+            // kind retires (and any resulting phase transition fires)
+            // before any POI matching the second-confirmed kind.
+            foreach (var ev in _engine.Events)
+            {
+                if (ev.ConfirmIdx != k) continue;
+                foreach (var s in stillUnresolved)
+                {
+                    if (s.LifecycleState != S1PoiLifecycleState.ImpactedUnresolved) continue;
+                    bool bull = s.Direction == Direction.Buy;
+                    // Bullish POI retires on its relevant reaction Swing LOW (kind==1);
+                    // bearish POI retires on its relevant reaction Swing HIGH (kind==0).
+                    bool isReactionSwing = bull ? ev.Kind == 1 : ev.Kind == 0;
+                    if (!isReactionSwing) continue;
+                    Retire(s, ev, t);
+                }
             }
         }
 
@@ -364,29 +429,20 @@ namespace cAlgo.Robots.ICT_S1
             return false;
         }
 
-        private void CheckRetirement(S1PoiSnapshot s, int k, bool bull, DateTime t)
+        // Extracted from the old CheckRetirement so CheckBar can drive
+        // retirement from _engine.Events' own (Pine-mechanical) order for a
+        // given bar instead of per-POI (see CheckBar's Retirement comment).
+        private void Retire(S1PoiSnapshot s, SwEv ev, DateTime t)
         {
-            if (k <= s.FirstImpactBarIndex) return;
-            foreach (var ev in _engine.Events)
-            {
-                if (ev.ConfirmIdx != k) continue;
-                // Bullish POI retires on its relevant reaction Swing LOW (kind==1);
-                // bearish POI retires on its relevant reaction Swing HIGH (kind==0).
-                bool isReactionSwing = bull ? ev.Kind == 1 : ev.Kind == 0;
-                if (isReactionSwing)
-                {
-                    s.LifecycleState = S1PoiLifecycleState.ReactionSwingConfirmed;
-                    s.RelevantReactionSwingType = bull ? SwingType.Low : SwingType.High;
-                    s.RelevantReactionSwingPrice = ev.Price;
-                    s.RelevantReactionSwingConfirmationTime = t;
-                    s.RetirementReason = "Reaction swing confirmed";
-                    s.RetirementTime = t;
-                    s.LifecycleState = S1PoiLifecycleState.Retired;
-                    _unresolved.Remove(s);
-                    _eventQueue.Enqueue(new PoiLifecycleEvent { Type = PoiEventType.Retired, Snapshot = s, Time = t, Note = "Reaction swing confirmed -> retired" });
-                    return;
-                }
-            }
+            bool bull = s.Direction == Direction.Buy;
+            s.RelevantReactionSwingType = bull ? SwingType.Low : SwingType.High;
+            s.RelevantReactionSwingPrice = ev.Price;
+            s.RelevantReactionSwingConfirmationTime = t;
+            s.RetirementReason = "Reaction swing confirmed";
+            s.RetirementTime = t;
+            s.LifecycleState = S1PoiLifecycleState.Retired;
+            _unresolved.Remove(s);
+            _eventQueue.Enqueue(new PoiLifecycleEvent { Type = PoiEventType.Retired, Snapshot = s, Time = t, Note = "Reaction swing confirmed -> retired" });
         }
 
         private void Invalidate(S1PoiSnapshot s, string reason, DateTime t)

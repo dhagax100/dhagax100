@@ -224,19 +224,40 @@ namespace cAlgo.Robots.ICT_S1
         // entries = OFF" being genuinely direction-agnostic while Neutral).
         //
         // Round 2 fix (audit section 23): NOT "any retouch". The doc's own
-        // example is specifically "a valid bullish/bearish LOCATION" --
-        // this is read as the In-Favor/Aggressive-In-Favor POI families
-        // (OriginBucket 0/4, i.e. the "I..."/"AI..." types), which are the
-        // confirmed "in this narrative's favor" location types elsewhere in
-        // the spec (same family H4SetupEngine.IsInFavorType tests for RouteA
-        // vs RouteB classification). An Old or plain-Aggressive (A.../O...)
-        // POI impact or retouch does NOT qualify.
-        private static bool IsInFavorOrigin(int originBucket) => originBucket == 0 || originBucket == 4;
+        // example is specifically "a valid bullish/bearish LOCATION" -- read
+        // as the In-Favor/Aggressive-In-Favor POI families, the confirmed
+        // "in this narrative's favor" location types.
+        //
+        // PROVEN BUG FIX (forensic audit, follow-up round, Parts 31-34):
+        // this used to test `OriginBucket == 0 || OriginBucket == 4`.
+        // EventLog evidence showed OFVG/OOB (Old-family types) reactivating
+        // Control -- traced to the root cause: PoiMarketEngine's structural-
+        // stranding demotion (`State = 2`, RunEngine STEP 3) updates a raw
+        // zone's State but never its OrigState/Origin, so a zone that
+        // started as an IFOB/AIFOB (etc.) candidate and got stranded before
+        // ever impacting freezes with TypeAtActivation correctly reading
+        // OOB/OFVG/etc. while OriginBucket kept the STALE original bucket.
+        // Two fixes applied together (belt-and-suspenders, Part 74 "fix the
+        // model, not the symptom"): (1) PoiLifecycleTracker.Freeze* now
+        // stamps OriginBucket from the SAME PreSpentState value TypeAtActivation
+        // itself is derived from, eliminating the staleness at the root; (2)
+        // this predicate ALSO no longer trusts OriginBucket at all -- it
+        // enumerates the confirmed continuation taxonomy directly off the
+        // frozen PoiTypeLabel (Part 32's explicit instruction: "do not infer
+        // semantic POI class from OriginBucket alone"). Deliberately does
+        // NOT reuse H4SetupEngine.IsInFavorType -- that predicate excludes
+        // AIFOB/AIRB on purpose (H4 Route classification treats them as
+        // Aggressive-route), but Part 32 explicitly requires THIS predicate
+        // to include them as valid continuation types for Neutral
+        // reactivation. Two different semantic questions, two predicates.
+        private static bool IsInFavorOrAggressiveInFavorType(PoiTypeLabel type) =>
+            type == PoiTypeLabel.IFOB || type == PoiTypeLabel.IFVG || type == PoiTypeLabel.IRB || type == PoiTypeLabel.IVI ||
+            type == PoiTypeLabel.AIFOB || type == PoiTypeLabel.AIRB;
 
         private void ReactivateGlobalPhaseIfDue(S1PoiSnapshot triggeringSnap, DateTime time)
         {
             if (Phase.State != ControlState.Neutral) return;
-            if (!IsInFavorOrigin(triggeringSnap.OriginBucket)) return;
+            if (!IsInFavorOrAggressiveInFavorType(triggeringSnap.TypeAtActivation)) return;
 
             var restored = triggeringSnap.Direction == Direction.Buy ? ControlState.BuyControl : ControlState.SellControl;
             SetPhase(restored, ControlState.Neutral, triggeringSnap, time,
@@ -295,7 +316,7 @@ namespace cAlgo.Robots.ICT_S1
         {
             var snap = ev.Snapshot;
             if (Phase.State == null) return; // no phase established yet -- nothing to contest
-            if (IsInFavorOrigin(snap.OriginBucket)) return; // continuation-type POIs don't "contest" the phase
+            if (IsInFavorOrAggressiveInFavorType(snap.TypeAtActivation)) return; // continuation-type POIs don't "contest" the phase -- Part 31-34 fix, see ReactivateGlobalPhaseIfDue
 
             var newControl = snap.Direction == Direction.Buy ? ControlState.BuyControl : ControlState.SellControl;
             bool isOpposite = (Phase.State == ControlState.BuyControl && snap.Direction == Direction.Sell)
@@ -346,6 +367,11 @@ namespace cAlgo.Robots.ICT_S1
             Phase.State = newState;
             Phase.EstablishedTime = time;
             Phase.SourcePoiId = sourceSnap?.S1PoiId;
+            Phase.SourcePoiType = sourceSnap?.TypeAtActivation;
+            Phase.SourcePoiDirection = sourceSnap?.Direction;
+            Phase.SourcePoiFamily = sourceSnap?.Family;
+            Phase.SourcePoiOriginBucket = sourceSnap?.OriginBucket;
+            Phase.SourcePoiLifecycleState = sourceSnap?.LifecycleState;
             Phase.SourceSwingType = sourceSnap?.RelevantReactionSwingType;
             Phase.SourceSwingPrice = sourceSnap?.RelevantReactionSwingPrice;
             Phase.SourceSwingTime = sourceSnap?.RelevantReactionSwingConfirmationTime;

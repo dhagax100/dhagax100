@@ -276,6 +276,15 @@ namespace cAlgo.Robots.ICT_S1
         public ControlState? State;
         public DateTime? EstablishedTime;
         public string SourcePoiId;
+        // Part 47/48 forensic-journal enrichment: the frozen identity of
+        // the POI that established the CURRENT phase, captured directly
+        // (not re-derived by ID lookup later) so it's always available in
+        // exactly one place.
+        public PoiTypeLabel? SourcePoiType;
+        public Direction? SourcePoiDirection;
+        public PoiFamily? SourcePoiFamily;
+        public int? SourcePoiOriginBucket;
+        public S1PoiLifecycleState? SourcePoiLifecycleState;
         public SwingType? SourceSwingType;
         public double? SourceSwingPrice;
         public DateTime? SourceSwingTime;
@@ -297,7 +306,21 @@ namespace cAlgo.Robots.ICT_S1
         public DateTime Time;
         public Direction Direction;
         public string PoiId;
+        public PoiTypeLabel? PoiType;
         public string Note;
+
+        // Part 48 forensic-journal fields -- populated only for
+        // H4_POI_REJECTED_NARRATIVE_NOT_IN_CONTROL (the phase-suppression
+        // path); null/default for the other rejection codes, which don't
+        // involve DirectionalPhase. Lets a SELL-suppression forensic pass
+        // answer "why was this SELL candidate rejected" from the journal
+        // alone, without re-deriving Phase state from other files.
+        public int SourceSwingIdx = -1;
+        public ControlState? PhaseStateAtRejection;
+        public DateTime? PhaseEstablishedTime;
+        public string PhaseSourcePoiId;
+        public PoiTypeLabel? PhaseSourcePoiType;
+        public List<string> TemporallyValidSameDirectionWeeklyIds;
     }
 
     public class H4Setup

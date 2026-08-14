@@ -49,12 +49,16 @@ namespace cAlgo.Robots.ICT_S1
         private readonly string _opportunitySummaryPath;
         private readonly string _eventLogPath;
         private readonly string _debugLogPath;
+        private readonly string _phaseHistoryPath;
+        private readonly string _h4PhaseRejectionPath;
         private readonly bool _debugLoggingEnabled;
 
         private readonly List<string> _eventLogBuffer = new List<string>();
         private readonly List<string> _tradeSummaryBuffer = new List<string>();
         private readonly List<string> _opportunityHistoryBuffer = new List<string>();
         private readonly List<string> _debugBuffer = new List<string>();
+        private readonly List<string> _phaseHistoryBuffer = new List<string>();
+        private readonly List<string> _h4PhaseRejectionBuffer = new List<string>();
         // Part 23 fix: OpportunitySummary must be exactly ONE row per
         // WeeklyOpportunityID (a real summary), not a repeated-append log --
         // that repeated-append behavior moved to OpportunityHistory instead.
@@ -77,13 +81,34 @@ namespace cAlgo.Robots.ICT_S1
         // M5ExecutionActivationTime is the swing-pairing window boundary,
         // and ExitPriceSource proves which of HistoricalTrade/QuoteFallback
         // actually supplied ExitPrice (Part 21).
+        //
+        // Forensic-audit round, Part 50 ("preserve and enrich if necessary
+        // -- do not weaken existing logging"): the M5-completion swing
+        // detail (PostEntryContinuationSwing*/CompletionPullbackSwing*) and
+        // M5ExecutionCompletionReason already existed on H4Setup and were
+        // already visible informally inside the EventLog's free-text Note
+        // column (M5_EXECUTION_COMPLETED_STRUCTURALLY row) -- these trailing
+        // columns are a pure enrichment, surfacing the same already-computed
+        // fields as structured, machine-checkable data instead of a string a
+        // reviewer would otherwise have to parse. Same reasoning for the
+        // trailing H4Supersede* columns (Part 49): H4Setup already carries
+        // SupersededBySwingIdx/Price/SupersededTime (Task #31/prior round);
+        // rather than stand up a whole 5th dedicated CSV file duplicating
+        // data that already lives on the H4Setup object and is already
+        // reconcilable via H4SetupID/H4SetupStatusAtClose, they are appended
+        // here so every closed trade's row states plainly whether -- and by
+        // what new swing -- its own H4 reaction was later superseded. No
+        // existing column was reordered or removed.
         private const string TradeSummaryHeader = "StrategyVersion,Symbol,TradeID,PositionID,WeeklyOpportunityID,SupportingWeeklyOpportunityIDs,WeeklyPoiIds,PoiClusterID,H4SetupID,H4PoiIds,H4ProtectedSwingIdx,M5AttemptID,AttemptNumber," +
             "TradeDirection,WeeklyOpportunityDirection,WeeklyActivationTime,WeeklyPOITop,WeeklyPOIBottom,ControlAtTradeTime,ControlSourcePoiId," +
             "H4Route,H4ProtectedSwingType,H4ProtectedSwingPrice,H4ProtectedSwingTime,WeeklyRetouchNumber,H4SetupStatusAtClose,M5ExecutionStateAtClose," +
             "M5ExecutionActivationTime,M5EntrySwingType,M5EntrySwingPrice,M5EntrySwingTime,M5StopSwingType,M5StopSwingPrice,M5StopSwingTime," +
             "FirstPendingOrderCreatedTime,PendingOrderCreatedTime,PendingOrderModificationCount,EntryTime,RequestedEntryPrice,ActualFillPrice," +
             "SLPrice,TPPrice,TargetR,RiskPercent,PositionVolume," +
-            "ExitTime,ExitPrice,ExitPriceSource,ExitReason,GrossPnL,NetPnL,RealizedR";
+            "ExitTime,ExitPrice,ExitPriceSource,ExitReason,GrossPnL,NetPnL,RealizedR," +
+            "M5ExecutionCompletedTime,M5ExecutionCompletionReason,PostEntryContinuationSwingIdx,PostEntryContinuationSwingPrice,PostEntryContinuationSwingTime," +
+            "CompletionPullbackSwingIdx,CompletionPullbackSwingPrice,CompletionPullbackSwingTime," +
+            "H4SupersededBySwingIdx,H4SupersededBySwingPrice,H4SupersededTime";
 
         // Same schema for both files -- History is the append-every-change
         // log, Summary is the one-row-latest-state view of it. No Control
@@ -93,6 +118,20 @@ namespace cAlgo.Robots.ICT_S1
         // transition history instead.
         private const string OpportunitySummaryHeader = "Symbol,WeeklyOpportunityID,Direction,ActivationTime,Status,TerminationTime,TerminationReason," +
             "SupportingPoiCount,H4SetupCount,RetouchCounter";
+
+        // Part 47: full DirectionalPhase transition history -- every field
+        // needed to spot a misclassified source POI (e.g. an Old-family POI
+        // that shouldn't have reactivated Neutral) immediately, without
+        // cross-referencing other files.
+        private const string PhaseHistoryHeader = "Symbol,Timestamp,PreviousState,NewState," +
+            "SourcePoiId,SourcePoiType,SourcePoiDirection,SourcePoiFamily,SourcePoiOriginBucket,SourcePoiLifecycleState," +
+            "SourceReactionSwingType,SourceReactionSwingPrice,SourceReactionSwingTime,TransitionReason";
+
+        // Part 48: every H4_POI_REJECTED_NARRATIVE_NOT_IN_CONTROL rejection
+        // with full phase-forensic context -- proves numerically WHY each
+        // SELL (or BUY) candidate was suppressed, from this file alone.
+        private const string H4PhaseRejectionHeader = "Symbol,Timestamp,H4PoiId,H4PoiType,Direction,H4SourceSwingIdx," +
+            "TemporallyValidSameDirectionWeeklyIDs,PhaseStateAtRejection,PhaseEstablishedTime,PhaseSourcePoiId,PhaseSourcePoiType,RejectionNote";
 
         public string SymbolName;
         public string StrategyVersion = "S1-v1";
@@ -109,11 +148,15 @@ namespace cAlgo.Robots.ICT_S1
             _opportunitySummaryPath = Path.Combine(baseDir, "S1_OpportunitySummary_" + runId + ".csv");
             _eventLogPath = Path.Combine(baseDir, "S1_EventLog_" + runId + ".csv");
             _debugLogPath = Path.Combine(baseDir, "S1_Debug_" + runId + ".log");
+            _phaseHistoryPath = Path.Combine(baseDir, "S1_DirectionalPhaseHistory_" + runId + ".csv");
+            _h4PhaseRejectionPath = Path.Combine(baseDir, "S1_H4PhaseRejections_" + runId + ".csv");
 
             System.IO.File.WriteAllText(_eventLogPath, EventLogHeader + Environment.NewLine);
             System.IO.File.WriteAllText(_tradeSummaryPath, TradeSummaryHeader + Environment.NewLine);
             System.IO.File.WriteAllText(_opportunityHistoryPath, OpportunitySummaryHeader + Environment.NewLine);
             System.IO.File.WriteAllText(_opportunitySummaryPath, OpportunitySummaryHeader + Environment.NewLine);
+            System.IO.File.WriteAllText(_phaseHistoryPath, PhaseHistoryHeader + Environment.NewLine);
+            System.IO.File.WriteAllText(_h4PhaseRejectionPath, H4PhaseRejectionHeader + Environment.NewLine);
         }
 
         public string RunDirectory => Path.GetDirectoryName(_eventLogPath);
@@ -147,6 +190,24 @@ namespace cAlgo.Robots.ICT_S1
             WriteEventRow(ev.Time, "Weekly", "DIRECTIONAL_PHASE_CHANGED", "",
                 "", "", ev.SourcePoi?.S1PoiId ?? "", "", "", "",
                 "", "", "", ev.OldState?.ToString(), ev.NewState.ToString(), ev.Reason, "");
+            LogPhaseHistoryRow(ev);
+        }
+
+        // Part 47: dedicated file, full forensic detail per transition --
+        // proves at a glance whether a source POI was correctly classified
+        // (e.g. an Old-family POI must never appear here as a reactivation
+        // source).
+        private void LogPhaseHistoryRow(DirectionalPhaseEvent ev)
+        {
+            var s = ev.SourcePoi;
+            var row = string.Join(",", new[]
+            {
+                Csv(SymbolName), Csv(ev.Time.ToString("O")), Csv(ev.OldState?.ToString()), Csv(ev.NewState.ToString()),
+                Csv(s?.S1PoiId), Csv(s?.TypeAtActivation.ToString()), Csv(s?.Direction.ToString()), Csv(s?.Family.ToString()), Csv(s?.OriginBucket.ToString()), Csv(s?.LifecycleState.ToString()),
+                Csv(s?.RelevantReactionSwingType?.ToString()), Csv(s?.RelevantReactionSwingPrice?.ToString()), Csv(s?.RelevantReactionSwingConfirmationTime?.ToString("O")), Csv(ev.Reason)
+            });
+            _phaseHistoryBuffer.Add(row);
+            if (_phaseHistoryBuffer.Count >= 20) FlushPhaseHistory();
         }
 
         // Round 2 fix (audit section 27): raw swing-confirmation / MSS
@@ -218,6 +279,24 @@ namespace cAlgo.Robots.ICT_S1
             WriteEventRow(rej.Time, "H4", rej.Code.ToString(), rej.Direction.ToString(),
                 "", "", rej.PoiId, "", "", "",
                 "", "", "", "", "REJECTED", rej.Note, "");
+
+            // Part 48: dedicated file, ONLY for the phase-suppression path
+            // (the one with real phase-forensic content to show) -- proves
+            // numerically why each candidate was suppressed.
+            if (rej.Code == RejectionCode.H4_POI_REJECTED_NARRATIVE_NOT_IN_CONTROL)
+                LogH4PhaseRejectionRow(rej);
+        }
+
+        private void LogH4PhaseRejectionRow(RejectionEvent rej)
+        {
+            string weeklyIds = rej.TemporallyValidSameDirectionWeeklyIds != null ? string.Join(";", rej.TemporallyValidSameDirectionWeeklyIds) : "";
+            var row = string.Join(",", new[]
+            {
+                Csv(SymbolName), Csv(rej.Time.ToString("O")), Csv(rej.PoiId), Csv(rej.PoiType?.ToString()), Csv(rej.Direction.ToString()), Csv(rej.SourceSwingIdx.ToString()),
+                Csv(weeklyIds), Csv(rej.PhaseStateAtRejection?.ToString()), Csv(rej.PhaseEstablishedTime?.ToString("O")), Csv(rej.PhaseSourcePoiId), Csv(rej.PhaseSourcePoiType?.ToString()), Csv(rej.Note)
+            });
+            _h4PhaseRejectionBuffer.Add(row);
+            if (_h4PhaseRejectionBuffer.Count >= 20) FlushH4PhaseRejection();
         }
 
         private void WriteEventRow(DateTime time, string timeframe, string eventType, string direction,
@@ -287,7 +366,10 @@ namespace cAlgo.Robots.ICT_S1
                 Csv(setup?.M5ExecutionActivationTime?.ToString("O")), Csv(attempt.EntrySwingType.ToString()), Csv(attempt.EntrySwingPrice.ToString()), Csv(attempt.EntrySwingTime.ToString("O")), Csv(attempt.StopSwingType.ToString()), Csv(attempt.StopSwingPrice.ToString()), Csv(attempt.StopSwingTime.ToString("O")),
                 Csv(attempt.FirstPendingOrderCreatedTime?.ToString("O")), Csv(attempt.PendingOrderCreatedTime?.ToString("O")), Csv(attempt.PendingOrderModificationCount.ToString()), Csv(attempt.EntryTime?.ToString("O")), Csv(attempt.RequestedEntryPrice.ToString()), Csv(attempt.ActualFillPrice?.ToString()),
                 Csv(attempt.SLPrice.ToString()), Csv(attempt.TPPrice.ToString()), Csv("3"), Csv(RiskPercentConfigured.ToString()), Csv(attempt.PositionVolume?.ToString()),
-                Csv(attempt.ExitTime?.ToString("O")), Csv(attempt.ExitPrice?.ToString()), Csv(attempt.ExitPriceSource), Csv(attempt.ExitReason?.ToString()), Csv(attempt.GrossPnL?.ToString()), Csv(attempt.NetPnL?.ToString()), Csv(attempt.RealizedR?.ToString())
+                Csv(attempt.ExitTime?.ToString("O")), Csv(attempt.ExitPrice?.ToString()), Csv(attempt.ExitPriceSource), Csv(attempt.ExitReason?.ToString()), Csv(attempt.GrossPnL?.ToString()), Csv(attempt.NetPnL?.ToString()), Csv(attempt.RealizedR?.ToString()),
+                Csv(setup?.M5ExecutionCompletedTime?.ToString("O")), Csv(setup?.M5ExecutionCompletionReason), Csv(setup?.PostEntryContinuationSwingIdx?.ToString()), Csv(setup?.PostEntryContinuationSwingPrice?.ToString()), Csv(setup?.PostEntryContinuationSwingTime?.ToString("O")),
+                Csv(setup?.CompletionPullbackSwingIdx?.ToString()), Csv(setup?.CompletionPullbackSwingPrice?.ToString()), Csv(setup?.CompletionPullbackSwingTime?.ToString("O")),
+                Csv(setup?.SupersededBySwingIdx?.ToString()), Csv(setup?.SupersededBySwingPrice?.ToString()), Csv(setup?.SupersededTime?.ToString("O"))
             });
             _tradeSummaryBuffer.Add(row);
             FlushTradeSummary();
@@ -354,6 +436,8 @@ namespace cAlgo.Robots.ICT_S1
             FlushTradeSummary();
             FlushOpportunityHistory();
             RewriteOpportunitySummary(); // idempotent full rewrite -- cheap, guarantees the summary file is current at shutdown
+            FlushPhaseHistory();
+            FlushH4PhaseRejection();
             FlushDebugLog();
         }
 
@@ -383,6 +467,20 @@ namespace cAlgo.Robots.ICT_S1
             if (_debugBuffer.Count == 0) return;
             System.IO.File.AppendAllLines(_debugLogPath, _debugBuffer);
             _debugBuffer.Clear();
+        }
+
+        private void FlushPhaseHistory()
+        {
+            if (_phaseHistoryBuffer.Count == 0) return;
+            System.IO.File.AppendAllLines(_phaseHistoryPath, _phaseHistoryBuffer);
+            _phaseHistoryBuffer.Clear();
+        }
+
+        private void FlushH4PhaseRejection()
+        {
+            if (_h4PhaseRejectionBuffer.Count == 0) return;
+            System.IO.File.AppendAllLines(_h4PhaseRejectionPath, _h4PhaseRejectionBuffer);
+            _h4PhaseRejectionBuffer.Clear();
         }
 
         private static string Csv(string field)

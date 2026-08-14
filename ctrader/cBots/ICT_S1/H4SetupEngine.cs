@@ -254,13 +254,36 @@ namespace cAlgo.Robots.ICT_S1
         {
             var snap = ev.Snapshot;
 
-            var (qualifying, anyTemporallyValidCandidate) = FindArmingWeeklyOpportunities(snap.Direction, ev.Time);
+            var (qualifying, temporallyValid) = FindArmingWeeklyOpportunities(snap.Direction, ev.Time);
             if (qualifying.Count == 0)
             {
+                bool anyTemporallyValidCandidate = temporallyValid.Count > 0;
                 var code = anyTemporallyValidCandidate
                     ? RejectionCode.H4_POI_REJECTED_NARRATIVE_NOT_IN_CONTROL
                     : RejectionCode.H4_POI_REJECTED_NO_WEEKLY_PARENT;
-                _rejectionQueue.Enqueue(new RejectionEvent { Code = code, Time = ev.Time, Direction = snap.Direction, PoiId = snap.S1PoiId, Note = $"{snap.TypeAtActivation} impact at {ev.Time:O} has no authorizing Weekly narrative" });
+                var phase = _weeklyEngine.Phase;
+                var rejection = new RejectionEvent
+                {
+                    Code = code,
+                    Time = ev.Time,
+                    Direction = snap.Direction,
+                    PoiId = snap.S1PoiId,
+                    PoiType = snap.TypeAtActivation,
+                    Note = $"{snap.TypeAtActivation} impact at {ev.Time:O} has no authorizing Weekly narrative",
+                    SourceSwingIdx = snap.SourceSwingIdx,
+                };
+                if (anyTemporallyValidCandidate)
+                {
+                    // Part 48: full phase-forensic context, so a SELL-suppression
+                    // audit pass can answer "why" from the journal alone.
+                    rejection.PhaseStateAtRejection = phase.State;
+                    rejection.PhaseEstablishedTime = phase.EstablishedTime;
+                    rejection.PhaseSourcePoiId = phase.SourcePoiId;
+                    rejection.PhaseSourcePoiType = phase.SourcePoiType;
+                    rejection.TemporallyValidSameDirectionWeeklyIds = new List<string>();
+                    foreach (var w in temporallyValid) rejection.TemporallyValidSameDirectionWeeklyIds.Add(w.WeeklyOpportunityId);
+                }
+                _rejectionQueue.Enqueue(rejection);
                 return;
             }
 
@@ -274,7 +297,7 @@ namespace cAlgo.Robots.ICT_S1
             if (snap.SourceSwingType == null || snap.SourceSwingPrice == null || snap.SourceSwingConfirmationTime == null || snap.SourceSwingIdx < 0)
             {
                 // Finding 10: fail safely, no fake fallback -- do not arm.
-                _rejectionQueue.Enqueue(new RejectionEvent { Code = RejectionCode.H4_POI_REJECTED_NO_PROTECTED_SWING, Time = ev.Time, Direction = snap.Direction, PoiId = snap.S1PoiId, Note = $"No source-swing reference was stored for this {snap.TypeAtActivation} at creation -- refusing to arm with a substituted level" });
+                _rejectionQueue.Enqueue(new RejectionEvent { Code = RejectionCode.H4_POI_REJECTED_NO_PROTECTED_SWING, Time = ev.Time, Direction = snap.Direction, PoiId = snap.S1PoiId, PoiType = snap.TypeAtActivation, Note = $"No source-swing reference was stored for this {snap.TypeAtActivation} at creation -- refusing to arm with a substituted level" });
                 return;
             }
 
@@ -349,10 +372,10 @@ namespace cAlgo.Robots.ICT_S1
         // HandleNewImpact). The bool tells the caller whether ANY temporally-
         // valid same-direction candidate existed at all (for accurate
         // rejection-code selection: NO_WEEKLY_PARENT vs NOT_IN_CONTROL).
-        private (List<WeeklyOpportunity>, bool) FindArmingWeeklyOpportunities(Direction dir, DateTime h4EventTime)
+        private (List<WeeklyOpportunity> qualifying, List<WeeklyOpportunity> temporallyValid) FindArmingWeeklyOpportunities(Direction dir, DateTime h4EventTime)
         {
             var qualifying = new List<WeeklyOpportunity>();
-            bool anyTemporallyValid = false;
+            var temporallyValid = new List<WeeklyOpportunity>();
 
             foreach (var opp in _weeklyEngine.Opportunities)
             {
@@ -365,7 +388,7 @@ namespace cAlgo.Robots.ICT_S1
                 if (opp.Status == WeeklyOpportunityStatus.Terminated && opp.TerminationTime != null && opp.TerminationTime.Value <= h4EventTime) continue;
                 if (opp.Status != WeeklyOpportunityStatus.Active) continue;
 
-                anyTemporallyValid = true;
+                temporallyValid.Add(opp); // Part 48 forensic journal: every temporally-valid same-direction candidate, not just a bool
 
                 // Strategy clarification (follow-up round, Parts 21-34):
                 // directional trade permission now comes from the single
@@ -381,7 +404,7 @@ namespace cAlgo.Robots.ICT_S1
 
                 qualifying.Add(opp);
             }
-            return (qualifying, anyTemporallyValid);
+            return (qualifying, temporallyValid);
         }
 
         // RESOLVED (audit sections 7-9, 43 -- strategy owner clarification
