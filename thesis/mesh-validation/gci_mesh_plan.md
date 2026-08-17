@@ -119,8 +119,16 @@ After duplicating from Coarse, open Fluent from the new system and do **not** to
 |---|---|---|---|---|
 | Coarse | 2,718,404 | 921.49 | 0.00628 | Mass balance 0.0014%, y+ avg 0.29 / max 2.26, Re ≈ 99,600 |
 | Medium | 4,888,550 | 927.35 (+0.64%) | 0.00616 (−1.96%) | Mass balance 0.0012%, y+ avg 0.29 / max 2.21, ΔP 3551.5 Pa (−1.46% vs Coarse) |
-| Fine | — | — | — | pending |
+| Fine | 8,658,088 | 909.12 | 0.00595 | Mass balance 0.0003%, y+ avg 0.29 / max 2.12, ΔP 3443.4 Pa |
 
-Coarse → Medium change is small on both Nu and f — a good early sign for eventual GCI < 1%, but not a verdict on its own. GCI can't compute (needs all 3 levels) until Fine is in — currently shows "enter all 3 mesh levels first."
+## ⚠️ GCI verdict: INVALID (not PASS) — convergence is not clean across the 3 levels
+
+**Nu is not monotonic:** 921.49 → 927.35 → 909.12 (up, then down). The GCI sheet's built-in check catches this ("OSCILLATORY -- standard GCI NOT valid") and overrides any raw percentage with an explicit INVALID verdict, rather than reporting a spurious PASS.
+
+**f is monotonic in direction (0.00628 → 0.00616 → 0.00595, consistently decreasing) but fails a second check:** the Medium→Fine change (0.000208) is *larger* than the Coarse→Medium change (0.000122) — the error is growing, not shrinking, as the mesh refines. This produces a negative "apparent order," which is not physically meaningful, so the sheet also overrides this to INVALID.
+
+**Why this is likely happening — not a failed study, a real methodological gap:** the total spread across all 3 levels is small (~2% on Nu, ~5.5% on f), likely close to the size of ordinary iteration-to-iteration noise from the swirling flow (see Lesson 10 in the Report Definitions course — residual convergence ≠ physical-monitor convergence; a report read at a single fixed iteration count can land on a different point of a mild oscillation for each mesh level). All three runs used exactly 1000 iterations with no averaging, which is exactly the setup that would let this kind of noise contaminate the comparison.
+
+**Next step before re-running any mesh:** re-extract Nu and f using **Report Definitions → Average Over** (Lesson 10) — average the last ~50–100 iterations instead of reading the single final value — for all three existing mesh levels, and re-populate the workbook. If the convergence pattern becomes monotonic with a sensible positive apparent order after that, this is very likely resolved without needing a 4th mesh level.
 
 See `PTSC_GCI_Workbook.xlsx` for full raw extraction and the live GCI calculation.
