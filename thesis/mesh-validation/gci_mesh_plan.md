@@ -99,11 +99,11 @@ Refinement ratio check: 5.0/3.85 = 1.299, 3.85/2.96 = 1.301 — effectively cons
 |---|---|---|---|---|
 | Coarse | 2,718,404 | 1,270,568 | **0.009** ⚠️ below own target (>0.01) | 0.883 (in ANSYS's "bad" 0.80–0.95 band, but under the 0.95 ceiling) |
 | Medium | 4,888,550 | 2,212,552 | **0.0129** ✓ now clears the >0.01 target | 0.848 (still in the "bad" band, but improved vs. Coarse) |
-| Fine | — | — | — | — |
+| Fine | 8,658,088 | 3,761,583 | **0.01498** ✓ continues improving | 0.850 (essentially flat vs. Medium — skewness has plateaued) |
 
-Both quality metrics improved from Coarse to Medium, as expected — refining a mesh tends to fix its worst-shaped cells along with improving general accuracy. Medium's element count (4,888,550) lands inside the ~4.5–5.5M expected range.
+Both quality metrics improved from Coarse to Medium, as expected — refining a mesh tends to fix its worst-shaped cells along with improving general accuracy. Medium's element count (4,888,550) and Fine's (8,658,088) both land inside their expected ranges.
 
-Note: actual refinement ratio between Coarse and Medium, from cell counts, is r32 = (4,888,550/2,718,404)^(1/3) ≈ 1.216 — somewhat below the ~1.30 implied by the linear element-size ratio (5.0/3.85). Expected: cell count doesn't scale as a perfect cube of the global size setting because inflation-layer cell count stays fixed regardless of global size. Watch this against r21 (Fine vs. Medium) once Fine is meshed — the GCI sheet flags it automatically if the two ratios drift more than 5% apart.
+**Refinement ratio check — passes.** r32 (Medium/Coarse) ≈ 1.216, r21 (Fine/Medium) ≈ 1.210 — within 0.5% of each other, well inside the 5% tolerance the GCI sheet checks for. The constant-refinement-ratio assumption behind the GCI formula holds across all three levels.
 
 **Watch item:** confirm where the worst-orthogonal-quality cell sits (Mesh → Quality display) — if it's at a promoter corner, expect it to persist or shift across Medium/Fine rather than disappear on its own. Track both metrics at every level, not just once.
 
