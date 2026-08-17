@@ -93,6 +93,16 @@ Refinement ratio check: 5.0/3.85 = 1.299, 3.85/2.96 = 1.301 — effectively cons
 | Medium | 3.85 mm | ~4.5–5.5 M | pending |
 | Fine | 2.96 mm | ~7.5–9.5 M | pending |
 
+## Mesh quality log
+
+| Level | Elements | Nodes | Min Orthogonal Quality | Max Skewness |
+|---|---|---|---|---|
+| Coarse | 2,718,404 | 1,270,568 | **0.009** ⚠️ below own target (>0.01) | 0.883 (in ANSYS's "bad" 0.80–0.95 band, but under the 0.95 ceiling) |
+| Medium | — | — | — | — |
+| Fine | — | — | — | — |
+
+**Watch item:** confirm where the worst-orthogonal-quality cell sits (Mesh → Quality display) — if it's at a promoter corner, expect it to persist or shift across Medium/Fine rather than disappear on its own. Track both metrics at every level, not just once.
+
 If Medium comes in below 4M or above 7M, check that Global Size is really the only setting that changed vs. Coarse.
 
 ## Fluent — nothing to change between levels
