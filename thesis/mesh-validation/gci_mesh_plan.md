@@ -118,7 +118,9 @@ After duplicating from Coarse, open Fluent from the new system and do **not** to
 | Mesh level | Cell Count | Nu | f | Notes |
 |---|---|---|---|---|
 | Coarse | 2,718,404 | 921.49 | 0.00628 | Mass balance 0.0014%, y+ avg 0.29 / max 2.26, Re ≈ 99,600 |
-| Medium | — | — | — | pending |
+| Medium | 4,888,550 | 927.35 (+0.64%) | 0.00616 (−1.96%) | Mass balance 0.0012%, y+ avg 0.29 / max 2.21, ΔP 3551.5 Pa (−1.46% vs Coarse) |
 | Fine | — | — | — | pending |
+
+Coarse → Medium change is small on both Nu and f — a good early sign for eventual GCI < 1%, but not a verdict on its own. GCI can't compute (needs all 3 levels) until Fine is in — currently shows "enter all 3 mesh levels first."
 
 See `PTSC_GCI_Workbook.xlsx` for full raw extraction and the live GCI calculation.
