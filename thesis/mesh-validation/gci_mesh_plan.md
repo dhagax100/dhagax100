@@ -97,9 +97,10 @@ Refinement ratio check: 5.0/3.85 = 1.299, 3.85/2.96 = 1.301 — effectively cons
 
 | Level | Elements | Nodes | Min Orthogonal Quality | Max Skewness |
 |---|---|---|---|---|
-| Coarse | 2,718,404 | 1,270,568 | **0.009** ⚠️ below own target (>0.01) | 0.883 (in ANSYS's "bad" 0.80–0.95 band, but under the 0.95 ceiling) |
-| Medium | 4,888,550 | 2,212,552 | **0.0129** ✓ now clears the >0.01 target | 0.848 (still in the "bad" band, but improved vs. Coarse) |
-| Fine | 8,658,088 | 3,761,583 | **0.01498** ✓ continues improving | 0.850 (essentially flat vs. Medium — skewness has plateaued) |
+| Mesh 1 (Coarsest) | 2,718,404 | 1,270,568 | **0.009** ⚠️ below own target (>0.01) | 0.883 (in ANSYS's "bad" 0.80–0.95 band, but under the 0.95 ceiling) |
+| Mesh 2 | 4,888,550 | 2,212,552 | **0.0129** ✓ clears the >0.01 target | 0.848 (still in the "bad" band, but improved vs. Mesh 1) |
+| Mesh 3 | 8,658,088 | 3,761,583 | **0.01498** ✓ continues improving | 0.850 (essentially flat vs. Mesh 2 — skewness has plateaued) |
+| Mesh 4 (Finest, 2.28mm) | 15,675,184 | 6,571,364 | **0.01312** — small step back from Mesh 3, still clears >0.01 | 0.8499 (flat, matches plateau) |
 
 Both quality metrics improved from Coarse to Medium, as expected — refining a mesh tends to fix its worst-shaped cells along with improving general accuracy. Medium's element count (4,888,550) and Fine's (8,658,088) both land inside their expected ranges.
 
