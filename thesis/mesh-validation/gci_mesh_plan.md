@@ -161,9 +161,11 @@ Neither of these is the decision point — only **Mesh 3 vs. Mesh 4** (the two f
 
 Same methodology as the enhanced geometry: same 4 element sizes (5.0/3.85/2.96/2.28mm), same tet mesh type (kept for consistency with the enhanced geometry — see decision_log.md), same inflation settings, Nu + ΔP monitors, simple consecutive-mesh % method, 2% threshold. Geometry: plain circular tube, no promoter, 2m length (matching the production length decision), dti=66mm/dto=70mm/wall=2mm. This case's own physics are the actual Baseline production run (plain Syltherm 800, Re=10,000, Tin=500K, real MCRT heat flux UDF, steel tube) — whichever mesh level is adopted here doubles as the production Baseline result.
 
+**Note:** an earlier Mesh 1 attempt (724,846 elements) was built before the fluid body's topology issue was fixed (Fill produced a degenerate surface body; rebuilt via direct extrude + Form New Part) and before inflation was properly resolvable — that data point is invalid and superseded by the corrected run below.
+
 | Level | Elements | Nodes | Max Skewness | Min Orthogonal Quality |
 |---|---|---|---|---|
-| Mesh 1 (Coarsest, 5.0mm) | 724,846 | 342,616 | 0.84864 | 0.032072 |
+| Mesh 1 (Coarsest, 5.0mm) | 1,009,884 | 380,586 | 0.8477 | 0.1523 |
 
 ## Archived: old Celik/GCI verdict (superseded by the above, kept for record — do not act on this)
 
