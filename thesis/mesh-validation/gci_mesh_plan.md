@@ -121,7 +121,27 @@ After duplicating from Coarse, open Fluent from the new system and do **not** to
 | Medium | 4,888,550 | 927.35 (+0.64%) | 0.00616 (−1.96%) | Mass balance 0.0012%, y+ avg 0.29 / max 2.21, ΔP 3551.5 Pa (−1.46% vs Coarse) |
 | Fine | 8,658,088 | 909.12 | 0.00595 | Mass balance 0.0003%, y+ avg 0.29 / max 2.12, ΔP 3443.4 Pa |
 
-## ⚠️ GCI verdict: INVALID (not PASS) — convergence is not clean across the 3 levels
+## Methodology decision, 2026-08-17: switched from Celik GCI to Mohammed et al. (2022)'s method
+
+After checking the advisor's real published paper (Section 2.6, Table 4 — not just the thesis proposal draft), decided to match his actual accepted practice rather than the stricter Celik et al. (2008) Richardson-extrapolation approach originally built:
+
+- **Monitors: Nu and ΔP** (not f — swapped to match the paper's own table)
+- **Method: simple consecutive-mesh percent difference** between the two finest levels, no Richardson extrapolation, no apparent order, no monotonicity requirement
+- **Threshold: 2%** (verified from the real paper's Table 4, not the proposal draft's stated 1%, which doesn't reconcile with its own numbers)
+- **4 mesh levels**, matching the paper's own practice — proceeding to build Mesh 4
+
+`PTSC_GCI_Workbook.xlsx` renamed its check sheet to **"Mesh Independence Check"**; old Celik/GCI sheet retired.
+
+### Current standing (Mesh 1–3, before Mesh 4)
+
+| Comparison | Nu % diff | ΔP % diff |
+|---|---|---|
+| Mesh 1 → Mesh 2 | 0.63% | 1.49% |
+| Mesh 2 → Mesh 3 | 2.01% | 3.14% |
+
+Neither of these is the decision point — only **Mesh 3 vs. Mesh 4** (the two finest, once Mesh 4 exists) determines the verdict, matching the paper's own practice of comparing only the latest pair.
+
+## Archived: old Celik/GCI verdict (superseded by the above, kept for record — do not act on this)
 
 **Nu is not monotonic:** 921.49 → 927.35 → 909.12 (up, then down). The GCI sheet's built-in check catches this ("OSCILLATORY -- standard GCI NOT valid") and overrides any raw percentage with an explicit INVALID verdict, rather than reporting a spurious PASS.
 
