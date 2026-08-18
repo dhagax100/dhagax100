@@ -31,6 +31,7 @@ Track key decisions, who made them, and why. Update as the project progresses.
 
 | Date | What was wrong | Corrected to |
 |------|---------------|-------------|
+| Aug 2026 | Proposal's brick-shape nanofluid coefficients (Ck=6.0, a=14.9, b=123.3) don't match any row of the real Mohammed et al. (2022) paper's own Table 7/8 — b=123.3 is an exact match to the paper's **Blades** row, suggesting a copy/mislabel error in the proposal | Ck=3.37, a=1.9, b=471.4 (Bricks, read directly from the real paper's Tables 7-8) — `solver_and_formulas.md` updated |
 | Jul 2026 | DOE initially had 4 factors (missing concentration) | Added φ as 5th factor |
 | Jul 2026 | Learning roadmap had mismatched video resources | Corrected with verified appendix |
 | Jul 2026 | Claude gave wrong SpaceClaim UI steps | Nuradin figured out correct workflow independently |
