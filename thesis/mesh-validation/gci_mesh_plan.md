@@ -122,6 +122,19 @@ After duplicating from Coarse, open Fluent from the new system and do **not** to
 | Medium | 4,888,550 | 927.35 (+0.64%) | 0.00616 (−1.96%) | Mass balance 0.0012%, y+ avg 0.29 / max 2.21, ΔP 3551.5 Pa (−1.46% vs Coarse) |
 | Fine | 8,658,088 | 909.12 | 0.00595 | Mass balance 0.0003%, y+ avg 0.29 / max 2.12, ΔP 3443.4 Pa |
 
+## FINAL VERDICT (2026-08-18): Mesh independence achieved — Mesh 3 adopted
+
+| Monitor | Mesh 3 value | Mesh 4 value | % diff | Threshold | Verdict |
+|---|---|---|---|---|---|
+| Nu | 909.12 | 898.40 | 1.19% | 2% | PASS |
+| ΔP (Pa) | 3443.41 | 3480.93 | 1.08% | 2% | PASS |
+
+Mesh 4 results (15,675,184 elements): mass balance error 0.00034%, y+ avg 0.286, y+ max 1.64, T_in=300K, T_out=300.109K, T_wall=300.819K, p_in=3480.93 Pa, p_out=0 Pa, τ_w=6.424 Pa, ṁ_in=4.11646 kg/s, q″=1000 W/m², Q̇=879.53 W.
+
+**Both Nu and ΔP clear the 2% bar between Mesh 3 and Mesh 4 → mesh independence declared.** Per Mohammed et al. (2022)'s own practice (adopt the first level that clears the bar, not the finest tested), **Mesh 3 (2.96 mm element size, 8,658,088 elements) is the adopted mesh for all 27 production runs** — not Mesh 4. Mesh 4 served only to confirm Mesh 3 was already sufficient; using it for all 27 runs would roughly double compute cost for no accuracy benefit.
+
+**This closes the mesh-independence phase.** The 27-run Taguchi production study (deferred since the start of this engagement pending this result) is now unblocked, subject to the other two open items already tracked in `decision_log.md` (Re/Tin fixed at 10,000/500K — done; Al₂O₃-MWCNT and Ag-MgO property correlations — still open, blocks 18 of 27 runs, not the 9 Fe₂O₃-GO runs).
+
 ## Methodology decision, 2026-08-17: switched from Celik GCI to Mohammed et al. (2022)'s method
 
 After checking the advisor's real published paper (Section 2.6, Table 4 — not just the thesis proposal draft), decided to match his actual accepted practice rather than the stricter Celik et al. (2008) Richardson-extrapolation approach originally built:

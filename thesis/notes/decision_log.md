@@ -16,6 +16,12 @@ Track key decisions, who made them, and why. Update as the project progresses.
 | Aug 2026 | Turbulence model: Realizable k-ε + Enhanced Wall Treatment | Confirmed via `docs/Proposal_Last.pdf` Section 3.3.4 | Resolves the previously open item — proposal explicitly states realizable k-ε was used in "the reference methodology" (Mohammed et al. 2022) and adopted here. Must stay identical across GCI, correlation validation, Dudley validation, and all 27 runs. |
 | Aug 2026 | Mesh type: unstructured tetrahedral with inflation layers, same method for smooth-tube baseline and enhanced geometry | Confirmed via `docs/Proposal_Last.pdf` Section 3.6 | Resolves the hex/tet conflict below — see moved row under Corrections. |
 
+## Milestones
+
+| Date | Milestone |
+|------|-----------|
+| Aug 2026 | **Mesh independence achieved.** Mesh 3 (2.96mm, 8,658,088 elements) adopted for all 27 production runs — Nu and ΔP both clear the 2% bar vs. Mesh 4 (1.19% and 1.08% respectively). See `mesh-validation/gci_mesh_plan.md` for full data. Unblocks the 27-run Taguchi study. |
+
 ## Open / Pending Advisor Feedback
 
 | Item | Status | Notes |
