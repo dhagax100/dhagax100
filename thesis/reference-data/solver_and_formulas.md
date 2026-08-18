@@ -156,6 +156,8 @@ DNI = 1000 W/m²
 ```
 ψ = density, viscosity, thermal conductivity, or specific heat. Coefficients from Dow datasheet [ref 68] — not yet in this repo, still needed.
 
+**Checked 2026-08-18: Fluent's own built-in `syltherm800_oil` database entry does NOT have this pre-loaded.** Its "polynomial" profile option opens a blank template (coefficient 1 = 0, rest empty) — confirmed via screenshot, not an assumption. No shortcut available; the real Dow datasheet is still required. Until then, **using constant properties (ρ=747.2, Cp=1962, k=0.0961, μ=0.00084 — Fluent's own database defaults, matching Table 6 of the real Mohammed et al. 2022 paper) for both the base fluid and all hybrid nanofluid materials.** This is a documented limitation to resolve before final results/defense, not a blocker for starting the 27 runs.
+
 ### Hybrid nanofluid density (Eq 3.26):
 ```
 ρ_hnf = (1 - φp)·ρ_bf + φp1·ρp1 + φp2·ρp2
