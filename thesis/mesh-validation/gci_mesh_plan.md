@@ -157,6 +157,14 @@ After checking the advisor's real published paper (Section 2.6, Table 4 — not 
 
 Neither of these is the decision point — only **Mesh 3 vs. Mesh 4** (the two finest, once Mesh 4 exists) determines the verdict, matching the paper's own practice of comparing only the latest pair.
 
+## Baseline (Smooth Tube) Mesh Independence Study — started 2026-08-18
+
+Same methodology as the enhanced geometry: same 4 element sizes (5.0/3.85/2.96/2.28mm), same tet mesh type (kept for consistency with the enhanced geometry — see decision_log.md), same inflation settings, Nu + ΔP monitors, simple consecutive-mesh % method, 2% threshold. Geometry: plain circular tube, no promoter, 2m length (matching the production length decision), dti=66mm/dto=70mm/wall=2mm. This case's own physics are the actual Baseline production run (plain Syltherm 800, Re=10,000, Tin=500K, real MCRT heat flux UDF, steel tube) — whichever mesh level is adopted here doubles as the production Baseline result.
+
+| Level | Elements | Nodes | Max Skewness | Min Orthogonal Quality |
+|---|---|---|---|---|
+| Mesh 1 (Coarsest, 5.0mm) | 724,846 | 342,616 | 0.84864 | 0.032072 |
+
 ## Archived: old Celik/GCI verdict (superseded by the above, kept for record — do not act on this)
 
 **Nu is not monotonic:** 921.49 → 927.35 → 909.12 (up, then down). The GCI sheet's built-in check catches this ("OSCILLATORY -- standard GCI NOT valid") and overrides any raw percentage with an explicit INVALID verdict, rather than reporting a spurious PASS.
