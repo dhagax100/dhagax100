@@ -154,9 +154,22 @@ DNI = 1000 W/m²
 ```
 ψ = a + bT + cT² + dT³ + eT⁴
 ```
-ψ = density, viscosity, thermal conductivity, or specific heat. Coefficients from Dow datasheet [ref 68] — not yet in this repo, still needed.
+ψ = density, viscosity, thermal conductivity, or specific heat. T in Kelvin.
 
-**Checked 2026-08-18: Fluent's own built-in `syltherm800_oil` database entry does NOT have this pre-loaded.** Its "polynomial" profile option opens a blank template (coefficient 1 = 0, rest empty) — confirmed via screenshot, not an assumption. No shortcut available; the real Dow datasheet is still required. Until then, **using constant properties (ρ=747.2, Cp=1962, k=0.0961, μ=0.00084 — Fluent's own database defaults, matching Table 6 of the real Mohammed et al. 2022 paper) for both the base fluid and all hybrid nanofluid materials.** This is a documented limitation to resolve before final results/defense, not a blocker for starting the 27 runs.
+**RESOLVED 2026-08-19: the real Dow-sourced polynomial IS in the paper — Table 5, ref [66] — no external datasheet needed.** Read directly from the PDF page image (not garbled text extraction, which mangles the ×10ⁿ exponents):
+
+| Property | a | b | c | d | e |
+|---|---|---|---|---|---|
+| Dynamic viscosity, Pa·s | 8.4866×10⁻² | −5.5412×10⁻⁴ | 1.3882×10⁻⁶ | −1.5660×10⁻⁹ | 6.672×10⁻¹³ |
+| Thermal conductivity, W/m·K | 1.9002×10⁻¹ | −1.8752×10⁻⁴ | −5.7534×10⁻¹⁰ | — | — |
+| Specific heat capacity, J/kg·K | 1.1078×10³ | 1.7080 | — | — | — |
+| Density, kg/m³ | 1.1057×10³ | −4.1535×10⁻¹ | −6.0616×10⁻⁴ | — | — |
+
+**Verified self-consistent:** evaluating all four polynomials at T=500K reproduces Table 6's single-value constants closely (ρ: 746.5 vs 747.2, k: 0.0961 vs 0.0961 exact, Cp: 1961.8 vs 1962, μ: 0.000806 vs 0.00084) — confirming Table 6's numbers are just this polynomial evaluated at the paper's own Tin=500K, and confirming the extracted coefficients are correct.
+
+**Previously checked 2026-08-18:** Fluent's own built-in `syltherm800_oil` database entry does NOT have this pre-loaded — its "polynomial" profile option opens a blank template. That's no longer a blocker: enter the coefficients above directly into Fluent's Polynomial property editor (Materials → syltherm800_oil → Density/Viscosity/Cp/Thermal Conductivity → Polynomial → Number of Coefficients per the table above, T in Kelvin).
+
+**Status for runs already completed (Run 1, Baseline Mesh 1):** those used the constant values (ρ=747.2, Cp=1962, k=0.0961, μ=0.00084) per the earlier decision to start with constants and worry about T-dependence later. Those constants are the T=500K point of this same polynomial, so they are not wrong — just a single-point simplification of what we now know is available as the full curve. Whether to switch remaining runs (Baseline onward) to the real polynomial, or keep using constants at each run's own Tin for consistency, is an open decision — see Open Items.
 
 ### Hybrid nanofluid density (Eq 3.26):
 ```
@@ -228,5 +241,6 @@ The paper applies this with the near-flat, low first segment (0–41.6°) on the
 **One thing I could not verify:** which direction θ=0 points (top of tube vs. bottom, i.e., which half is "shaded" vs. "sun-facing" in the model's coordinate system). The paper's Fig. 1(b) cross-section doesn't label θ, and no text I found states the reference direction. Physically, θ=0 (flat, low 680 W/m²) should be the shaded back of the tube and θ→180° (the swinging, higher terms) should be the sun-facing front — that's the standard convention in PTC circumferential-flux literature (Forristall/Eck-type models) — but I'm inferring this, not reading it stated. Worth a quick confirmation from your advisor before you commit to it in Fluent, since getting it backwards would put the hot spot on the wrong side of the tube.
 
 ## Open Items / Unresolved
+- **NEW 2026-08-19:** Now that the real Syltherm 800 polynomial (Table 5) is available, decide whether to switch the base fluid material in Fluent from constant properties to the real polynomial for the Baseline run and Runs 2-27 (Run 1 already used constants and doesn't need to be redone). Using the polynomial is more accurate (captures property change from Tin to Tout across each run) and is what Eq 3.25 in the proposal actually specifies. Not yet decided — awaiting direction.
 - ~~Mesh type conflict~~ **RESOLVED (Aug 2026):** unstructured tetrahedral mesh with inflation layers, per proposal Section 3.6 — used consistently for the smooth-tube baseline and every enhanced geometry so Ns/PEC comparisons aren't contaminated by a meshing-method difference. Supersedes CLAUDE.md's earlier "3 hex mesh levels" plan.
 - Proposal's own grid-independence (Table 13) and validation figures (Figs 6–9) contain specific numbers that do not reconcile with the smooth-tube GCI numbers already in `mesh-validation/Mesh_and_Validation_Workbook.xlsx`. Not yet resolved whether the proposal's numbers are completed results or template values adapted from Mohammed et al. (2022).
