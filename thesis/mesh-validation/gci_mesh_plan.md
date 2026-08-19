@@ -191,6 +191,16 @@ Mesh generation itself (element count, skewness, orthogonal quality) does not de
 
 **Mesh 1 → Mesh 2 comparison (informational — not yet the decision point, that's the two finest levels once Mesh 3/4 exist):** Nu %diff = 0.088% (essentially flat). ΔP %diff = 4.68% (above the 2% threshold — expected, coarser levels normally haven't converged yet).
 
+| Level | Elements | Nodes | Max Skewness | Min Orthogonal Quality |
+|---|---|---|---|---|
+| Mesh 3 (2.96mm) | 3,093,142 | 1,117,290 | 0.84995 | 0.15005 |
+
+**Mesh 3 Fluent results (same conditions):** mass balance error 0.0000069%, y+ avg 0.273, y+ max 1.495, T_in=300K, T_out=300.05311K, T_wall=300.85761K, p_in=598.084 Pa, τ_w=5.9357 Pa, ṁ_in=4.33990 kg/s, Q̇=452.30 W. Computed: Nu=826.40, f=0.005512.
+
+**Mesh 2 → Mesh 3 comparison:** Nu %diff = 0.97% (PASS, clears 2%). ΔP %diff = 7.16% (FAIL — above 2%). **Verdict: not yet mesh-independent, proceed to Mesh 4.**
+
+**Watch item:** ΔP is decreasing monotonically (670.9 → 640.9 → 598.1 Pa) but the step size is *growing*, not shrinking (−30.0 Pa then −42.8 Pa) — the opposite of the pattern expected from converging discretization error. Not treated as invalid under the simple consecutive-% method (unlike the archived Celik/GCI approach, which would flag this), but worth watching at Mesh 4 — if it keeps growing rather than settling, that would need a closer look (possibly a 5th level, or reconsidering the ΔP monitor's sensitivity to the coarse-mesh entrance-region resolution).
+
 ## Archived: old Celik/GCI verdict (superseded by the above, kept for record — do not act on this)
 
 **Nu is not monotonic:** 921.49 → 927.35 → 909.12 (up, then down). The GCI sheet's built-in check catches this ("OSCILLATORY -- standard GCI NOT valid") and overrides any raw percentage with an explicit INVALID verdict, rather than reporting a spurious PASS.
