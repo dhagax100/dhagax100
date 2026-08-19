@@ -175,11 +175,13 @@ Same methodology as the enhanced geometry: same 4 element sizes (5.0/3.85/2.96/2
 
 Mesh generation itself (element count, skewness, orthogonal quality) does not depend on BCs, so Mesh 1's already-built geometry/mesh data below remains valid — only the not-yet-run Fluent step needs the corrected u_m=1.70 m/s / Tin=300K / q″=1000 W/m² inputs above.
 
-**Note:** an earlier Mesh 1 attempt (724,846 elements) was built before the fluid body's topology issue was fixed (Fill produced a degenerate surface body; rebuilt via direct extrude + Form New Part) and before inflation was properly resolvable — that data point is invalid and superseded by the corrected run below.
+**Note:** two earlier Mesh 1 attempts are superseded by the final run below — (1) 724,846 elements, built before the fluid body's topology issue was fixed (Fill produced a degenerate surface body; rebuilt via direct extrude + Form New Part) and before inflation was properly resolvable; (2) 1,009,884 elements, an intermediate regeneration pass. Also note: the first Fluent run on this mesh used the wrong conditions (Re=10,000/Tin=500K production conditions, and briefly a broken `inner_wall` thermal BC set to Heat Flux=0 instead of Coupled, which blocked all heat transfer into the fluid) — both corrected before the data below was recorded. See `Baseline_Smooth_Mesh_Independence_Workbook.xlsx` for the full record, including that now-separately-saved production-condition run.
 
 | Level | Elements | Nodes | Max Skewness | Min Orthogonal Quality |
 |---|---|---|---|---|
-| Mesh 1 (Coarsest, 5.0mm) | 1,009,884 | 380,586 | 0.8477 | 0.1523 |
+| Mesh 1 (Coarsest, 5.0mm) | 1,023,406 | 385,377 | 0.84354 | 0.15646 |
+
+**Mesh 1 Fluent results (Re≈99,800, Tin=300K, uniform q″=1000 W/m²):** mass balance error 0.0000012%, y+ avg 0.268, y+ max 2.128, T_in=300K, T_out=300.05324K, T_wall=300.86659K, p_in=670.905 Pa, τ_w=5.9079 Pa, ṁ_in=4.32875 kg/s, Q̇=452.17 W. Computed: Nu=817.63, f=0.005515 — both lower than the enhanced-geometry Coarse level (Nu=921.49, f=0.00628), consistent with the promoter's expected enhancement effect. Full formulas and cross-checks in the workbook.
 
 ## Archived: old Celik/GCI verdict (superseded by the above, kept for record — do not act on this)
 
