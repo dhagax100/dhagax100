@@ -159,7 +159,21 @@ Neither of these is the decision point — only **Mesh 3 vs. Mesh 4** (the two f
 
 ## Baseline (Smooth Tube) Mesh Independence Study — started 2026-08-18
 
-Same methodology as the enhanced geometry: same 4 element sizes (5.0/3.85/2.96/2.28mm), same tet mesh type (kept for consistency with the enhanced geometry — see decision_log.md), same inflation settings, Nu + ΔP monitors, simple consecutive-mesh % method, 2% threshold. Geometry: plain circular tube, no promoter, 2m length (matching the production length decision), dti=66mm/dto=70mm/wall=2mm. This case's own physics are the actual Baseline production run (plain Syltherm 800, Re=10,000, Tin=500K, real MCRT heat flux UDF, steel tube) — whichever mesh level is adopted here doubles as the production Baseline result.
+Same methodology as the enhanced geometry: same 4 element sizes (5.0/3.85/2.96/2.28mm), same tet mesh type (kept for consistency with the enhanced geometry — see decision_log.md), same inflation settings, Nu + ΔP monitors, simple consecutive-mesh % method, 2% threshold. Geometry: plain circular tube, no promoter, 2m length (matching the production length decision), dti=66mm/dto=70mm/wall=2mm.
+
+**Corrected 2026-08-19: BCs must match the enhanced-geometry mesh test's convention, not the production Baseline run's.** The enhanced-geometry mesh study was run at the *most demanding* condition in the operating range — Re≈100,000 (highest Re, thinnest boundary layer, toughest y+ target), Tin=300K, uniform q″=1000 W/m² — not the production condition (Re=10,000, Tin=500K, real MCRT flux profile). For the two mesh studies to be comparable, the baseline mesh test must use the same convention:
+
+| Quantity | Value | Basis |
+|---|---|---|
+| Re (mesh test) | 100,000 | Highest Re in range — matches enhanced-geometry mesh test |
+| u_m | **1.70 m/s** | Re·μ/(ρ·d_ri) = 100,000×0.00084/(747.2×0.066), same Syltherm 800 constants as enhanced test |
+| Tin (mesh test) | 300K | Matches enhanced-geometry mesh test |
+| Heat flux (mesh test) | uniform 1000 W/m² | Matches enhanced-geometry mesh test (not the real UDF) |
+| d_ri | 0.066 m | Smooth tube ID |
+
+**This supersedes the earlier plan of this mesh test "doubling as" the production Baseline run.** It cannot — the BCs are different on purpose. The actual production Baseline run (Re=10,000, Tin=500K, real MCRT UDF, steel tube) will be a separate Fluent run, done after this mesh study concludes, using whichever mesh level gets adopted here.
+
+Mesh generation itself (element count, skewness, orthogonal quality) does not depend on BCs, so Mesh 1's already-built geometry/mesh data below remains valid — only the not-yet-run Fluent step needs the corrected u_m=1.70 m/s / Tin=300K / q″=1000 W/m² inputs above.
 
 **Note:** an earlier Mesh 1 attempt (724,846 elements) was built before the fluid body's topology issue was fixed (Fill produced a degenerate surface body; rebuilt via direct extrude + Form New Part) and before inflation was properly resolvable — that data point is invalid and superseded by the corrected run below.
 
