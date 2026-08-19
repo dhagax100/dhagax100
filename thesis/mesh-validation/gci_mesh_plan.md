@@ -201,6 +201,18 @@ Mesh generation itself (element count, skewness, orthogonal quality) does not de
 
 **Watch item:** ΔP is decreasing monotonically (670.9 → 640.9 → 598.1 Pa) but the step size is *growing*, not shrinking (−30.0 Pa then −42.8 Pa) — the opposite of the pattern expected from converging discretization error. Not treated as invalid under the simple consecutive-% method (unlike the archived Celik/GCI approach, which would flag this), but worth watching at Mesh 4 — if it keeps growing rather than settling, that would need a closer look (possibly a 5th level, or reconsidering the ΔP monitor's sensitivity to the coarse-mesh entrance-region resolution).
 
+| Level | Elements | Nodes | Max Skewness | Min Orthogonal Quality |
+|---|---|---|---|---|
+| Mesh 4 (Finest, 2.28mm) | 5,825,667 | 1,986,806 | 0.79995 | 0.20005 |
+
+**Mesh 4 Fluent results (same conditions):** mass balance error 0.0000069%, y+ avg 0.275, y+ max 1.513, T_in=300K, T_out=300.05309K, T_wall=300.86379K, p_in=583.109 Pa, τ_w=6.0019 Pa, ṁ_in=4.34229 kg/s, Q̇=452.33 W. Computed: Nu=820.29, f=0.005568.
+
+**Mesh 3 → Mesh 4 comparison:** Nu %diff = 0.745% (PASS). ΔP %diff = 2.568% (FAIL — just above 2%). **Verdict: not yet mesh-independent after 4 levels.**
+
+**Nu is not monotonic across the 4 levels** (817.63 → 818.35 → 826.40 → 820.29 — up, up, down) — same pattern the enhanced-geometry study saw and already decided not to treat as invalidating under the simple consecutive-% method (no monotonicity requirement, unlike Celik/GCI). **ΔP's step size did shrink at this level** (−42.8 Pa Mesh2→3, down to −15.0 Pa Mesh3→4) — the first sign of real convergence after two levels of growing steps — so one more level should close the gap.
+
+**Proceeding to Mesh 5 (~1.75mm, continuing the same ~1.3× refinement ratio)** — extends past the enhanced-geometry study's 4-level precedent, but required here since ΔP hasn't cleared 2% yet. Workbook extended with a 5th data row (Mesh Quality Log, Fluent Raw Results, Computed Results, Mesh Independence Check all updated, verified formula-error-free).
+
 ## Archived: old Celik/GCI verdict (superseded by the above, kept for record — do not act on this)
 
 **Nu is not monotonic:** 921.49 → 927.35 → 909.12 (up, then down). The GCI sheet's built-in check catches this ("OSCILLATORY -- standard GCI NOT valid") and overrides any raw percentage with an explicit INVALID verdict, rather than reporting a spurious PASS.
