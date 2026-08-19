@@ -183,6 +183,14 @@ Mesh generation itself (element count, skewness, orthogonal quality) does not de
 
 **Mesh 1 Fluent results (Re≈99,800, Tin=300K, uniform q″=1000 W/m²):** mass balance error 0.0000012%, y+ avg 0.268, y+ max 2.128, T_in=300K, T_out=300.05324K, T_wall=300.86659K, p_in=670.905 Pa, τ_w=5.9079 Pa, ṁ_in=4.32875 kg/s, Q̇=452.17 W. Computed: Nu=817.63, f=0.005515 — both lower than the enhanced-geometry Coarse level (Nu=921.49, f=0.00628), consistent with the promoter's expected enhancement effect. Full formulas and cross-checks in the workbook.
 
+| Level | Elements | Nodes | Max Skewness | Min Orthogonal Quality |
+|---|---|---|---|---|
+| Mesh 2 (3.85mm) | 1,762,070 | 650,727 | 0.84496 | 0.15504 |
+
+**Mesh 2 Fluent results (same conditions):** mass balance error 0.0000046%, y+ avg 0.270, y+ max 2.177, T_in=300K, T_out=300.05315K, T_wall=300.86581K, p_in=640.891 Pa, τ_w=6.0111 Pa, ṁ_in=4.33594 kg/s, Q̇=452.23 W. Computed: Nu=818.35, f=0.005593.
+
+**Mesh 1 → Mesh 2 comparison (informational — not yet the decision point, that's the two finest levels once Mesh 3/4 exist):** Nu %diff = 0.088% (essentially flat). ΔP %diff = 4.68% (above the 2% threshold — expected, coarser levels normally haven't converged yet).
+
 ## Archived: old Celik/GCI verdict (superseded by the above, kept for record — do not act on this)
 
 **Nu is not monotonic:** 921.49 → 927.35 → 909.12 (up, then down). The GCI sheet's built-in check catches this ("OSCILLATORY -- standard GCI NOT valid") and overrides any raw percentage with an explicit INVALID verdict, rather than reporting a spurious PASS.
