@@ -213,6 +213,20 @@ Mesh generation itself (element count, skewness, orthogonal quality) does not de
 
 **Proceeding to Mesh 5 (~1.75mm, continuing the same ~1.3× refinement ratio)** — extends past the enhanced-geometry study's 4-level precedent, but required here since ΔP hasn't cleared 2% yet. Workbook extended with a 5th data row (Mesh Quality Log, Fluent Raw Results, Computed Results, Mesh Independence Check all updated, verified formula-error-free).
 
+| Level | Elements | Nodes | Max Skewness | Min Orthogonal Quality |
+|---|---|---|---|---|
+| Mesh 5 (1.75mm) | 10,148,909 | 3,414,651 | 0.79664 | 0.20336 |
+
+**Mesh 5 Fluent results (same conditions):** mass balance error 0.0000046%, y+ avg 0.279, y+ max 1.629, T_in=300K, T_out=300.05308K, T_wall=300.85067K, p_in=580.416 Pa, τ_w=6.1272 Pa, ṁ_in=4.34368 kg/s, Q̇=452.36 W. Computed: Nu=833.34, f=0.005680.
+
+## FINAL VERDICT (2026-08-19): Baseline mesh independence achieved — Mesh 4 adopted
+
+**Mesh 4 → Mesh 5 comparison:** Nu %diff = 1.57% (PASS). ΔP %diff = 0.46% (PASS). Both clear the 2% bar — mesh independence confirmed.
+
+Per the same practice used for the enhanced geometry (adopt the first level that clears the bar, not the finest tested), **Mesh 4 (2.28mm, 5,825,667 elements) is the adopted baseline mesh** — Mesh 5 served only to confirm it. This closes the baseline mesh-independence phase.
+
+**Next step:** re-run the real production Baseline conditions (Re=10,000, Tin=500K, real MCRT UDF flux, real Syltherm 800 polynomial properties) on Mesh 4 (not the earlier Mesh-1-based run, now superseded), then log into `production-runs/PTSC_27Run_Master_Workbook.xlsx` to unlock PEC/Be/Ns for Run 1 onward.
+
 ## Archived: old Celik/GCI verdict (superseded by the above, kept for record — do not act on this)
 
 **Nu is not monotonic:** 921.49 → 927.35 → 909.12 (up, then down). The GCI sheet's built-in check catches this ("OSCILLATORY -- standard GCI NOT valid") and overrides any raw percentage with an explicit INVALID verdict, rather than reporting a spurious PASS.
