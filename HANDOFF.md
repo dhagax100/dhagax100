@@ -2,7 +2,7 @@
 
 Repo: `dhagax100/dhagax100`
 Branch: `claude/afvg-rendering-bug-ctjnuq-7m0y12`
-Latest commit: `9bf85ec`
+Latest commit: `4e2b535`
 FVG file status: **finalized with ONLY issue 2 solved, by explicit user
 decision.** Issue 1 and issue 3 were both investigated extensively in a
 later session (see below) but their code changes were reverted — the
@@ -12,12 +12,16 @@ This finalized state (issue 2 + the earlier scan-range extension) has
 now been **merged into `ICT_Full_OB_v24.pine`** too, at the user's
 explicit request — see file 1 below for exactly what changed there.
 
-Since that merge, two more fixes landed: the **AOB naming fix** (issue
-3's shape-based decision, applied to AOB instead of AFVG — see the "AOB
-naming" section below), in both the OB diagnostic and the main
-indicator; and a from-scratch **AIRB** build in the RB diagnostic,
-designed as a deliberate mirror of AIFOB (see item 4 below). Neither has
-been checked against a live chart yet.
+Since that merge, several more changes landed: the **AOB naming fix**
+(issue 3's shape-based decision, applied to AOB instead of AFVG — see
+the "AOB naming" section below), ported to the main indicator; a
+from-scratch **AIRB** build in the RB diagnostic, designed as a
+deliberate mirror of AIFOB (see item 4 below); and the **OB diagnostic
+was reset to a user-provided baseline** (item 2 below), same pattern as
+the earlier RB reset — this baseline has a different AOB eligibility
+model and a new `rejected` mechanism, and carries one known unfixed bug
+(AOB stranding still uses the old unswapped naming check). None of this
+has been checked against a live chart yet.
 
 This file exists so a fresh chat can pick up exactly where this one left
 off, without the user having to re-explain any of it. Read this whole
@@ -57,8 +61,44 @@ file before touching any code.
    the "FVG only" scope above as still holding for this specific change.
 
 2. **`pine/ICT_OB_Diagnostic.pine`** — standalone OB-only diagnostic.
-   Superseded by the merge into main (`e33df62`). Not actively worked on
-   unless a fresh OB-specific bug turns up.
+   **RESET to a user-provided baseline (commit `4e2b535`)**, same pattern
+   as the RB reset — the user supplied the file directly, replacing
+   everything that had accumulated before (including our own AOB naming
+   fix at `9600a67` and the AIRB-mirroring reference state). Written
+   verbatim, don't "clean it up" or reconcile against pre-reset commits.
+
+   Real differences from what was there before (found via diff, not
+   assumed — see chat if the detail is needed):
+   - **AOB eligibility changed.** AOB no longer gets *immediate*
+     eligibility at creation — it's now unified with IFOB/AIFOB, armed
+     only through STEP2's matching-direction swing gate, same as them.
+   - **New `rejected` field/mechanism** (didn't exist before): when a
+     zone gets armed, the previous candle's low (bullish) / high
+     (bearish) is checked against the zone bounds. If it already
+     violates the zone, the zone is `rejected` — permanently skipped,
+     never drawn, never eligible for impact. Applies to IFOB, AOB, and
+     AIFOB alike.
+   - **AOB/AIFOB drawing split by bullish/bearish** — AOB is now pink
+     (bullish) / green (bearish) instead of always green; AIFOB is
+     yellow (bullish) / orange (bearish) instead of always orange.
+   - **Known bug in this baseline, not fixed (verbatim replacement per
+     the user's request):** the AOB naming flip (bearish for uptrend
+     pullback, bullish for downtrend pullback — same fix as `9600a67`)
+     IS present in this file's `tryBullAOB`/`tryBearAOB` creation calls,
+     but the compensating STRANDING swap is **NOT** — the STRANDING
+     branch for AOB (`origState==1`) still uses the old, unswapped
+     `bull`/`not bull` checks. This means AOB's stranding side is
+     currently checking the wrong side of the zone. Flagged for the
+     user, not silently fixed — ask before touching it.
+   - AIFOB's own creation/promotion logic (`tryBullAIFOB`/
+     `tryBearAIFOB`, the pending/promotion machinery) is **unchanged**
+     from before — the AIRB mirroring work in the RB file (item 4) is
+     still accurate against this baseline.
+   - Swing detection's dual-action handling is unchanged (more precise
+     `blockDup`-style tracking was already present before this reset
+     too, not new).
+   - No `swlExt`/`swhExt` scan-range extension here (that's an
+     FVG-issue-1-only change, never was in the OB file).
 
 3. **`pine/ICT_Full_FVG_Indicator.pine`** — standalone FVG-only
    diagnostic (no OB/RB code at all, by design, to stay well under
