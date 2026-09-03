@@ -95,6 +95,7 @@ Not narrowing to countries — pursuing every real, apply-ready match at once, p
 
 | Target | Docs prepared | Status |
 |---|---|---|
+| **Membrology-Sustainable Innovation — Water & Membrane Technologies Internship** (Dammam, Saudi Arabia — KFUPM-incubated startup) | CV (water/desalination-focused) + cover letter | Ready — submit via membrology.com/career/ form (attach CV; type of employment dropdown; no separate cover-letter field, so send the letter as an email follow-up or attach alongside CV). 3–9 months, part-time or full-time, no relocation needed. **No stipend/pay found anywhere — likely unpaid; treat as CV/network value, not income.** Eligibility: "university students" — user qualifies now. |
 | Equinix — Slough, UK (Electrical & Mechanical Facilities Engineer) | Master CV + tailored cover letter | Ready to submit via careers.equinix.com |
 | Equinix — Manchester, UK (same role type) | Master CV + tailored cover letter | Ready to submit via careers.equinix.com |
 | Verne Global — Keflavík, Iceland | Master CV + tailored cover letter (generic — exact open role title unconfirmed, user must check careers.letsverne.com/jobs) | Ready, pending role confirmation |
@@ -108,6 +109,7 @@ Not narrowing to countries — pursuing every real, apply-ready match at once, p
 
 - [ ] **⭐ PRIORITY — Submit the University of Calgary hypersonic PhD application** (CV + cover letter + transcripts + English test) by email to artem.korobenko@ucalgary.ca — documents ready and sent to user on 2026-08-10, not yet confirmed submitted. Remind user every check-in until confirmed sent.
 - [ ] User to actually submit the 5 prepared industry applications (Equinix x2, Verne, NTT, IDCORE)
+- [ ] Submit Membrology Water & Membrane Technologies internship application (membrology.com/career/) — CV + cover letter ready, sent to user on 2026-09-03
 - [ ] Confirm exact open role title at Verne Global before submitting
 - [ ] Continue finding more real, apply-ready roles (Canada, Australia, Netherlands, Italy, Scotland/Wales graduate schemes)
 - [ ] Broaden the Mon/Thu Routine to actively rescan for new postings, not just review this file
