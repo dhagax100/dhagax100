@@ -1,0 +1,9 @@
+# Python bytecode cache
+__pycache__/
+*.pyc
+
+# Generated verification outputs (regenerated locally from the owner's data)
+*.pine
+
+# Local data files (never commit market data)
+*.csv
