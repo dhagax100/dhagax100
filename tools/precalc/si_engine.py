@@ -89,7 +89,8 @@ def resample_weekly(m1, anchor_weekday=0):
         bo = float(block["open"].iloc[0]); bh = float(block["high"].max())
         bl = float(block["low"].min());   bc = float(block["close"].iloc[-1])
         O.append(bo); H.append(bh); L.append(bl); C.append(bc)
-        BTms.append(_ms(wk)); highFirst.append(bc < bo)
+        # faithful to w_highFirst: 1m children decide high/low order (tie -> colour)
+        BTms.append(_ms(wk)); highFirst.append(_highfirst_children(block, bh, bl))
         blocks.append(block)
     return O, H, L, C, BTms, highFirst, blocks
 
