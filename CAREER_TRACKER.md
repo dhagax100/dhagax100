@@ -83,11 +83,22 @@ Full comparison dashboard (money, tax, citizenship speed, weather, visa ease, sp
 
 | Date | Decision |
 |---|---|
+| 2026-09-14 | User disclosed 3 co-founded businesses (background fact, now part of profile — see below); included in DVF founder-program CV per user's direction, without inventing metrics user didn't provide |
 | 2026-08 | Tailored CV and cover letter completed for Hormuud application, using DEMA data-center workshop + ISO 50001 training to offset lack of direct data-center work experience |
 | 2026-08 | Established $2,000/month living-standard baseline to evaluate future opportunities against |
 | 2026-08-09 | Dropped Hormuud from active pursuit; launched full international opportunity search (money-first, nationality-preferred, industry roles) across 8 countries, not limited to original 6 |
 
 ---
+
+## 5a. Entrepreneurial Background (disclosed 2026-09-14)
+
+| Company | Role | Founded | Focus |
+|---|---|---|---|
+| Xirfadsan Technical Services | Co-Founder | 2023 | Home appliance repair/maintenance (AC, washing machines, refrigerators) |
+| Adeegsan Cleaning Services | Co-Founder | 2024 | Cleaning services — residential, event, commercial, post-construction |
+| Deegaan Property Management | Co-Founder | 2026 | Property management — rental management, maintenance coordination, tenant relations |
+
+No team size, revenue, or growth figures on record yet — CVs describe scope/responsibilities honestly without invented metrics. Add real numbers here if/when user provides them, so future documents can cite them consistently.
 
 ## 6. Application Files Prepared (2026-08-09)
 
@@ -95,6 +106,7 @@ Not narrowing to countries — pursuing every real, apply-ready match at once, p
 
 | Target | Docs prepared | Status |
 |---|---|---|
+| **Dhahran Venture Founders Program (DVF)** — 9-week founder program at KFUPM, Sept–Dec, weekly founder talks + workshops + "Idea Spotlight" pitch nights | CV rebuilt around founder identity, leading with entrepreneurship section | Ready — apply at dhahranvf.org/apply/start. **Open to all KFUPM students, no prior experience required** — this is not a competitive-experience filter, so nothing here needed inflating. |
 | **Membrology-Sustainable Innovation — Water & Membrane Technologies Internship** (Dammam, Saudi Arabia — KFUPM-incubated startup) | CV (water/desalination-focused) + cover letter | Ready — submit via membrology.com/career/ form (attach CV; type of employment dropdown; no separate cover-letter field, so send the letter as an email follow-up or attach alongside CV). 3–9 months, part-time or full-time, no relocation needed. **No stipend/pay found anywhere — likely unpaid; treat as CV/network value, not income.** Eligibility: "university students" — user qualifies now. |
 | Equinix — Slough, UK (Electrical & Mechanical Facilities Engineer) | Master CV + tailored cover letter | Ready to submit via careers.equinix.com |
 | Equinix — Manchester, UK (same role type) | Master CV + tailored cover letter | Ready to submit via careers.equinix.com |
