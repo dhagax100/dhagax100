@@ -98,19 +98,31 @@ def build_h4_extra_lines(h4_engine, h4_bars, drawn: List[tuple], ob_cap: int, di
             impact_vars[z.id] = name
             stamp = pine_time(it)
             lines += [f"var int {name} = na", f"if time <= {stamp} and {stamp} < time_close", f"    {name} := time"]
+
+    # Pine caps how many statements a single if-block may hold (CE10205 "if
+    # statement is too long"). With 70+ drawn OBs, one shared `if onH4:`
+    # covering every box/label/line and every table row blew past that limit.
+    # Fix: emit many small, independent `if barstate.islast: if onH4:` blocks
+    # instead of one giant one -- Pine allows any number of separate
+    # occurrences of the same condition, just not one overloaded block.
+    right_edge = h4_engine.m[-1].t + timedelta(days=30)
+    DRAW_BATCH = 15
+    for i in range(0, len(shown), DRAW_BATCH):
+        lines.append("if barstate.islast")
+        lines.append("    if onH4")
+        for z, tt, tp, et, ep, it, parent_id in shown[i:i + DRAW_BATCH]:
+            origin = h4_bars[z.candle]
+            col = "color.blue" if z.bullish else "color.black"
+            fallback_right = it or right_edge
+            right = f"(na({impact_vars[z.id]}) ? {pine_time(fallback_right)} : {impact_vars[z.id]})" if it is not None else pine_time(fallback_right)
+            lines.append(f"        box.new({pine_time(origin.start)}, {z.zt:.5f}, {right}, {z.zb:.5f}, border_color={col}, border_width=1, bgcolor=na, xloc=xloc.bar_time)")
+            label_text = f"#{z.id} {'BUY' if z.bullish else 'SELL'} (W{parent_id})"
+            lines.append(f"        label.new({pine_time(origin.start)}, {z.zt:.5f}, \"{label_text}\", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_down, color=color.new({col},85), textcolor={col}, size=size.tiny)")
+            if it is not None:
+                lines.append(f"        line.new({right}, {z.zb:.5f}, {right}, {z.zt:.5f}, xloc=xloc.bar_time, extend=extend.both, color=color.new(color.red,30), width=1)")
+
     lines.append("if barstate.islast")
     lines.append("    if onH4")
-    right_edge = h4_engine.m[-1].t + timedelta(days=30)
-    for z, tt, tp, et, ep, it, parent_id in shown:
-        origin = h4_bars[z.candle]
-        col = "color.blue" if z.bullish else "color.black"
-        fallback_right = it or right_edge
-        right = f"(na({impact_vars[z.id]}) ? {pine_time(fallback_right)} : {impact_vars[z.id]})" if it is not None else pine_time(fallback_right)
-        lines.append(f"        box.new({pine_time(origin.start)}, {z.zt:.5f}, {right}, {z.zb:.5f}, border_color={col}, border_width=1, bgcolor=na, xloc=xloc.bar_time)")
-        label_text = f"#{z.id} {'BUY' if z.bullish else 'SELL'} (W{parent_id})"
-        lines.append(f"        label.new({pine_time(origin.start)}, {z.zt:.5f}, \"{label_text}\", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_down, color=color.new({col},85), textcolor={col}, size=size.tiny)")
-        if it is not None:
-            lines.append(f"        line.new({right}, {z.zb:.5f}, {right}, {z.zt:.5f}, xloc=xloc.bar_time, extend=extend.both, color=color.new(color.red,30), width=1)")
     lines += [
         f"        table.clear(h4Ledger, 0, 0, 7, {len(shown)})",
         "        table.cell(h4Ledger, 0, 0, \"4H OB\", text_color=color.white, bgcolor=color.new(color.blue,15))",
@@ -122,13 +134,19 @@ def build_h4_extra_lines(h4_engine, h4_bars, drawn: List[tuple], ob_cap: int, di
         "        table.cell(h4Ledger, 6, 0, \"Eligible (RYD)\", text_color=color.white, bgcolor=color.new(color.blue,15))",
         "        table.cell(h4Ledger, 7, 0, \"Impact (RYD)\", text_color=color.white, bgcolor=color.new(color.blue,15))",
     ]
-    for row, (z, tt, tp, et, ep, it, parent_id) in enumerate(shown, 1):
-        trig = wob.display_iso(tt, display_tz) + (f" @ {tp:.5f}" if tp is not None else "")
-        elig = wob.display_iso(et, display_tz) + (f" @ {ep:.5f}" if ep is not None else "")
-        vals = [f"#{z.id}", f"#{parent_id}" if parent_id else "-", "BUY" if z.bullish else "SELL",
-                f"{z.zb:.5f}", f"{z.zt:.5f}", trig, elig, wob.display_iso(it, display_tz)]
-        for col, v in enumerate(vals):
-            lines.append(f"        table.cell(h4Ledger, {col}, {row}, \"{pine_text(v)}\", text_color=color.black, bgcolor=na)")
+
+    ROW_BATCH = 8
+    row_items = list(enumerate(shown, 1))
+    for i in range(0, len(row_items), ROW_BATCH):
+        lines.append("if barstate.islast")
+        lines.append("    if onH4")
+        for row, (z, tt, tp, et, ep, it, parent_id) in row_items[i:i + ROW_BATCH]:
+            trig = wob.display_iso(tt, display_tz) + (f" @ {tp:.5f}" if tp is not None else "")
+            elig = wob.display_iso(et, display_tz) + (f" @ {ep:.5f}" if ep is not None else "")
+            vals = [f"#{z.id}", f"#{parent_id}" if parent_id else "-", "BUY" if z.bullish else "SELL",
+                    f"{z.zb:.5f}", f"{z.zt:.5f}", trig, elig, wob.display_iso(it, display_tz)]
+            for col, v in enumerate(vals):
+                lines.append(f"        table.cell(h4Ledger, {col}, {row}, \"{pine_text(v)}\", text_color=color.black, bgcolor=na)")
     return lines
 
 
