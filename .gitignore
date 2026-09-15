@@ -10,3 +10,4 @@ __pycache__/
 data/h4_ob_ledger.csv
 data/h4_ob_viewer.pine
 data/h4_ob_report.txt
+data/full_viewer.pine

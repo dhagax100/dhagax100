@@ -765,8 +765,13 @@ def pine_text(s: str) -> str:
     return s.replace('\\', '\\\\').replace('"', '\\"')
 
 
-def write_ob_pine(base: Path, engine: WeeklyOBEngine, label_cap: int, ob_cap: int, table_cap: int, box_body_minutes: int, display_zone: ZoneInfo, origin_first_price: str, origin_body_offset_minutes: int) -> None:
-    """Static, low-memory rendering of the locked Weekly structure and OB lifecycle."""
+def write_ob_pine(base: Path, engine: WeeklyOBEngine, label_cap: int, ob_cap: int, table_cap: int, box_body_minutes: int, display_zone: ZoneInfo, origin_first_price: str, origin_body_offset_minutes: int, extra_lines: Optional[List[str]] = None, out_name: str = "weekly_ob_viewer.pine") -> None:
+    """Static, low-memory rendering of the locked Weekly structure and OB lifecycle.
+
+    `extra_lines`/`out_name` let a caller (e.g. full_viewer.py) append an
+    additional layer -- such as the H4 engine's own boxes/table -- into the
+    SAME generated Pine file, reusing this function's Weekly rendering
+    unchanged rather than duplicating it."""
     sh = [e for e in engine.events if e.kind == 0][-label_cap:]
     sl = [e for e in engine.events if e.kind == 1][-label_cap:]
     ms = engine.msses[-label_cap:]
@@ -883,8 +888,10 @@ def write_ob_pine(base: Path, engine: WeeklyOBEngine, label_cap: int, ob_cap: in
         for col, value in enumerate(values):
             bg = f"color.new({pine_colour(z)}, 80)" if col == 9 else "na"
             lines.append(f"            table.cell(ledger, {col}, 1, \"{pine_text(value)}\", text_color=color.black, bgcolor={bg})")
+    if extra_lines:
+        lines += extra_lines
     lines.append("")
-    (base / "weekly_ob_viewer.pine").write_text("\n".join(lines), encoding="utf-8")
+    (base / out_name).write_text("\n".join(lines), encoding="utf-8")
 
 
 def write_report(base: Path, minutes: List[Minute], weeks: List[Week], warnings: List[str], e: WeeklyOBEngine, args: argparse.Namespace) -> None:

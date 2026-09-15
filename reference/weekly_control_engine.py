@@ -129,6 +129,9 @@ def run(args: argparse.Namespace) -> int:
     trend = "UNDEFINED"
     control = "NONE"
     controlling_opp: Optional[int] = None  # zone id currently holding full opposing control
+    controlling_zone_id: Optional[int] = None  # the single Weekly zone responsible for the
+    # ACTIVE single-direction control (BUY_ONLY/SELL_ONLY), for H4 parent-zone linkage.
+    # None while control is NONE or BOTH (BOTH has two sides, no single "the" zone).
     events: List[ControlEvent] = []
     weekly_rows = []
 
@@ -163,7 +166,7 @@ def run(args: argparse.Namespace) -> int:
             prev_rejected[z.id] = z.rejected
 
         if trend == "UNDEFINED":
-            weekly_rows.append((k, trend, control, ""))
+            weekly_rows.append((k, trend, control, "", ""))
             continue
 
         # From here on, "pro"/"opposing" for control-escalation purposes are
@@ -180,6 +183,7 @@ def run(args: argparse.Namespace) -> int:
             first = impacts_this_week[0]
             control = "BUY_ONLY" if first.bullish else "SELL_ONLY"
             control_bull = first.bullish
+            controlling_zone_id = first.id
             kind = "CAMPAIGN_START" if is_pro(first, trend_at[k]) else "CAMPAIGN_START_COUNTERTREND"
             log(k, kind, f"Zone {first.id} impacted (direction={'BUY' if first.bullish else 'SELL'}, trend={trend})", first.id)
 
@@ -195,12 +199,14 @@ def run(args: argparse.Namespace) -> int:
                 old_side_alive = any(z.bullish == control_bull and is_alive(z) for z in engine.zones if z.candle <= k)
                 if old_side_alive:
                     control = "BOTH"
+                    controlling_zone_id = None
                     for z in opp_impacts:
                         log(k, "OPPOSING_ENCOUNTER", f"Opposing zone {z.id} impacted, old side still active -> BOTH", z.id)
                 else:
                     new_zone = opp_impacts[0]
                     control = "BUY_ONLY" if new_zone.bullish else "SELL_ONLY"
                     control_bull = new_zone.bullish
+                    controlling_zone_id = new_zone.id
                     log(k, "CONTROL_SWITCHED", f"Old side exhausted; zone {new_zone.id} impacted -> {control}", new_zone.id)
 
         # 3) Opposing gains control: survives, and a same-direction-as-opposing
@@ -224,6 +230,7 @@ def run(args: argparse.Namespace) -> int:
                     controlling_opp = z.id
                     control = "BUY_ONLY" if candidate_bull else "SELL_ONLY"
                     control_bull = candidate_bull
+                    controlling_zone_id = z.id
                     log(k, "OPPOSING_GAINS_CONTROL", f"Zone {z.id} confirmed swing at week {confirmed_after[0]}, other side exhausted", z.id)
                     break
                 if controlling_opp is not None:
@@ -235,6 +242,7 @@ def run(args: argparse.Namespace) -> int:
             if opp_zone is not None and opp_zone in newly_oob + newly_rejected:
                 log(k, "OPPOSING_LOSES_CONTROL", f"Zone {controlling_opp} breached", controlling_opp)
                 controlling_opp = None
+                controlling_zone_id = None
                 other_opp_alive = any(z.bullish != control_bull and is_alive(z) for z in engine.zones if z.candle <= k)
                 pro_alive = any(z.bullish == control_bull and is_alive(z) for z in engine.zones if z.candle <= k)
                 if other_opp_alive:
@@ -242,6 +250,10 @@ def run(args: argparse.Namespace) -> int:
                 elif pro_alive:
                     control = "BUY_ONLY" if control_bull else "SELL_ONLY"
                     log(k, "RETURN_TO_PRO_TREND", f"No opposing POI remains active -> {control}", None)
+                    # NOTE: controlling_zone_id stays None here -- there may be
+                    # several alive pro-side zones and no single one is "the"
+                    # authority. Audit gap: h4_ob_engine's parent-zone linkage
+                    # will show blank for OBs impacted during this state.
                 else:
                     control = "NONE"
                     log(k, "NO_CONTROL", "No active POI on either side", None)
@@ -257,7 +269,7 @@ def run(args: argparse.Namespace) -> int:
         #    not yet implement -- do not approximate it with "is the founding
         #    zone still unspent," which is what caused the bug.
 
-        weekly_rows.append((k, trend, control, str(controlling_opp) if controlling_opp else ""))
+        weekly_rows.append((k, trend, control, str(controlling_opp) if controlling_opp else "", str(controlling_zone_id) if controlling_zone_id else ""))
 
     write_outputs(base, weeks, weekly_rows, events, display_tz)
     print("Created:")
@@ -271,10 +283,10 @@ def run(args: argparse.Namespace) -> int:
 def write_outputs(base: Path, weeks, weekly_rows, events: List[ControlEvent], display_tz: ZoneInfo) -> None:
     with (base / "weekly_control_ledger.csv").open("w", newline="", encoding="utf-8") as f:
         wr = csv.writer(f)
-        wr.writerow(["week_index", "week_start_utc", "week_start_riyadh", "trend", "control", "controlling_opposing_zone_id"])
-        for k, trend, control, opp_id in weekly_rows:
+        wr.writerow(["week_index", "week_start_utc", "week_start_riyadh", "trend", "control", "controlling_opposing_zone_id", "controlling_zone_id"])
+        for k, trend, control, opp_id, controlling_zone_id in weekly_rows:
             wk = weeks[k]
-            wr.writerow([k, wob.iso(wk.start), wob.display_iso(wk.start, display_tz), trend, control, opp_id])
+            wr.writerow([k, wob.iso(wk.start), wob.display_iso(wk.start, display_tz), trend, control, opp_id, controlling_zone_id])
 
     with (base / "weekly_control_events.csv").open("w", newline="", encoding="utf-8") as f:
         wr = csv.writer(f)
