@@ -140,8 +140,11 @@ def run(args: argparse.Namespace) -> int:
         new_trend = TREND[trend_at[k]]
         if new_trend != trend:
             trend = new_trend
-            control = "NONE"
-            controlling_opp = None
+            # Trend is a separate, structural fact (SPEC.md SS9). A flip does
+            # NOT by itself change control -- control only changes through the
+            # explicit transfer rules below (campaign start/stop, opposing
+            # encounter/gain/lose, no-control). An active campaign carries
+            # straight through a trend flip until one of those rules fires.
             log(k, "TREND_FLIP", f"Weekly trend -> {trend}", None)
 
         zones_this_week = [z for z in engine.zones if z.candle <= k]
@@ -307,12 +310,10 @@ def write_outputs(base: Path, weeks, weekly_rows, events: List[ControlEvent], di
         "   valid Weekly POI of either direction' and then processes it",
         "   normally). All later BOTH/opposing-gains/opposing-loses/no-control",
         "   logic is therefore relative to the ESTABLISHED CONTROL direction,",
-        "   not to structural trend -- trend is tracked only for display/audit",
-        "   and resets control to NONE on every flip (a simplification: the",
-        "   spec does not explicitly require a hard reset, only that the new",
-        "   trend's pro-trend side becomes controlling 'when a valid POI",
-        "   supports it' -- this module treats every trend flip as forcing a",
-        "   fresh evaluation instead of carrying the old campaign forward).",
+        "   not to structural trend. A trend flip does NOT reset control by",
+        "   itself (SPEC.md SS9: trend and control are independent) -- an",
+        "   active campaign carries straight through a flip until one of the",
+        "   explicit transfer rules fires (encounter/gain/lose/no-control).",
         "",
         f"Weeks processed: {len(weeks)}",
         f"Control-relevant events: {len(events)}",
