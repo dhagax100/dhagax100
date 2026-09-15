@@ -7,3 +7,6 @@ data/weekly_control_ledger.csv
 data/weekly_control_events.csv
 data/weekly_control_report.txt
 __pycache__/
+data/h4_ob_ledger.csv
+data/h4_ob_viewer.pine
+data/h4_ob_report.txt

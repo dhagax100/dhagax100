@@ -1,8 +1,0 @@
-4H STRUCTURE/OB ENGINE -- FIRST PASS, UNVERIFIED
-
-4H bars: 1153  (grid anchor: 00:00 UTC -- VERIFY against the real FXCM chart first)
-4H OBs computed: 299
-Impacted (state=SPENT): 232
-Drawn (impacted + pre-eligible, not OOB + control-authorized at impact): 70
-
-Every row in h4_ob_ledger.csv is kept for audit even when not drawn; 'authorized' is False for: never impacted, was OOB before impact, or impacted while the Weekly control state did not permit that direction.
