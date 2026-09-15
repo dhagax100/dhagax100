@@ -1,0 +1,9 @@
+# Generated outputs from reference/*.py -- regenerate locally, don't commit
+data/weekly_ob_ledger.csv
+data/weekly_ob_swings.csv
+data/weekly_ob_viewer.pine
+data/weekly_ob_report.txt
+data/weekly_control_ledger.csv
+data/weekly_control_events.csv
+data/weekly_control_report.txt
+__pycache__/
