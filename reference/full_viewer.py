@@ -59,6 +59,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--h4-anchor-hour", type=int, default=0, choices=range(4), help="UTC hour the 4H grid starts from. VERIFY against the real chart.")
     p.add_argument("--h4-pine-obs", type=int, default=200, choices=range(1, 451))
     p.add_argument("--control-ledger", default=None)
+    p.add_argument("--focus-weekly-id", type=int, default=0,
+                    help="Only draw/table 4H OBs whose parent Weekly zone matches this ID "
+                         "(0 = show every authorized OB across the whole dataset).")
     return p.parse_args()
 
 
@@ -243,7 +246,10 @@ def main() -> int:
         wr.writeheader()
         wr.writerows(rows)
 
-    extra_lines = build_h4_extra_lines(h4_engine, h4_bars, drawn, args.h4_pine_obs, display_tz)
+    focused_drawn = drawn
+    if args.focus_weekly_id:
+        focused_drawn = [d for d in drawn if d[6] == str(args.focus_weekly_id)]
+    extra_lines = build_h4_extra_lines(h4_engine, h4_bars, focused_drawn, args.h4_pine_obs, display_tz)
 
     wob.write_ob_pine(base, weekly_engine, args.pine_labels, args.pine_obs, args.pine_table,
                        args.box_body_minutes, display_tz, args.origin_first_price,
@@ -255,7 +261,8 @@ def main() -> int:
     print("  full_viewer.pine   (Weekly layer unchanged + separate 4H layer/table)")
     print("  h4_ob_ledger.csv")
     print("  weekly_ob_ledger.csv, weekly_ob_swings.csv, weekly_ob_report.txt")
-    print(f"{len(h4_bars)} 4H bars, {len(h4_engine.zones)} H4 OBs computed, {len(drawn)} drawn (impacted + authorized).")
+    focus_note = f", {len(focused_drawn)} shown (--focus-weekly-id {args.focus_weekly_id})" if args.focus_weekly_id else ""
+    print(f"{len(h4_bars)} 4H bars, {len(h4_engine.zones)} H4 OBs computed, {len(drawn)} drawn (impacted + authorized){focus_note}.")
     return 0
 
 
