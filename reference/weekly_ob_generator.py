@@ -777,12 +777,16 @@ def write_ob_pine(base: Path, engine: WeeklyOBEngine, label_cap: int, ob_cap: in
         "//@version=6",
         "indicator(\"FXCM Weekly OB - Python Reference\", overlay=true, max_labels_count=500, max_boxes_count=500, max_lines_count=500)",
         f"// GENERATED FROM 1-MINUTE FXCM BID DATA. OB decisions use locked Weekly swing/MSS; displayed body uses observed first/last {box_body_minutes}m candles; first source is {origin_first_price}; body source offset is {origin_body_offset_minutes}m.",
-        "// Attach to EURUSD, 1W, FXCM.",
+        "// Attach to EURUSD, FXCM. Weekly chart: swings/MSS/OB boxes/table. 4H chart:",
+        "// only the Weekly OB boxes + impact lines are carried over (no table, no",
+        "// swing/MSS labels). Every other timeframe draws nothing -- a plain chart.",
         "float lowGap = ta.atr(14) * 0.08",
         "bool showOriginAudit = input.bool(true, \"Show OB origin-candle audit labels\")",
         "bool inspectOneOB = input.bool(false, \"Inspect one OB only\", group=\"OB inspection\")",
         f"int obFromLast = input.int(1, \"OB from last\", minval=1, maxval={max_ob_offset}, group=\"OB inspection\", tooltip=\"1 = latest OB, 2 = the OB before it, and so on.\")",
         "var table ledger = table.new(position.top_right, 10, 21, border_width=1)",
+        "bool onWeekly = timeframe.period == \"1W\"",
+        "bool onH4 = timeframe.period == \"240\"",
     ]
     # Resolve each static M1 impact into the opening time of whichever chart
     # candle contains it. This is deliberately evaluated on every chart bar,
@@ -798,18 +802,23 @@ def write_ob_pine(base: Path, engine: WeeklyOBEngine, label_cap: int, ob_cap: in
             stamp = pine_time(it)
             lines += [f"var int {name} = na", f"if time <= {stamp} and {stamp} < time_close", f"    {name} := time"]
     lines.append("if barstate.islast")
+    # Weekly-only: swings, MSS, table. Weekly+H4: OB boxes and impact lines
+    # only (SPEC.md SS17: "Display Weekly POIs on Weekly and 4H charts").
+    # Every other timeframe draws nothing here -- a plain, error-free chart.
+    lines.append("    if onWeekly")
     # Exact locked visual convention: blue ▲ high, black ▼ low, and ✕ MSS.
     for e in sh:
-        lines.append(f"    label.new({pine_time(engine.w[e.swing].start)}, {e.price:.5f}, \"▲\", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=color.blue, size=size.small)")
+        lines.append(f"        label.new({pine_time(engine.w[e.swing].start)}, {e.price:.5f}, \"▲\", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=color.blue, size=size.small)")
     for e in sl:
-        lines.append(f"    label.new({pine_time(engine.w[e.swing].start)}, {e.price:.5f} - lowGap, \"▼\", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=color.black, size=size.small)")
+        lines.append(f"        label.new({pine_time(engine.w[e.swing].start)}, {e.price:.5f} - lowGap, \"▼\", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=color.black, size=size.small)")
     for m in ms:
         y = f"{m.price:.5f}" if m.up else f"{m.price:.5f} - lowGap"
         colour = "color.blue" if m.up else "color.black"
-        lines.append(f"    label.new({pine_time(engine.w[m.broken].start)}, {y}, \"✕\", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor={colour}, size=size.small)")
+        lines.append(f"        label.new({pine_time(engine.w[m.broken].start)}, {y}, \"✕\", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor={colour}, size=size.small)")
     # Match the locked visual convention: hollow color box, red vertical impact line,
     # rejected zones not drawn, and SPENT shown in its pre-spent colour.
     right_edge = engine.m[-1].t + timedelta(days=365)
+    lines.append("    if onWeekly or onH4")
     for z in shown:
         if z.rejected:
             continue
@@ -825,24 +834,25 @@ def write_ob_pine(base: Path, engine: WeeklyOBEngine, label_cap: int, ob_cap: in
         fallback_right = it or (engine.w[z.stop].start if 0 <= z.stop < len(engine.w) else right_edge)
         right = f"(na({impact_vars[z.id]}) ? {pine_time(fallback_right)} : {impact_vars[z.id]})" if it is not None else pine_time(fallback_right)
         col = pine_colour(z)
-        lines.append(f"    if not inspectOneOB or obFromLast == {rank_from_last}")
-        lines.append(f"        box.new({pine_time(left)}, {body_top:.5f}, {right}, {body_bottom:.5f}, border_color={col}, border_width=1, bgcolor=na, xloc=xloc.bar_time)")
+        lines.append(f"        if not inspectOneOB or obFromLast == {rank_from_last}")
+        lines.append(f"            box.new({pine_time(left)}, {body_top:.5f}, {right}, {body_bottom:.5f}, border_color={col}, border_width=1, bgcolor=na, xloc=xloc.bar_time)")
         audit_text = f"#{z.id} {STATE[z.pre_spent_state if z.state == 3 else z.state]} {'BUY' if z.bullish else 'SELL'}"
-        lines.append(f"        if showOriginAudit\n            label.new({pine_time(left)}, {origin.h:.5f}, \"{audit_text}\", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_down, color=color.new({col}, 85), textcolor={col}, size=size.tiny)")
+        lines.append(f"            if showOriginAudit\n                label.new({pine_time(left)}, {origin.h:.5f}, \"{audit_text}\", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_down, color=color.new({col}, 85), textcolor={col}, size=size.tiny)")
         if it is not None:
-            lines.append(f"        line.new({right}, {body_bottom:.5f}, {right}, {body_top:.5f}, xloc=xloc.bar_time, extend=extend.both, color=color.new(color.red, 30), width=1)")
+            lines.append(f"            line.new({right}, {body_bottom:.5f}, {right}, {body_top:.5f}, xloc=xloc.bar_time, extend=extend.both, color=color.new(color.red, 30), width=1)")
+    lines.append("    if onWeekly")
     lines += [
-        "    table.clear(ledger, 0, 0, 9, 20)",
-        "    table.cell(ledger, 0, 0, \"W OB\", text_color=color.white, bgcolor=color.new(color.green, 15))",
-        "    table.cell(ledger, 1, 0, \"Type\", text_color=color.white, bgcolor=color.new(color.green, 15))",
-        "    table.cell(ledger, 2, 0, \"Side\", text_color=color.white, bgcolor=color.new(color.green, 15))",
-        "    table.cell(ledger, 3, 0, \"Bottom\", text_color=color.white, bgcolor=color.new(color.green, 15))",
-        "    table.cell(ledger, 4, 0, \"Top\", text_color=color.white, bgcolor=color.new(color.green, 15))",
-        "    table.cell(ledger, 5, 0, \"Origin (RYD)\", text_color=color.white, bgcolor=color.new(color.green, 15))",
-        "    table.cell(ledger, 6, 0, \"Trigger (RYD / swing)\", text_color=color.white, bgcolor=color.new(color.green, 15))",
-        "    table.cell(ledger, 7, 0, \"Eligible (RYD / px)\", text_color=color.white, bgcolor=color.new(color.green, 15))",
-        "    table.cell(ledger, 8, 0, \"Impact (RYD)\", text_color=color.white, bgcolor=color.new(color.green, 15))",
-        "    table.cell(ledger, 9, 0, \"Status\", text_color=color.white, bgcolor=color.new(color.green, 15))",
+        "        table.clear(ledger, 0, 0, 9, 20)",
+        "        table.cell(ledger, 0, 0, \"W OB\", text_color=color.white, bgcolor=color.new(color.green, 15))",
+        "        table.cell(ledger, 1, 0, \"Type\", text_color=color.white, bgcolor=color.new(color.green, 15))",
+        "        table.cell(ledger, 2, 0, \"Side\", text_color=color.white, bgcolor=color.new(color.green, 15))",
+        "        table.cell(ledger, 3, 0, \"Bottom\", text_color=color.white, bgcolor=color.new(color.green, 15))",
+        "        table.cell(ledger, 4, 0, \"Top\", text_color=color.white, bgcolor=color.new(color.green, 15))",
+        "        table.cell(ledger, 5, 0, \"Origin (RYD)\", text_color=color.white, bgcolor=color.new(color.green, 15))",
+        "        table.cell(ledger, 6, 0, \"Trigger (RYD / swing)\", text_color=color.white, bgcolor=color.new(color.green, 15))",
+        "        table.cell(ledger, 7, 0, \"Eligible (RYD / px)\", text_color=color.white, bgcolor=color.new(color.green, 15))",
+        "        table.cell(ledger, 8, 0, \"Impact (RYD)\", text_color=color.white, bgcolor=color.new(color.green, 15))",
+        "        table.cell(ledger, 9, 0, \"Status\", text_color=color.white, bgcolor=color.new(color.green, 15))",
     ]
     for row, z in enumerate(table_zones, 1):
         origin = engine.w[z.candle]
@@ -854,10 +864,10 @@ def write_ob_pine(base: Path, engine: WeeklyOBEngine, label_cap: int, ob_cap: in
         trigger_text = display_iso(tt, display_zone) + (" @ " + f"{tp:.5f}" if tp is not None else "")
         eligible_text = display_iso(et, display_zone) + (" @ " + f"{ep:.5f}" if ep is not None else "")
         values = [f"#{z.id}", STATE[z.pre_spent_state if z.state == 3 else z.state], "BUY" if z.bullish else "SELL", f"{body_bottom:.5f}", f"{body_top:.5f}", display_iso(engine.w[z.candle].start, display_zone), trigger_text, eligible_text, display_iso(it, display_zone), status(z)]
-        lines.append("    if not inspectOneOB")
+        lines.append("        if not inspectOneOB")
         for col, value in enumerate(values):
             bg = f"color.new({pine_colour(z)}, 80)" if col == 9 else "na"
-            lines.append(f"        table.cell(ledger, {col}, {row}, \"{pine_text(value)}\", text_color=color.black, bgcolor={bg})")
+            lines.append(f"            table.cell(ledger, {col}, {row}, \"{pine_text(value)}\", text_color=color.black, bgcolor={bg})")
     # Inspection mode always uses row 1 so the selected record is easy to read.
     for z in engine.zones[::-1]:
         rank_from_last = len(engine.zones) - z.id + 1
@@ -869,10 +879,10 @@ def write_ob_pine(base: Path, engine: WeeklyOBEngine, label_cap: int, ob_cap: in
         trigger_text = display_iso(tt, display_zone) + (" @ " + f"{tp:.5f}" if tp is not None else "")
         eligible_text = display_iso(et, display_zone) + (" @ " + f"{ep:.5f}" if ep is not None else "")
         values = [f"#{z.id}", STATE[z.pre_spent_state if z.state == 3 else z.state], "BUY" if z.bullish else "SELL", f"{body.bottom:.5f}", f"{body.top:.5f}", display_iso(origin.start, display_zone), trigger_text, eligible_text, display_iso(it, display_zone), status(z)]
-        lines.append(f"    if inspectOneOB and obFromLast == {rank_from_last}")
+        lines.append(f"        if inspectOneOB and obFromLast == {rank_from_last}")
         for col, value in enumerate(values):
             bg = f"color.new({pine_colour(z)}, 80)" if col == 9 else "na"
-            lines.append(f"        table.cell(ledger, {col}, 1, \"{pine_text(value)}\", text_color=color.black, bgcolor={bg})")
+            lines.append(f"            table.cell(ledger, {col}, 1, \"{pine_text(value)}\", text_color=color.black, bgcolor={bg})")
     lines.append("")
     (base / "weekly_ob_viewer.pine").write_text("\n".join(lines), encoding="utf-8")
 
