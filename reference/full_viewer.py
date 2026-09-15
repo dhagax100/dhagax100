@@ -83,70 +83,95 @@ def pine_text(s: str) -> str:
 
 
 def build_h4_extra_lines(h4_engine, h4_bars, drawn: List[tuple], ob_cap: int, display_tz: ZoneInfo) -> List[str]:
-    """Self-contained H4 layer: its own impact-var declarations, its own
-    `if barstate.islast: if onH4:` block, its own table. `onH4` is reused
-    from the Weekly layer's own declaration earlier in the same script --
-    Pine top-level vars are visible script-wide regardless of source order."""
+    """Self-contained H4 layer: data packed into Pine arrays (one bulk
+    `array.from(...)` statement per field, not one statement per OB), then a
+    single small runtime `for` loop draws everything. `onH4` is reused from
+    the Weekly layer's own declaration earlier in the same script.
+
+    Earlier versions unrolled one box.new/label.new/table.cell per OB. At 70+
+    drawn OBs that first blew a single if-block's statement limit (CE10205),
+    and after batching into smaller blocks, blew the WHOLE SCRIPT's total
+    statement limit (CE10295 "main body is too long"). Packing into arrays
+    and looping once keeps the script's own size roughly constant regardless
+    of how many OBs get drawn -- the fix TradingView's own error message
+    points at ("try wrapping code in functions").
+
+    Every drawn OB is guaranteed impacted (authorized requires it), so the
+    box's right edge is simply the H4 bar containing that exact impact
+    minute (h4_bars[z.stop].start) -- no per-bar "which timeframe am I on"
+    resolution is needed here, unlike the Weekly layer, because this layer
+    only ever renders on the 4H chart itself (onH4 gate)."""
     shown = drawn[-ob_cap:]
-    lines: List[str] = [
-        f"var table h4Ledger = table.new(position.bottom_right, 8, {len(shown) + 1}, border_width=1)",
-    ]
-    impact_vars: Dict[int, str] = {}
+    n = len(shown)
+
+    def arr(kind: str, values: List[str]) -> str:
+        return f"array.from({', '.join(values)})" if values else f"array.new<{kind}>()"
+
+    lefts, tops, bottoms, rights, bulls, labels, parents, sides, bots5, tops5, trigs, eligs, impacts = ([] for _ in range(13))
     for z, tt, tp, et, ep, it, parent_id in shown:
-        if it is not None:
-            name = f"h4_impact_x_{z.id}"
-            impact_vars[z.id] = name
-            stamp = pine_time(it)
-            lines += [f"var int {name} = na", f"if time <= {stamp} and {stamp} < time_close", f"    {name} := time"]
+        origin = h4_bars[z.candle]
+        right_time = h4_bars[z.stop].start  # guaranteed valid: authorized => impacted => z.stop set
+        lefts.append(pine_time(origin.start))
+        tops.append(f"{z.zt:.5f}")
+        bottoms.append(f"{z.zb:.5f}")
+        rights.append(pine_time(right_time))
+        bulls.append("true" if z.bullish else "false")
+        label_text = f"#{z.id} {'BUY' if z.bullish else 'SELL'} (W{parent_id})"
+        labels.append(f"\"{pine_text(label_text)}\"")
+        parents.append(f"\"{pine_text('#' + parent_id if parent_id else '-')}\"")
+        sides.append(f"\"{'BUY' if z.bullish else 'SELL'}\"")
+        bots5.append(f"\"{z.zb:.5f}\"")
+        tops5.append(f"\"{z.zt:.5f}\"")
+        trig_txt = wob.display_iso(tt, display_tz) + (f" @ {tp:.5f}" if tp is not None else "")
+        elig_txt = wob.display_iso(et, display_tz) + (f" @ {ep:.5f}" if ep is not None else "")
+        trigs.append(f"\"{pine_text(trig_txt)}\"")
+        eligs.append(f"\"{pine_text(elig_txt)}\"")
+        impacts.append(f"\"{pine_text(wob.display_iso(it, display_tz))}\"")
 
-    # Pine caps how many statements a single if-block may hold (CE10205 "if
-    # statement is too long"). With 70+ drawn OBs, one shared `if onH4:`
-    # covering every box/label/line and every table row blew past that limit.
-    # Fix: emit many small, independent `if barstate.islast: if onH4:` blocks
-    # instead of one giant one -- Pine allows any number of separate
-    # occurrences of the same condition, just not one overloaded block.
-    right_edge = h4_engine.m[-1].t + timedelta(days=30)
-    DRAW_BATCH = 15
-    for i in range(0, len(shown), DRAW_BATCH):
-        lines.append("if barstate.islast")
-        lines.append("    if onH4")
-        for z, tt, tp, et, ep, it, parent_id in shown[i:i + DRAW_BATCH]:
-            origin = h4_bars[z.candle]
-            col = "color.blue" if z.bullish else "color.black"
-            fallback_right = it or right_edge
-            right = f"(na({impact_vars[z.id]}) ? {pine_time(fallback_right)} : {impact_vars[z.id]})" if it is not None else pine_time(fallback_right)
-            lines.append(f"        box.new({pine_time(origin.start)}, {z.zt:.5f}, {right}, {z.zb:.5f}, border_color={col}, border_width=1, bgcolor=na, xloc=xloc.bar_time)")
-            label_text = f"#{z.id} {'BUY' if z.bullish else 'SELL'} (W{parent_id})"
-            lines.append(f"        label.new({pine_time(origin.start)}, {z.zt:.5f}, \"{label_text}\", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_down, color=color.new({col},85), textcolor={col}, size=size.tiny)")
-            if it is not None:
-                lines.append(f"        line.new({right}, {z.zb:.5f}, {right}, {z.zt:.5f}, xloc=xloc.bar_time, extend=extend.both, color=color.new(color.red,30), width=1)")
+    ids = [f"\"{'#' + str(z.id)}\"" for z, *_ in shown]
 
-    lines.append("if barstate.islast")
-    lines.append("    if onH4")
-    lines += [
-        f"        table.clear(h4Ledger, 0, 0, 7, {len(shown)})",
-        "        table.cell(h4Ledger, 0, 0, \"4H OB\", text_color=color.white, bgcolor=color.new(color.blue,15))",
-        "        table.cell(h4Ledger, 1, 0, \"Parent W\", text_color=color.white, bgcolor=color.new(color.blue,15))",
-        "        table.cell(h4Ledger, 2, 0, \"Side\", text_color=color.white, bgcolor=color.new(color.blue,15))",
-        "        table.cell(h4Ledger, 3, 0, \"Bottom\", text_color=color.white, bgcolor=color.new(color.blue,15))",
-        "        table.cell(h4Ledger, 4, 0, \"Top\", text_color=color.white, bgcolor=color.new(color.blue,15))",
-        "        table.cell(h4Ledger, 5, 0, \"Trigger (RYD)\", text_color=color.white, bgcolor=color.new(color.blue,15))",
-        "        table.cell(h4Ledger, 6, 0, \"Eligible (RYD)\", text_color=color.white, bgcolor=color.new(color.blue,15))",
-        "        table.cell(h4Ledger, 7, 0, \"Impact (RYD)\", text_color=color.white, bgcolor=color.new(color.blue,15))",
+    lines: List[str] = [
+        f"var table h4Ledger = table.new(position.bottom_right, 8, {n + 1}, border_width=1)",
+        f"var array<int> h4Left = {arr('int', lefts)}",
+        f"var array<float> h4Top = {arr('float', tops)}",
+        f"var array<float> h4Bottom = {arr('float', bottoms)}",
+        f"var array<int> h4Right = {arr('int', rights)}",
+        f"var array<bool> h4Bull = {arr('bool', bulls)}",
+        f"var array<string> h4Label = {arr('string', labels)}",
+        f"var array<string> h4Id = {arr('string', ids)}",
+        f"var array<string> h4Parent = {arr('string', parents)}",
+        f"var array<string> h4Side = {arr('string', sides)}",
+        f"var array<string> h4Bot5 = {arr('string', bots5)}",
+        f"var array<string> h4Top5 = {arr('string', tops5)}",
+        f"var array<string> h4Trig = {arr('string', trigs)}",
+        f"var array<string> h4Elig = {arr('string', eligs)}",
+        f"var array<string> h4Impact = {arr('string', impacts)}",
+        "var bool h4Drawn = false",
+        "if barstate.islast and not h4Drawn",
+        "    if onH4",
+        f"        table.cell(h4Ledger, 0, 0, \"4H OB\", text_color=color.white, bgcolor=color.new(color.blue,15))",
+        f"        table.cell(h4Ledger, 1, 0, \"Parent W\", text_color=color.white, bgcolor=color.new(color.blue,15))",
+        f"        table.cell(h4Ledger, 2, 0, \"Side\", text_color=color.white, bgcolor=color.new(color.blue,15))",
+        f"        table.cell(h4Ledger, 3, 0, \"Bottom\", text_color=color.white, bgcolor=color.new(color.blue,15))",
+        f"        table.cell(h4Ledger, 4, 0, \"Top\", text_color=color.white, bgcolor=color.new(color.blue,15))",
+        f"        table.cell(h4Ledger, 5, 0, \"Trigger (RYD)\", text_color=color.white, bgcolor=color.new(color.blue,15))",
+        f"        table.cell(h4Ledger, 6, 0, \"Eligible (RYD)\", text_color=color.white, bgcolor=color.new(color.blue,15))",
+        f"        table.cell(h4Ledger, 7, 0, \"Impact (RYD)\", text_color=color.white, bgcolor=color.new(color.blue,15))",
+        "        for i = 0 to array.size(h4Left) - 1",
+        "            hCol = array.get(h4Bull, i) ? color.blue : color.black",
+        "            box.new(array.get(h4Left, i), array.get(h4Top, i), array.get(h4Right, i), array.get(h4Bottom, i), border_color=hCol, border_width=1, bgcolor=na, xloc=xloc.bar_time)",
+        "            label.new(array.get(h4Left, i), array.get(h4Top, i), array.get(h4Label, i), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_down, color=color.new(hCol,85), textcolor=hCol, size=size.tiny)",
+        "            line.new(array.get(h4Right, i), array.get(h4Bottom, i), array.get(h4Right, i), array.get(h4Top, i), xloc=xloc.bar_time, extend=extend.both, color=color.new(color.red,30), width=1)",
+        "            table.cell(h4Ledger, 0, i + 1, array.get(h4Id, i), text_color=color.black, bgcolor=na)",
+        "            table.cell(h4Ledger, 1, i + 1, array.get(h4Parent, i), text_color=color.black, bgcolor=na)",
+        "            table.cell(h4Ledger, 2, i + 1, array.get(h4Side, i), text_color=color.black, bgcolor=na)",
+        "            table.cell(h4Ledger, 3, i + 1, array.get(h4Bot5, i), text_color=color.black, bgcolor=na)",
+        "            table.cell(h4Ledger, 4, i + 1, array.get(h4Top5, i), text_color=color.black, bgcolor=na)",
+        "            table.cell(h4Ledger, 5, i + 1, array.get(h4Trig, i), text_color=color.black, bgcolor=na)",
+        "            table.cell(h4Ledger, 6, i + 1, array.get(h4Elig, i), text_color=color.black, bgcolor=na)",
+        "            table.cell(h4Ledger, 7, i + 1, array.get(h4Impact, i), text_color=color.black, bgcolor=na)",
+        "        h4Drawn := true",
     ]
-
-    ROW_BATCH = 8
-    row_items = list(enumerate(shown, 1))
-    for i in range(0, len(row_items), ROW_BATCH):
-        lines.append("if barstate.islast")
-        lines.append("    if onH4")
-        for row, (z, tt, tp, et, ep, it, parent_id) in row_items[i:i + ROW_BATCH]:
-            trig = wob.display_iso(tt, display_tz) + (f" @ {tp:.5f}" if tp is not None else "")
-            elig = wob.display_iso(et, display_tz) + (f" @ {ep:.5f}" if ep is not None else "")
-            vals = [f"#{z.id}", f"#{parent_id}" if parent_id else "-", "BUY" if z.bullish else "SELL",
-                    f"{z.zb:.5f}", f"{z.zt:.5f}", trig, elig, wob.display_iso(it, display_tz)]
-            for col, v in enumerate(vals):
-                lines.append(f"        table.cell(h4Ledger, {col}, {row}, \"{pine_text(v)}\", text_color=color.black, bgcolor=na)")
     return lines
 
 
