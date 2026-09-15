@@ -183,14 +183,25 @@ def run(args: argparse.Namespace) -> int:
             kind = "CAMPAIGN_START" if is_pro(first, trend_at[k]) else "CAMPAIGN_START_COUNTERTREND"
             log(k, kind, f"Zone {first.id} impacted (direction={'BUY' if first.bullish else 'SELL'}, trend={trend})", first.id)
 
-        # 2) Opposing encounter: a zone opposite the CONTROLLING direction
-        #    gets impacted -> BOTH.
+        # 2) A zone opposite the CONTROLLING direction gets impacted. Only
+        #    escalate to BOTH if the CURRENT controlling side still has a
+        #    live, unspent zone (a genuine concurrent thesis). If the old
+        #    side already delivered its reaction and is spent, there is
+        #    nothing to run concurrently with -- switch control straight to
+        #    the new zone's direction instead.
         if control in ("BUY_ONLY", "SELL_ONLY"):
             opp_impacts = [z for z in impacts_this_week if z.bullish != control_bull]
             if opp_impacts:
-                control = "BOTH"
-                for z in opp_impacts:
-                    log(k, "OPPOSING_ENCOUNTER", f"Opposing zone {z.id} impacted", z.id)
+                old_side_alive = any(z.bullish == control_bull and is_alive(z) for z in engine.zones if z.candle <= k)
+                if old_side_alive:
+                    control = "BOTH"
+                    for z in opp_impacts:
+                        log(k, "OPPOSING_ENCOUNTER", f"Opposing zone {z.id} impacted, old side still active -> BOTH", z.id)
+                else:
+                    new_zone = opp_impacts[0]
+                    control = "BUY_ONLY" if new_zone.bullish else "SELL_ONLY"
+                    control_bull = new_zone.bullish
+                    log(k, "CONTROL_SWITCHED", f"Old side exhausted; zone {new_zone.id} impacted -> {control}", new_zone.id)
 
         # 3) Opposing gains control: survives, and a same-direction-as-opposing
         #    swing confirms after its impact, and no same-direction-as-original
@@ -201,7 +212,7 @@ def run(args: argparse.Namespace) -> int:
             for candidate_bull in (True, False):
                 need_kind_weeks = swing_high_weeks if candidate_bull else swing_low_weeks
                 candidates = [z for z in engine.zones if z.bullish == candidate_bull and z.state == 3 and not z.rejected]
-                other_side_alive = any(z.bullish != candidate_bull and is_alive(z) for z in engine.zones)
+                other_side_alive = any(z.bullish != candidate_bull and is_alive(z) for z in engine.zones if z.candle <= k)
                 if other_side_alive:
                     continue
                 for z in candidates:
@@ -224,8 +235,8 @@ def run(args: argparse.Namespace) -> int:
             if opp_zone is not None and opp_zone in newly_oob + newly_rejected:
                 log(k, "OPPOSING_LOSES_CONTROL", f"Zone {controlling_opp} breached", controlling_opp)
                 controlling_opp = None
-                other_opp_alive = any(z.bullish != control_bull and is_alive(z) for z in engine.zones)
-                pro_alive = any(z.bullish == control_bull and is_alive(z) for z in engine.zones)
+                other_opp_alive = any(z.bullish != control_bull and is_alive(z) for z in engine.zones if z.candle <= k)
+                pro_alive = any(z.bullish == control_bull and is_alive(z) for z in engine.zones if z.candle <= k)
                 if other_opp_alive:
                     control = "BOTH"
                 elif pro_alive:
@@ -235,18 +246,16 @@ def run(args: argparse.Namespace) -> int:
                     control = "NONE"
                     log(k, "NO_CONTROL", "No active POI on either side", None)
 
-        # 5) No-control: the currently-controlling side's zone(s) all die
-        #    (OOB/rejected) this week with no opposing zone to take over,
-        #    and control was single-direction (not BOTH).
-        if control in ("BUY_ONLY", "SELL_ONLY"):
-            side_bull = control == "BUY_ONLY"
-            side_alive_now = any(z.bullish == side_bull and is_alive(z) for z in engine.zones)
-            side_impacted_now = any(z.bullish == side_bull for z in impacts_this_week)
-            if not side_alive_now and not side_impacted_now:
-                opp_alive_now = any(z.bullish != side_bull and is_alive(z) for z in engine.zones)
-                if not opp_alive_now:
-                    control = "NONE"
-                    log(k, "NO_CONTROL", "Controlling side's POI(s) exhausted, no opposing POI active", None)
+        # 5) DISABLED (SPECIFICATION_PENDING). A prior version dropped control
+        #    to NONE the week after the founding zone itself became spent --
+        #    but a spent founding zone is not an invalidation; the campaign
+        #    persists as a state until a real transfer event fires (opposing
+        #    encounter/switch above), per the user's explicit rule: "keep
+        #    selling until we come across another OB." SPEC.md SS16's actual
+        #    no-control case (a confirmed swing forms with NO POI reaction
+        #    behind it) is a different, more specific check this module does
+        #    not yet implement -- do not approximate it with "is the founding
+        #    zone still unspent," which is what caused the bug.
 
         weekly_rows.append((k, trend, control, str(controlling_opp) if controlling_opp else ""))
 
@@ -292,6 +301,15 @@ def write_outputs(base: Path, weeks, weekly_rows, events: List[ControlEvent], di
         "3. 'Active/alive' POI (forcing continued control) = not rejected, not",
         "   OOB, not yet SPENT (state in IFOB/AOB/AIFOB). A SPENT zone is",
         "   treated as having already done its job, not as still forcing control.",
+        "4a. An opposing-direction impact only escalates to BOTH if the",
+        "   currently-controlling side still has a live (unspent) zone. If",
+        "   the old side already delivered its reaction and is spent, control",
+        "   SWITCHES straight to the new zone's direction (CONTROL_SWITCHED)",
+        "   instead of passing through BOTH. Chart-confirmed 2026-04-14",
+        "   (zone 3 SELL): zone 1 (BUY) had already delivered its reaction and",
+        "   was spent, so this should switch straight to SELL_ONLY and hold",
+        "   through every 4H sell impact until price reaches the next Weekly",
+        "   zone, not oscillate through BOTH/BUY_ONLY.",
         "4. Opposing-gains-control's 'reaction produces a confirmed Weekly",
         "   swing' is matched to ANY same-direction swing confirmation between",
         "   the opposing zone's impact week and the current week -- not proven",
