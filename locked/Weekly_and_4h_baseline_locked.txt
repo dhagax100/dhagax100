@@ -1,0 +1,2624 @@
+// C# SOURCE PORT: c# OB upto 4h interested OB marking. no 5m yet(2).txt
+// OB-only visual output. Swing/MSS/OB state machine ported from the supplied locked C# source.
+// States: IFOB=0, AOB=1, OOB=2, SPENT=3, AIFOB=4.
+// OB-ONLY PERFORMANCE BUILD: FVG, RB, VI and their Weekly mirrors removed.
+// Swing, MSS, OB, impact and W1->H4 Interested Box rules are preserved.
+//@version=6
+indicator("SI EA Visualizer - W1 to H4 - H4 Table Working", overlay=true, max_labels_count=500, max_boxes_count=500, max_lines_count=500, max_bars_back=5000)
+
+// ===================== INPUTS =====================
+InpMonthsBack  = input.int(6, "Months to display")
+InpDisplayFrom = input.time(timestamp("2020-01-01"), "Display from date")
+useDisplayFrom = input.bool(true, "Use exact display-from date (else use months)")
+InpReplayUpTo  = input.time(0, "Replay up to date (0=show all)")
+useReplay      = input.bool(false, "Enable replay mode")
+InpFocusOB     = input.int(0, "Focus OB (0=show all in window, N=Nth from end)")
+InpMaxLabelsPerCategory = input.int(150, "Max swing-high / swing-low / MSS labels shown (each, most recent kept)", minval=1, maxval=160)
+InpSwingLowGapATR = input.float(0.08, "Swing-low arrow / down-MSS gap below the low (x ATR14)", minval=0.0)
+InpShowWeeklyImpactOnH4 = input.bool(false, "Show Weekly impact lines on H4", group="H4 display")
+InpH4AuditLog = input.bool(false, "Export H4 OB impact audit to Pine Logs", group="H4 OB audit")
+InpFocusH4AuditID = input.int(0, "Focus H4 audit ID (0 = show all)", minval=0, group="H4 OB audit")
+InpFocusWeeklySetupID = input.int(0, "Focus Weekly setup ID (0 = all)", minval=0, group="H4 OB audit")
+InpShowWeeklyOBs = input.bool(true, "Show Weekly OBs", group="EA Visualizer")
+InpShowInterestedZones = input.bool(true, "Show H4 Interested Zones", group="EA Visualizer")
+InpShowH4Structure = input.bool(true, "Show H4 swings / MSS", group="EA Visualizer")
+InpShowH4OBs = input.bool(true, "Show linked H4 OB", group="EA Visualizer")
+InpShowH4ImpactLines = input.bool(true, "Show H4 impact lines", group="EA Visualizer")
+InpShowCascadeTable = input.bool(true, "Show W1→H4 cascade table", group="EA Visualizer")
+InpWeeklyOBCount = input.int(4, "Weekly: last OBs on chart + table", minval=1, maxval=20, group="EA Visualizer")
+InpH4OBCount = input.int(4, "H4: last linked OBs on chart + table", minval=1, maxval=20, group="EA Visualizer")
+InpShowWeeklyTable = input.bool(true, "Weekly: show OB lifecycle table", group="EA Visualizer")
+InpShowH4Table = input.bool(true, "H4: show cascade / OB table", group="EA Visualizer")
+InpShowWeeklyImpactLines = input.bool(true, "Weekly: show impact lines", group="EA Visualizer")
+
+// LOCKED EVENT CLOCK: confirmed 1m intrabars are the timing authority.
+// H4/Weekly structure rules remain unchanged; lower-TF data only resolves when
+// an already-valid structural event became observable.
+[m1Time, m1Open, m1High, m1Low, m1Close] = request.security_lower_tf(syminfo.tickerid, "1", [time, open, high, low, close], ignore_invalid_timeframe=true)
+var M1T = array.new<int>()
+var M1O = array.new<float>()
+var M1H = array.new<float>()
+var M1L = array.new<float>()
+var M1C = array.new<float>()
+var int lastM1Stored = -1
+if barstate.isconfirmed
+    int _m1n = array.size(m1Time)
+    if _m1n > 0
+        for _m1i = 0 to _m1n - 1
+            int _m1t = array.get(m1Time, _m1i)
+            if _m1t > lastM1Stored
+                array.push(M1T, _m1t)
+                array.push(M1O, array.get(m1Open, _m1i))
+                array.push(M1H, array.get(m1High, _m1i))
+                array.push(M1L, array.get(m1Low, _m1i))
+                array.push(M1C, array.get(m1Close, _m1i))
+                lastM1Stored := _m1t
+
+// ===================== TYPE DEFINITIONS =====================
+type SwEv
+    int   confirmIdx
+    int   kind         // 0=high, 1=low
+    int   swingIdx
+    float price
+
+type MssEv
+    int   atIdx
+    int   brokenIdx
+    float price
+    bool  toUp
+
+type ObZone
+    int   candle
+    float zb
+    float zt
+    bool  bullish
+    int   triggerK
+    int   eligibleK     // -1 = not yet eligible
+    int   stopK         // -1 = extending
+    int   eligibleTime  // exact child-TF eligibility time when resolved, else -1
+    int   impactTime    // exact child-TF first-touch time when resolved, else -1
+    int   eligibleKind  // 0=high-event, 1=low-event, -1=not recorded
+    int   state         // 0=IFOB, 1=AOB, 2=OOB, 3=SPENT, 4=AIFOB
+    int   origState
+    int   preSpentState
+    bool  rejected
+
+// ===================== PERSISTENT STATE =====================
+var events     = array.new<SwEv>()
+var msses      = array.new<MssEv>()
+var obs        = array.new<ObZone>()
+// Performance-only indexes. Historical zones stay in the arrays above for
+// identical lookup/drawing behavior; the per-bar engine iterates only zones
+// that can still change state.
+var activeObs  = array.new<int>()
+var swHighs    = array.new<int>()
+var swLows     = array.new<int>()
+var impactKs   = array.new<int>()
+var impactCounts = array.new<int>()
+
+// OHLC + time storage (absolute indexing, oldest=0)
+var O_ = array.new<float>()
+var H_ = array.new<float>()
+var L_ = array.new<float>()
+var C_ = array.new<float>()
+var BI = array.new<int>()      // bar_index of each bar
+var BT = array.new<int>()      // bar time (ms) of each bar
+var h4PathHighFirst = array.new<bool>() // resolved from 1M children
+
+// Swing detection trackers
+var int peakIdx_   = 0
+var int troughIdx_ = 0
+
+// Regime / MSS / OB trackers
+var bool  haveSWH   = false
+var float swhPrice  = 0.0
+var int   swhIdx    = 0
+var bool  haveSWL   = false
+var float swlPrice  = 0.0
+var int   swlIdx    = 0
+var int   regime    = 0      // 0=warmup, 1=up, 2=down
+var int   ei        = 0      // event pointer
+var int   lastSWHidx = -1
+var int   lastSWLidx = -1
+var int   pendBullAifob = -1
+var int   pendBearAifob = -1
+var int   pendBullAob = -1
+var int   pendBearAob = -1
+
+// Guard: process each bar exactly once
+var int lastProcessedBI = -1
+
+// Drawing object arrays (for cleanup on redraw)
+var drawnLabels = array.new<label>()
+var drawnBoxes  = array.new<box>()
+var drawnLines  = array.new<line>()
+
+// Replay gate
+replayActive = useReplay and InpReplayUpTo > 0
+skipBar = replayActive and time > InpReplayUpTo
+
+// ATR-scaled visual gap for the swing-low arrow (see DRAWING section) --
+// computed unconditionally every bar like any other ta.* series, not just
+// inside the barstate.islast draw block, so its running calculation stays
+// correct.
+swLowGapOffset = ta.atr(14) * InpSwingLowGapATR
+
+// ===================== HELPER FUNCTIONS =====================
+addSH(int idx) =>
+    sz = array.size(swHighs)
+    doPush = sz == 0
+    if not doPush
+        doPush := array.get(swHighs, sz - 1) != idx
+    if doPush
+        array.push(swHighs, idx)
+
+addSL(int idx) =>
+    sz = array.size(swLows)
+    doPush = sz == 0
+    if not doPush
+        doPush := array.get(swLows, sz - 1) != idx
+    if doPush
+        array.push(swLows, idx)
+
+addEv(int cIdx, int kind, int sIdx, float pr) =>
+    array.push(events, SwEv.new(cIdx, kind, sIdx, pr))
+
+addMss(int aIdx, int bIdx, float pr, bool up) =>
+    array.push(msses, MssEv.new(aIdx, bIdx, pr, up))
+
+recordImpact(int k) =>
+    sz = array.size(impactKs)
+    // Bars are processed strictly in chronological order. Therefore an
+    // additional impact at k can only match the most recently stored key.
+    if sz == 0 or array.get(impactKs, sz - 1) != k
+        array.push(impactKs, k)
+        array.push(impactCounts, 1)
+    else
+        array.set(impactCounts, sz - 1, array.get(impactCounts, sz - 1) + 1)
+
+// Existing H4 event rules determine WHICH event occurred.  These helpers find
+// only the first 1M child where that already-defined H4 event occurred.
+h4_childEventTime(int h4EventKind, int k) =>
+    int result = -1
+    int cn = array.size(m1Time)
+    if k > 0 and cn > 0
+        float threshold = h4EventKind == 0 ? array.get(L_, k - 1) : array.get(H_, k - 1)
+        for c = 0 to cn - 1
+            bool hit = h4EventKind == 0 ? array.get(m1Low, c) < threshold : array.get(m1High, c) > threshold
+            if result == -1 and hit
+                result := array.get(m1Time, c)
+    result
+
+h4_childFirstTouch(int fromTime, float zb, float zt) =>
+    int result = -1
+    int cn = array.size(m1Time)
+    if cn > 0
+        for c = 0 to cn - 1
+            int ct = array.get(m1Time, c)
+            if result == -1 and ct >= fromTime and array.get(m1High, c) > zb and array.get(m1Low, c) < zt
+                result := ct
+    result
+
+// Resolve the parent H4 candle's path from its actual 1M children. If both
+// parent extremes happen in one 5M bar, its own close direction is the
+// remaining deterministic tie-breaker. On non-H4 charts/no child data, keep
+// the original close-colour fallback.
+h4_highFirst(float pOpen, float pHigh, float pLow, float pClose) =>
+    bool result = pClose < pOpen
+    if array.size(m1Time) > 0
+        int hiChild = -1
+        int loChild = -1
+        int cn = array.size(m1Time)
+        if cn > 0
+            for c = 0 to cn - 1
+                if hiChild == -1 and array.get(m1High, c) >= pHigh
+                    hiChild := c
+                if loChild == -1 and array.get(m1Low, c) <= pLow
+                    loChild := c
+            if hiChild != -1 and loChild != -1
+                if hiChild < loChild
+                    result := true
+                else if loChild < hiChild
+                    result := false
+                else
+                    result := array.get(m1Close, hiChild) < array.get(m1Open, hiChild)
+    result
+
+addOB(int cand, float zb, float zt, bool bull, int tK, int st) =>
+    // Locked C# rule: AOB, IFOB and AIFOB all wait for a valid eligibility swing.
+    eK = -1
+    array.push(obs, ObZone.new(cand, zb, zt, bull, tK, eK, -1, -1, -1, -1, st, st, st, false))
+    array.push(activeObs, array.size(obs) - 1)
+
+// A waiting AOB becomes the IFOB on the matching MSS.  Do not promote a
+// rejected, stranded, spent, or already-eligible zone.
+promoteNativeWaitingAOB(int idx, bool bull) =>
+    bool result = false
+    if idx >= 0 and idx < array.size(obs)
+        z = array.get(obs, idx)
+        if z.state == 1 and z.origState == 1 and z.bullish == bull and z.eligibleK == -1 and not z.rejected
+            z.state := 0
+            z.origState := 0
+            z.eligibleK := -1
+            z.eligibleTime := -1
+            z.eligibleKind := -1
+            z.stopK := -1
+            array.set(obs, idx, z)
+            result := true
+    result
+
+// Is this exact candle already the origin of an existing zone (any state,
+// any origin, alive or dead)? A fresh backward-scan can independently land
+// on the same "best candle" a second time (e.g. once for the original
+// AIFOB, again later for its promotion/fresh-scan fallback) -- this stops
+// a second zone from being stacked on top of one that already claimed it.
+candleClaimed(int cand, bool bull) =>
+    found = false
+    n = array.size(obs)
+    for z = 0 to n - 1
+        if z < 0 or z >= n
+            continue
+        if not found
+            zz = array.get(obs, z)
+            if zz.candle == cand and zz.bullish == bull
+                found := true
+    found
+
+// A zone that was ever born as AIFOB keeps origState==4 forever (even after
+// promotion to IFOB, or after dying). Used to skip the fresh-scan fallback
+// when an AIFOB already exists for this exact setup -- one swing high and
+// one swing low already existed before the break, so a second, separate
+// IFOB in the same candle range would just be a duplicate.
+existsAifobInRange(int lo, int hi, bool bull) =>
+    found = false
+    n = array.size(obs)
+    for z = 0 to n - 1
+        if z < 0 or z >= n
+            continue
+        if not found
+            zz = array.get(obs, z)
+            if zz.origState == 4 and zz.bullish == bull and zz.candle >= lo and zz.candle <= hi
+                found := true
+    found
+
+// --- AOB HUNT: complete old locked procedure. ---
+tryBullAOB(int pReg, int aobSWHi, int newSwlI, float newSwlP, int k) =>
+    if pReg == 1 and aobSWHi >= 0
+        armedSwhPrice = array.get(H_, aobSWHi)
+        refViolated = false
+        for v = aobSWHi + 1 to newSwlI
+            if array.get(H_, v) >= armedSwhPrice
+                refViolated := true
+        if not refViolated
+            lo2 = math.max(0, math.min(aobSWHi - 1, newSwlI))
+            hi2 = math.max(aobSWHi - 1, newSwlI)
+            best2 = -1
+            for x = lo2 to hi2
+                cX = array.get(C_, x)
+                oX = array.get(O_, x)
+                if cX > oX
+                    if best2 == -1
+                        best2 := x
+                    else if cX > array.get(C_, best2)
+                        best2 := x
+            if best2 != -1 and array.get(L_, best2) > newSwlP
+                oB = array.get(O_, best2)
+                cB = array.get(C_, best2)
+                addOB(best2, math.min(oB,cB),math.max(oB,cB),false,k,1)
+                ai = array.size(obs)-1
+                if ai >= 0 and k > 0
+                    aob = array.get(obs,ai)
+                    ep = array.get(H_,k-1)
+                    if ep > aob.zt
+                        aob.rejected := true
+                        aob.eligibleK := -1
+                        aob.stopK := -1
+                    else
+                        aob.eligibleK := k
+                    array.set(obs,ai,aob)
+
+tryBearAOB(int pReg, int aobSWLi, int newSwhI, float newSwhP, int k) =>
+    if pReg == 2 and aobSWLi >= 0
+        armedSwlPrice = array.get(L_, aobSWLi)
+        refViolated = false
+        for v = aobSWLi + 1 to newSwhI
+            if array.get(L_, v) <= armedSwlPrice
+                refViolated := true
+        if not refViolated
+            lo2 = math.max(0, math.min(aobSWLi - 1, newSwhI))
+            hi2 = math.max(aobSWLi - 1, newSwhI)
+            best2 = -1
+            for x = lo2 to hi2
+                cX = array.get(C_, x)
+                oX = array.get(O_, x)
+                if cX < oX
+                    if best2 == -1
+                        best2 := x
+                    else if cX < array.get(C_, best2)
+                        best2 := x
+            if best2 != -1 and array.get(H_, best2) < newSwhP
+                oB = array.get(O_, best2)
+                cB = array.get(C_, best2)
+                addOB(best2, math.min(oB,cB),math.max(oB,cB),true,k,1)
+                ai = array.size(obs)-1
+                if ai >= 0 and k > 0
+                    aob = array.get(obs,ai)
+                    ep = array.get(L_,k-1)
+                    if ep < aob.zb
+                        aob.rejected := true
+                        aob.eligibleK := -1
+                        aob.stopK := -1
+                    else
+                        aob.eligibleK := k
+                    array.set(obs,ai,aob)
+
+// --- AIFOB HUNT: Bullish (returns obs[] index or -1) ---
+tryBullAIFOB(int pReg, bool pHaveSWH, int pSwhI, int pLastSWLi, int newSwlI, int k) =>
+    result = -1
+    // Exception: the confirming candle (k) can, in the same bar, ALSO break
+    // below the swing low it just confirmed (newSwlI) -- an outside/engulfing
+    // bar. That means we're not continuing bullish, we're reversing down in
+    // the same breath (the "Second break: SWL" check right after this will
+    // catch the regime flip). Don't create a bullish candidate on a premise
+    // this same candle already broke.
+    alreadyBrokeIt = array.get(L_, k) < array.get(L_, newSwlI)
+    if pReg == 1 and pHaveSWH and pSwhI >= 0 and pLastSWLi >= 0 and not alreadyBrokeIt
+        lo = math.max(0, math.min(math.min(pLastSWLi, newSwlI), pSwhI - 1))
+        hi = math.max(math.max(pLastSWLi, newSwlI), pSwhI - 1)
+        best = -1
+        for x = lo to hi
+            if x < 0
+                continue
+            cX = array.get(C_, x)
+            oX = array.get(O_, x)
+            okB = false
+            if cX < oX
+                if best == -1
+                    okB := true
+                else
+                    okB := cX < array.get(C_, best)
+            if okB
+                best := x
+        if best != -1 and not candleClaimed(best, true)
+            oB = array.get(O_, best)
+            cB = array.get(C_, best)
+            addOB(best, math.min(oB, cB), math.max(oB, cB), true, k, 4)
+            result := array.size(obs) - 1
+    result
+
+// --- AIFOB HUNT: Bearish (returns obs[] index or -1) ---
+tryBearAIFOB(int pReg, bool pHaveSWL, int pSwlI, int pLastSWHi, int newSwhI, int k) =>
+    result = -1
+    // Mirror of the bullish exception: don't create a bearish candidate if
+    // this same confirming candle already broke ABOVE the swing high it
+    // just confirmed -- that's reversing up in the same breath, not
+    // continuing down.
+    alreadyBrokeIt2 = array.get(H_, k) > array.get(H_, newSwhI)
+    if pReg == 2 and pHaveSWL and pSwlI >= 0 and pLastSWHi >= 0 and not alreadyBrokeIt2
+        lo = math.max(0, math.min(math.min(pLastSWHi, newSwhI), pSwlI - 1))
+        hi = math.max(math.max(pLastSWHi, newSwhI), pSwlI - 1)
+        best = -1
+        for x = lo to hi
+            if x < 0
+                continue
+            cX = array.get(C_, x)
+            oX = array.get(O_, x)
+            okB = false
+            if cX > oX
+                if best == -1
+                    okB := true
+                else
+                    okB := cX > array.get(C_, best)
+            if okB
+                best := x
+        if best != -1 and not candleClaimed(best, false)
+            oB = array.get(O_, best)
+            cB = array.get(C_, best)
+            addOB(best, math.min(oB, cB), math.max(oB, cB), false, k, 4)
+            result := array.size(obs) - 1
+    result
+
+pruneNativeTerminalZones() =>
+    aoi = array.size(activeObs) - 1
+    while aoi >= 0
+        aidx = array.get(activeObs, aoi)
+        azone = array.get(obs, aidx)
+        if azone.state == 3 or azone.rejected
+            array.remove(activeObs, aoi)
+        aoi -= 1
+
+// ===================== MAIN PROCESSING =====================
+// Process each bar exactly once (matches MQL5 lastN guard)
+if not skipBar and bar_index != lastProcessedBI
+    lastProcessedBI := bar_index
+
+    // Push current bar data
+    array.push(O_, open)
+    array.push(H_, high)
+    array.push(L_, low)
+    array.push(C_, close)
+    array.push(BI, bar_index)
+    array.push(BT, int(time))
+    array.push(h4PathHighFirst, h4_highFirst(open, high, low, close))
+
+    n = array.size(O_)
+    if n >= 2
+        i = n - 1    // current bar index in our arrays
+
+        // LIVE H4 AOB/AIFOB ELIGIBILITY WATCHER
+        // A waiting zone already born on an earlier H4 candle must not wait
+        // for this H4 candle to close.  Walk its available 1M children in
+        // order, derive the same swing confirmation path as the H4 engine,
+        // then apply rejection -> eligibility -> impact at that child time.
+        // This deliberately excludes zones born on this candle (i > triggerK).
+        if timeframe.period == "240" and array.size(m1Time) > 0
+            int liveCount = array.size(activeObs)
+            float prevH4High = array.get(H_, i - 1)
+            float prevH4Low  = array.get(L_, i - 1)
+            float seedLow = troughIdx_ >= 0 and troughIdx_ < array.size(L_) ? array.get(L_, troughIdx_) : array.get(L_, i - 1)
+            float seedHigh = peakIdx_ >= 0 and peakIdx_ < array.size(H_) ? array.get(H_, peakIdx_) : array.get(H_, i - 1)
+            int cnLive = array.size(m1Time)
+            for azLive = 0 to liveCount - 1
+                if azLive < 0 or azLive >= liveCount
+                    continue
+                int ziLive = array.get(activeObs, azLive)
+                if ziLive < 0 or ziLive >= array.size(obs)
+                    continue
+                ObZone zLive = array.get(obs, ziLive)
+                bool watched = (zLive.state == 1 or zLive.state == 4) and zLive.eligibleK == -1 and not zLive.rejected and i > zLive.triggerK
+                if not watched
+                    continue
+                int eligibleAtLive = -1
+                float confirmedPoint = na
+                float runLow = seedLow
+                float runHigh = seedHigh
+                // Bearish zone: an H4 high break confirms its swing low.
+                // Bullish zone: an H4 low break confirms its swing high.
+                for cLive = 0 to cnLive - 1
+                    if eligibleAtLive != -1
+                        break
+                    float cOpen = array.get(m1Open, cLive)
+                    float cHigh = array.get(m1High, cLive)
+                    float cLow = array.get(m1Low, cLive)
+                    float cClose = array.get(m1Close, cLive)
+                    bool childHighFirst = cClose < cOpen
+                    if not zLive.bullish
+                        if childHighFirst
+                            if cHigh > prevH4High
+                                eligibleAtLive := array.get(m1Time, cLive)
+                                confirmedPoint := runLow
+                            runLow := math.min(runLow, cLow)
+                        else
+                            runLow := math.min(runLow, cLow)
+                            if cHigh > prevH4High
+                                eligibleAtLive := array.get(m1Time, cLive)
+                                confirmedPoint := runLow
+                    else
+                        if childHighFirst
+                            runHigh := math.max(runHigh, cHigh)
+                            if cLow < prevH4Low
+                                eligibleAtLive := array.get(m1Time, cLive)
+                                confirmedPoint := runHigh
+                        else
+                            if cLow < prevH4Low
+                                eligibleAtLive := array.get(m1Time, cLive)
+                                confirmedPoint := runHigh
+                            runHigh := math.max(runHigh, cHigh)
+                if eligibleAtLive != -1
+                    bool sourceBoundaryOkLive = (zLive.origState != 1 and zLive.origState != 4) or (zLive.bullish ? zLive.zt < confirmedPoint : zLive.zb > confirmedPoint)
+                    bool precedingBoundaryBroken = zLive.bullish ? prevH4Low < zLive.zb : prevH4High > zLive.zt
+                    if not sourceBoundaryOkLive or precedingBoundaryBroken
+                        zLive.rejected := true
+                        zLive.eligibleK := -1
+                        zLive.stopK := -1
+                    else
+                        zLive.eligibleK := i
+                        zLive.eligibleKind := zLive.bullish ? 0 : 1
+                        zLive.eligibleTime := eligibleAtLive
+                        int touchAtLive = h4_childFirstTouch(eligibleAtLive, zLive.zb, zLive.zt)
+                        if touchAtLive != -1
+                            zLive.preSpentState := zLive.state
+                            zLive.state := 3
+                            zLive.stopK := i
+                            zLive.impactTime := touchAtLive
+                            recordImpact(i)
+                    array.set(obs, ziLive, zLive)
+
+        // ========== SWING DETECTION ==========
+        // Use the actual 1M child sequence for H4 high/low order.  `isBull`
+        // here means low-first processing, not the H4 candle's final colour.
+        isBull   = not array.get(h4PathHighFirst, i)
+        brkH     = array.get(H_, i) > array.get(H_, i - 1)
+        brkL     = array.get(L_, i) < array.get(L_, i - 1)
+        dualAct  = brkH and brkL
+
+        // prevDual: the previous candle confirmed BOTH a swing high and a
+        // swing low in one bar (a dual-action/outside-bar candle). We keep
+        // the (kind, swingIdx) of BOTH of those events -- not just a plain
+        // yes/no flag -- so we can tell a genuine duplicate (this candle
+        // re-confirming the EXACT same point again) apart from a totally
+        // different, legitimate confirmation that just happens to land the
+        // bar right after a dual-action candle (e.g. that same candle's
+        // high separately qualifying as its own swing high later).
+        prevDual = false
+        pdKind1 = -1
+        pdIdx1 = -1
+        pdKind2 = -1
+        pdIdx2 = -1
+        eCnt = array.size(events)
+        if eCnt >= 2
+            ev1 = array.get(events, eCnt - 1)
+            ev2 = array.get(events, eCnt - 2)
+            if (ev1.kind != ev2.kind) and (ev1.confirmIdx == ev2.confirmIdx) and (ev1.confirmIdx == i - 1)
+                prevDual := true
+                pdKind1 := ev1.kind
+                pdIdx1 := ev1.swingIdx
+                pdKind2 := ev2.kind
+                pdIdx2 := ev2.swingIdx
+
+        evBeforeSwing = array.size(events)  // save for STEP 3
+
+        if not isBull
+            // BEARISH: High first, then Low
+            if array.get(H_, i) > array.get(H_, peakIdx_)
+                peakIdx_ := i
+            if brkH
+                lk = array.size(events) > 0 ? array.get(events, array.size(events) - 1).kind : -1
+                // Would this re-confirm troughIdx_ as a swing LOW when the
+                // dual-action candle already confirmed that exact (kind=1,
+                // idx) pair? Only block that exact duplicate.
+                blockDup = prevDual and not dualAct and ((pdKind1 == 1 and pdIdx1 == troughIdx_) or (pdKind2 == 1 and pdIdx2 == troughIdx_))
+                if lk != 1 and not blockDup
+                    addSL(troughIdx_)
+                    addEv(i, 1, troughIdx_, array.get(L_, troughIdx_))
+                    peakIdx_ := i
+            if array.get(L_, i) < array.get(L_, troughIdx_)
+                troughIdx_ := i
+            if brkL
+                lk2 = array.size(events) > 0 ? array.get(events, array.size(events) - 1).kind : -1
+                blockDup2 = prevDual and not dualAct and ((pdKind1 == 0 and pdIdx1 == peakIdx_) or (pdKind2 == 0 and pdIdx2 == peakIdx_))
+                if lk2 != 0 and not blockDup2
+                    addSH(peakIdx_)
+                    addEv(i, 0, peakIdx_, array.get(H_, peakIdx_))
+                    troughIdx_ := i
+        else
+            // BULLISH: Low first, then High
+            if array.get(L_, i) < array.get(L_, troughIdx_)
+                troughIdx_ := i
+            if brkL
+                lk3 = array.size(events) > 0 ? array.get(events, array.size(events) - 1).kind : -1
+                blockDup3 = prevDual and not dualAct and ((pdKind1 == 0 and pdIdx1 == peakIdx_) or (pdKind2 == 0 and pdIdx2 == peakIdx_))
+                if lk3 != 0 and not blockDup3
+                    addSH(peakIdx_)
+                    addEv(i, 0, peakIdx_, array.get(H_, peakIdx_))
+                    troughIdx_ := i
+            if array.get(H_, i) > array.get(H_, peakIdx_)
+                peakIdx_ := i
+            if brkH
+                lk4 = array.size(events) > 0 ? array.get(events, array.size(events) - 1).kind : -1
+                blockDup4 = prevDual and not dualAct and ((pdKind1 == 1 and pdIdx1 == troughIdx_) or (pdKind2 == 1 and pdIdx2 == troughIdx_))
+                if lk4 != 1 and not blockDup4
+                    addSL(troughIdx_)
+                    addEv(i, 1, troughIdx_, array.get(L_, troughIdx_))
+                    peakIdx_ := i
+
+        // ========== REGIME / MSS / OB ENGINE ==========
+        k = i
+        evTotal = array.size(events)
+
+        // STEP 0: peek-ahead — update lastSWHidx/lastSWLidx
+        peek0 = ei
+        while peek0 < evTotal
+            pEv = array.get(events, peek0)
+            if pEv.confirmIdx != k
+                break
+            if pEv.kind == 0
+                lastSWHidx := pEv.swingIdx
+            else
+                lastSWLidx := pEv.swingIdx
+            peek0 += 1
+
+        prevReg = regime
+        swhCons = false
+        swlCons = false
+        aobSWHi = swhIdx
+        aobSWLi = swlIdx
+
+        // STEP 1 + MID-ARM: break checks, MSS, IFOB, AOB, AIFOB
+        // Keep the OB engine in exactly the same child-resolved order as the
+        // swing detector above; a same-H4 AOB can therefore be born,
+        // eligible, and impacted in its real 1M sequence.
+        kBull = not array.get(h4PathHighFirst, k)
+
+        if not kBull
+            // --- BEARISH bar: high first -> SWH break first ---
+            if haveSWH and array.get(H_, k) > swhPrice
+                if regime == 0
+                    regime := 1
+                else if regime == 2
+                    regime := 1
+                    addMss(k, swhIdx, swhPrice, true)
+                // IFOB or promote AIFOB -- but only promote if the pending
+                // AIFOB is still ALIVE (state==4). If it already died (real
+                // impact touched it before this break confirmed), leave that
+                // record alone -- do NOT resurrect it -- and fall through to
+                // a fresh scan so this now-confirmed break gets its own IFOB.
+                pendAobPromoted = promoteNativeWaitingAOB(pendBullAob, true)
+                pendBullAob := -1
+                pendStillAlive = false
+                if pendBullAifob != -1
+                    pendStillAlive := array.get(obs, pendBullAifob).state == 4
+                if pendStillAlive
+                    obRef = array.get(obs, pendBullAifob)
+                    obRef.state     := 0
+                    obRef.origState := 0
+                    obRef.eligibleK := -1  // was AIFOB's immediate eligibility -- now a real IFOB, must wait for a fresh same-direction swing
+                    array.set(obs, pendBullAifob, obRef)
+                    pendBullAifob := -1
+                else
+                    pendBullAifob := -1
+                if not pendAobPromoted and not pendStillAlive and lastSWLidx >= 0
+                    lo = math.min(math.min(lastSWLidx, k), swhIdx)
+                    hi = math.max(math.max(lastSWLidx, k), swhIdx)
+                    if not existsAifobInRange(lo, hi, true)
+                        best = -1
+                        for x = lo to hi
+                            // The break candle may not also be this IFOB's OB.
+                            if x == k
+                                continue
+                            cX = array.get(C_, x)
+                            oX = array.get(O_, x)
+                            okB = false
+                            if cX < oX
+                                if best == -1
+                                    okB := true
+                                else
+                                    okB := cX < array.get(C_, best)
+                            if okB
+                                best := x
+                        if best != -1 and not candleClaimed(best, true)
+                            oB = array.get(O_, best)
+                            cB = array.get(C_, best)
+                            addOB(best, math.min(oB, cB), math.max(oB, cB), true, k, 0)
+                haveSWH := false
+                swhCons := true
+
+            // MID-ARM
+            peek2 = ei
+            while peek2 < evTotal
+                pEv2 = array.get(events, peek2)
+                if pEv2.confirmIdx != k
+                    break
+                if pEv2.kind == 0
+                    haveSWH  := true
+                    swhPrice := pEv2.price
+                    swhIdx   := pEv2.swingIdx
+                    pendBullAifob := -1
+                    pendBullAob := -1
+                    tryBearAOB(prevReg, aobSWLi, pEv2.swingIdx, pEv2.price, k)
+                    if pendBearAifob == -1
+                        r2 = tryBearAIFOB(prevReg, haveSWL, aobSWLi, lastSWHidx, pEv2.swingIdx, k)
+                        if r2 != -1
+                            pendBearAifob := r2
+                else
+                    haveSWL  := true
+                    swlPrice := pEv2.price
+                    swlIdx   := pEv2.swingIdx
+                    pendBearAifob := -1
+                    pendBearAob := -1
+                    tryBullAOB(prevReg, aobSWHi, pEv2.swingIdx, pEv2.price, k)
+                    if pendBullAifob == -1
+                        r3 = tryBullAIFOB(prevReg, haveSWH, aobSWHi, lastSWLidx, pEv2.swingIdx, k)
+                        if r3 != -1
+                            pendBullAifob := r3
+                peek2 += 1
+
+            // Second break: SWL
+            if haveSWL and array.get(L_, k) < swlPrice
+                if regime == 0
+                    regime := 2
+                else if regime == 1
+                    regime := 2
+                    addMss(k, swlIdx, swlPrice, false)
+                pendAobPromoted2 = promoteNativeWaitingAOB(pendBearAob, false)
+                pendBearAob := -1
+                pendStillAlive2 = false
+                if pendBearAifob != -1
+                    pendStillAlive2 := array.get(obs, pendBearAifob).state == 4
+                if pendStillAlive2
+                    obRef2 = array.get(obs, pendBearAifob)
+                    obRef2.state     := 0
+                    obRef2.origState := 0
+                    obRef2.eligibleK := -1  // was AIFOB's immediate eligibility -- now a real IFOB, must wait for a fresh same-direction swing
+                    array.set(obs, pendBearAifob, obRef2)
+                    pendBearAifob := -1
+                else
+                    pendBearAifob := -1
+                if not pendAobPromoted2 and not pendStillAlive2 and lastSWHidx >= 0
+                    lo2 = math.min(math.min(lastSWHidx, k), swlIdx)
+                    hi2 = math.max(math.max(lastSWHidx, k), swlIdx)
+                    if not existsAifobInRange(lo2, hi2, false)
+                        best2 = -1
+                        for x = lo2 to hi2
+                            if x == k
+                                continue
+                            cX = array.get(C_, x)
+                            oX = array.get(O_, x)
+                            okB2 = false
+                            if cX > oX
+                                if best2 == -1
+                                    okB2 := true
+                                else
+                                    okB2 := cX > array.get(C_, best2)
+                            if okB2
+                                best2 := x
+                        if best2 != -1 and not candleClaimed(best2, false)
+                            oB = array.get(O_, best2)
+                            cB = array.get(C_, best2)
+                            addOB(best2, math.min(oB, cB), math.max(oB, cB), false, k, 0)
+                haveSWL := false
+                swlCons := true
+
+        else
+            // --- BULLISH bar: low first -> SWL break first ---
+            if haveSWL and array.get(L_, k) < swlPrice
+                if regime == 0
+                    regime := 2
+                else if regime == 1
+                    regime := 2
+                    addMss(k, swlIdx, swlPrice, false)
+                pendAobPromoted3 = promoteNativeWaitingAOB(pendBearAob, false)
+                pendBearAob := -1
+                pendStillAlive3 = false
+                if pendBearAifob != -1
+                    pendStillAlive3 := array.get(obs, pendBearAifob).state == 4
+                if pendStillAlive3
+                    obRef3 = array.get(obs, pendBearAifob)
+                    obRef3.state     := 0
+                    obRef3.origState := 0
+                    obRef3.eligibleK := -1  // was AIFOB's immediate eligibility -- now a real IFOB, must wait for a fresh same-direction swing
+                    array.set(obs, pendBearAifob, obRef3)
+                    pendBearAifob := -1
+                else
+                    pendBearAifob := -1
+                if not pendAobPromoted3 and not pendStillAlive3 and lastSWHidx >= 0
+                    lo3 = math.min(math.min(lastSWHidx, k), swlIdx)
+                    hi3 = math.max(math.max(lastSWHidx, k), swlIdx)
+                    if not existsAifobInRange(lo3, hi3, false)
+                        best3 = -1
+                        for x = lo3 to hi3
+                            if x == k
+                                continue
+                            cX = array.get(C_, x)
+                            oX = array.get(O_, x)
+                            okB3 = false
+                            if cX > oX
+                                if best3 == -1
+                                    okB3 := true
+                                else
+                                    okB3 := cX > array.get(C_, best3)
+                            if okB3
+                                best3 := x
+                        if best3 != -1 and not candleClaimed(best3, false)
+                            oB = array.get(O_, best3)
+                            cB = array.get(C_, best3)
+                            addOB(best3, math.min(oB, cB), math.max(oB, cB), false, k, 0)
+                haveSWL := false
+                swlCons := true
+
+            // MID-ARM
+            peek3 = ei
+            while peek3 < evTotal
+                pEv3 = array.get(events, peek3)
+                if pEv3.confirmIdx != k
+                    break
+                if pEv3.kind == 0
+                    haveSWH  := true
+                    swhPrice := pEv3.price
+                    swhIdx   := pEv3.swingIdx
+                    pendBullAifob := -1
+                    pendBullAob := -1
+                    tryBearAOB(prevReg, aobSWLi, pEv3.swingIdx, pEv3.price, k)
+                    if pendBearAifob == -1
+                        r4 = tryBearAIFOB(prevReg, haveSWL, aobSWLi, lastSWHidx, pEv3.swingIdx, k)
+                        if r4 != -1
+                            pendBearAifob := r4
+                else
+                    haveSWL  := true
+                    swlPrice := pEv3.price
+                    swlIdx   := pEv3.swingIdx
+                    pendBearAifob := -1
+                    pendBearAob := -1
+                    tryBullAOB(prevReg, aobSWHi, pEv3.swingIdx, pEv3.price, k)
+                    if pendBullAifob == -1
+                        r5 = tryBullAIFOB(prevReg, haveSWH, aobSWHi, lastSWLidx, pEv3.swingIdx, k)
+                        if r5 != -1
+                            pendBullAifob := r5
+                peek3 += 1
+
+            // Second break: SWH
+            if haveSWH and array.get(H_, k) > swhPrice
+                if regime == 0
+                    regime := 1
+                else if regime == 2
+                    regime := 1
+                    addMss(k, swhIdx, swhPrice, true)
+                pendAobPromoted4 = promoteNativeWaitingAOB(pendBullAob, true)
+                pendBullAob := -1
+                pendStillAlive4 = false
+                if pendBullAifob != -1
+                    pendStillAlive4 := array.get(obs, pendBullAifob).state == 4
+                if pendStillAlive4
+                    obRef4 = array.get(obs, pendBullAifob)
+                    obRef4.state     := 0
+                    obRef4.origState := 0
+                    obRef4.eligibleK := -1  // was AIFOB's immediate eligibility -- now a real IFOB, must wait for a fresh same-direction swing
+                    array.set(obs, pendBullAifob, obRef4)
+                    pendBullAifob := -1
+                else
+                    pendBullAifob := -1
+                if not pendAobPromoted4 and not pendStillAlive4 and lastSWLidx >= 0
+                    lo4 = math.min(math.min(lastSWLidx, k), swhIdx)
+                    hi4 = math.max(math.max(lastSWLidx, k), swhIdx)
+                    if not existsAifobInRange(lo4, hi4, true)
+                        best4 = -1
+                        for x = lo4 to hi4
+                            if x == k
+                                continue
+                            cX = array.get(C_, x)
+                            oX = array.get(O_, x)
+                            okB4 = false
+                            if cX < oX
+                                if best4 == -1
+                                    okB4 := true
+                                else
+                                    okB4 := cX < array.get(C_, best4)
+                            if okB4
+                                best4 := x
+                        if best4 != -1 and not candleClaimed(best4, true)
+                            oB = array.get(O_, best4)
+                            cB = array.get(C_, best4)
+                            addOB(best4, math.min(oB, cB), math.max(oB, cB), true, k, 0)
+                haveSWH := false
+                swhCons := true
+        // STEP 2: arm swings (consumed check) + IFOB eligibility
+        while ei < evTotal
+            sEv = array.get(events, ei)
+            if sEv.confirmIdx != k
+                break
+            if sEv.kind == 0
+                if not swhCons
+                    haveSWH  := true
+                    swhPrice := sEv.price
+                    swhIdx   := sEv.swingIdx
+                lastSWHidx := sEv.swingIdx
+                obSz = array.size(activeObs)
+                for az = 0 to obSz - 1
+                    if az < 0 or az >= obSz
+                        continue
+                    z = array.get(activeObs, az)
+                    if z < 0 or z >= array.size(obs)
+                        continue
+                    obZ = array.get(obs, z)
+                    if obZ.bullish and (obZ.state == 0 or obZ.state == 1 or obZ.state == 4) and obZ.eligibleK == -1 and not obZ.rejected and k > obZ.triggerK
+                        // AOB and AIFOB use their drawn box top—not the wick—
+                        // as the source boundary at the eligibility swing.
+                        sourceBoundaryOk = (obZ.origState != 1 and obZ.origState != 4) or obZ.zt < sEv.price
+                        ep = k > 0 ? array.get(L_,k-1) : na
+                        if not sourceBoundaryOk or (not na(ep) and ep < obZ.zb)
+                            obZ.rejected := true
+                            obZ.eligibleK := -1
+                            obZ.stopK := -1
+                        else
+                            obZ.eligibleK := k
+                            obZ.eligibleKind := sEv.kind
+                            obZ.eligibleTime := h4_childEventTime(sEv.kind, k)
+                        array.set(obs, z, obZ)
+            else
+                if not swlCons
+                    haveSWL  := true
+                    swlPrice := sEv.price
+                    swlIdx   := sEv.swingIdx
+                lastSWLidx := sEv.swingIdx
+                obSz2 = array.size(activeObs)
+                for az2 = 0 to obSz2 - 1
+                    if az2 < 0 or az2 >= obSz2
+                        continue
+                    z = array.get(activeObs, az2)
+                    if z < 0 or z >= array.size(obs)
+                        continue
+                    obZ2 = array.get(obs, z)
+                    if not obZ2.bullish and (obZ2.state == 0 or obZ2.state == 1 or obZ2.state == 4) and obZ2.eligibleK == -1 and not obZ2.rejected and k > obZ2.triggerK
+                        // Bearish AOB/AIFOB mirror: drawn box bottom, not wick.
+                        sourceBoundaryOk = (obZ2.origState != 1 and obZ2.origState != 4) or obZ2.zb > sEv.price
+                        ep = k > 0 ? array.get(H_,k-1) : na
+                        if not sourceBoundaryOk or (not na(ep) and ep > obZ2.zt)
+                            obZ2.rejected := true
+                            obZ2.eligibleK := -1
+                            obZ2.stopK := -1
+                        else
+                            obZ2.eligibleK := k
+                            obZ2.eligibleKind := sEv.kind
+                            obZ2.eligibleTime := h4_childEventTime(sEv.kind, k)
+                        array.set(obs, z, obZ2)
+            ei += 1
+
+        // STEP 3: OB lifecycle at this candle
+        obTotal = array.size(activeObs)
+        hK = array.get(H_, k)
+        lK = array.get(L_, k)
+        for az3 = 0 to obTotal - 1
+            if az3 < 0 or az3 >= obTotal
+                continue
+            z = array.get(activeObs, az3)
+            if z < 0 or z >= array.size(obs)
+                continue
+            obZ3 = array.get(obs, z)
+            if obZ3.state == 3 or obZ3.rejected
+                continue
+
+            zb = obZ3.zb
+            zt = obZ3.zt
+            bull = obZ3.bullish
+
+            // IMPACT
+            if obZ3.eligibleK != -1 and k >= obZ3.eligibleK
+                int touchTime = -1
+                // Locked AOB impact restoration: the new AOB trigger and its
+                // later eligibility remain separate, but once an H4 AOB is
+                // eligible its whole H4 candle is tested exactly as in the
+                // old AOB lifecycle.  No post-eligibility 1M filter may move
+                // that AOB's impact to the next H4 candle.
+                bool legacyAobImpact = obZ3.origState == 1
+                bool hasH5Children = timeframe.period == "240" and array.size(m1Time) > 0
+                if legacyAobImpact
+                    if hK >= zb and lK <= zt
+                        touchTime := array.get(BT, k)
+                else if hasH5Children
+                    // The native H4 rules already decided eligibility.  Start
+                    // the touch search at that exact 1M child, never at the
+                    // start of the parent H4 candle.
+                    int fromTime = obZ3.eligibleTime
+                    if fromTime == -1
+                        fromTime := array.get(BT, k)
+                    touchTime := h4_childFirstTouch(fromTime, zb, zt)
+                else if hK >= zb and lK <= zt
+                    // No child data is available: preserve the old H4 result.
+                    touchTime := array.get(BT, k)
+                if touchTime != -1
+                    obZ3.preSpentState := obZ3.state
+                    obZ3.state := 3
+                    obZ3.stopK := k
+                    obZ3.impactTime := touchTime
+                    recordImpact(k)
+                    array.set(obs, z, obZ3)
+                    continue
+
+            // STRANDING -> OOB
+            if (obZ3.state == 0 or obZ3.state == 1 or obZ3.state == 4) and obZ3.eligibleK != -1
+                isIFOB = obZ3.origState != 1
+                // scan only events confirmed at THIS bar (they start at evBeforeSwing in worst case,
+                // but are contiguous at end of events array for this bar)
+                for e2 = evBeforeSwing to evTotal - 1
+                    if e2 < 0 or e2 >= evTotal
+                        continue
+                    stEv = array.get(events, e2)
+                    if stEv.confirmIdx != k
+                        continue
+                    stranded = false
+                    if isIFOB
+                        if bull and stEv.kind == 1 and stEv.price > zt
+                            stranded := true
+                        if not bull and stEv.kind == 0 and stEv.price < zb
+                            stranded := true
+                    else
+                        // AOB stranding is away from its zone: bullish AOB
+                        // needs a new swing low above its top; bearish AOB
+                        // needs a new swing high below its bottom.
+                        if bull and stEv.kind == 1 and stEv.price > zt
+                            stranded := true
+                        if not bull and stEv.kind == 0 and stEv.price < zb
+                            stranded := true
+                    if stranded
+                        obZ3.state := 2
+                        array.set(obs, z, obZ3)
+                        break
+        // Full history remains stored; only terminal entries leave the hot indexes.
+        pruneNativeTerminalZones()
+
+
+// ===================== INDEPENDENT WEEKLY MIRROR (H4) =====================
+// The locked OB state machine is duplicated and fed confirmed Weekly candles.
+// This is the Pine equivalent of the C# WeeklyMirrorEngine: H4 keeps its own
+// native engine while this mirror independently owns Weekly Swing/MSS/OB state.
+[wTimePrev,wOpenPrev,wHighPrev,wLowPrev,wClosePrev] = request.security(syminfo.tickerid, "W", [time[1],open[1],high[1],low[1],close[1]], lookahead=barmerge.lookahead_on)
+wNewClosed = timeframe.period == "240" and ta.change(time("W")) != 0
+// ===================== PERSISTENT STATE =====================
+var w_events     = array.new<SwEv>()
+var w_msses      = array.new<MssEv>()
+var w_obs        = array.new<ObZone>()
+var w_activeObs  = array.new<int>()
+var w_swHighs    = array.new<int>()
+var w_swLows     = array.new<int>()
+var w_impactKs   = array.new<int>()
+var w_impactCounts = array.new<int>()
+
+// OHLC + time storage (absolute indexing, oldest=0)
+var w_O_ = array.new<float>()
+var w_H_ = array.new<float>()
+var w_L_ = array.new<float>()
+var w_C_ = array.new<float>()
+var w_BI = array.new<int>()      // bar_index of each bar
+var w_BT = array.new<int>()      // bar time (ms) of each bar
+
+// Swing detection trackers
+var int w_peakIdx_   = 0
+var int w_troughIdx_ = 0
+
+// Regime / MSS / OB trackers
+var bool  w_haveSWH   = false
+var float w_swhPrice  = 0.0
+var int   w_swhIdx    = 0
+var bool  w_haveSWL   = false
+var float w_swlPrice  = 0.0
+var int   w_swlIdx    = 0
+var int   w_regime    = 0      // 0=warmup, 1=up, 2=down
+var int   w_ei        = 0      // event pointer
+var int   w_lastSWHidx = -1
+var int   w_lastSWLidx = -1
+var int   w_pendBullAifob = -1
+var int   w_pendBearAifob = -1
+var int   w_pendBullAob = -1
+var int   w_pendBearAob = -1
+
+// Guard: process each bar exactly once
+var int w_lastProcessedBI = -1
+
+// Weekly mirror replay gate
+w_replayActive = useReplay and InpReplayUpTo > 0
+w_skipBar = w_replayActive and wTimePrev > InpReplayUpTo
+
+// ===================== HELPER FUNCTIONS =====================
+w_addSH(int idx) =>
+    sz = array.size(w_swHighs)
+    doPush = sz == 0
+    if not doPush
+        doPush := array.get(w_swHighs, sz - 1) != idx
+    if doPush
+        array.push(w_swHighs, idx)
+
+w_addSL(int idx) =>
+    sz = array.size(w_swLows)
+    doPush = sz == 0
+    if not doPush
+        doPush := array.get(w_swLows, sz - 1) != idx
+    if doPush
+        array.push(w_swLows, idx)
+
+w_addEv(int cIdx, int kind, int sIdx, float pr) =>
+    array.push(w_events, SwEv.new(cIdx, kind, sIdx, pr))
+
+w_addMss(int aIdx, int bIdx, float pr, bool up) =>
+    array.push(w_msses, MssEv.new(aIdx, bIdx, pr, up))
+
+w_recordImpact(int k) =>
+    sz = array.size(w_impactKs)
+    if sz == 0 or array.get(w_impactKs, sz - 1) != k
+        array.push(w_impactKs, k)
+        array.push(w_impactCounts, 1)
+    else
+        array.set(w_impactCounts, sz - 1, array.get(w_impactCounts, sz - 1) + 1)
+
+
+w_addOB(int cand, float zb, float zt, bool bull, int tK, int st) =>
+    // Locked C# rule: AOB, IFOB and AIFOB all wait for a valid eligibility swing.
+    eK = -1
+    array.push(w_obs, ObZone.new(cand, zb, zt, bull, tK, eK, -1, -1, -1, -1, st, st, st, false))
+    array.push(w_activeObs, array.size(w_obs) - 1)
+
+w_promoteWaitingAOB(int idx, bool bull) =>
+    bool result = false
+    if idx >= 0 and idx < array.size(w_obs)
+        z = array.get(w_obs, idx)
+        if z.state == 1 and z.origState == 1 and z.bullish == bull and z.eligibleK == -1 and not z.rejected
+            z.state := 0
+            z.origState := 0
+            z.eligibleK := -1
+            z.eligibleTime := -1
+            z.eligibleKind := -1
+            z.stopK := -1
+            array.set(w_obs, idx, z)
+            result := true
+    result
+
+// Weekly-only child-clock resolver.  The Weekly engine remains the owner of
+// all swing/OB/eligibility rules; this helper only finds the H4 candle where
+// an already-defined Weekly event first occurred.
+w_childEventTime(int wKind, int wk, int wkEnd) =>
+    int result = -1
+    if wk > 0 and wk < array.size(w_BT)
+        int wkStart = array.get(w_BT, wk)
+        float threshold = wKind == 0 ? array.get(w_L_, wk - 1) : array.get(w_H_, wk - 1)
+        int mn = array.size(M1T)
+        if mn > 0
+            for m = 0 to mn - 1
+                int mt = array.get(M1T, m)
+                if result == -1 and mt >= wkStart and mt < wkEnd
+                    bool hit = wKind == 0 ? array.get(M1L, m) < threshold : array.get(M1H, m) > threshold
+                    if hit
+                        result := mt
+    result
+
+w_childFirstTouch(int fromTime, int wkStart, int wkEnd, float zb, float zt) =>
+    int result = -1
+    int mn = array.size(M1T)
+    if mn > 0
+        for m = 0 to mn - 1
+            int mt = array.get(M1T, m)
+            if result == -1 and mt >= wkStart and mt < wkEnd and mt >= fromTime
+                // Strict penetration: touching the boundary exactly is not impact.
+                if array.get(M1H, m) > zb and array.get(M1L, m) < zt
+                    result := mt
+    result
+
+// Resolve a Weekly candle's high/low order from the H4 bars that belong to
+// that exact week. A tie inside one H4 bar uses its already-resolved 1M path.
+w_highFirst(float pOpen, float pHigh, float pLow, float pClose, int wkStart, int wkEnd) =>
+    bool result = pClose < pOpen
+    int hiChild = -1
+    int loChild = -1
+    int mn = array.size(M1T)
+    if mn > 0
+        for m = 0 to mn - 1
+            int mt = array.get(M1T, m)
+            if mt >= wkStart and mt < wkEnd
+                if hiChild == -1 and array.get(M1H, m) >= pHigh
+                    hiChild := m
+                if loChild == -1 and array.get(M1L, m) <= pLow
+                    loChild := m
+        if hiChild != -1 and loChild != -1
+            if hiChild < loChild
+                result := true
+            else if loChild < hiChild
+                result := false
+            else
+                float mo = array.get(M1O, hiChild)
+                float mc = array.get(M1C, hiChild)
+                result := mc < mo
+    result
+
+// Is this exact candle already the origin of an existing zone (any state,
+// any origin, alive or dead)? A fresh backward-scan can independently land
+// on the same "best candle" a second time (e.g. once for the original
+// AIFOB, again later for its promotion/fresh-scan fallback) -- this stops
+// a second zone from being stacked on top of one that already claimed it.
+w_candleClaimed(int cand, bool bull) =>
+    found = false
+    n = array.size(w_obs)
+    for z = 0 to n - 1
+        if z < 0 or z >= n
+            continue
+        if not found
+            zz = array.get(w_obs, z)
+            if zz.candle == cand and zz.bullish == bull
+                found := true
+    found
+
+// A zone that was ever born as AIFOB keeps origState==4 forever (even after
+// promotion to IFOB, or after dying). Used to skip the fresh-scan fallback
+// when an AIFOB already exists for this exact setup -- one swing high and
+// one swing low already existed before the break, so a second, separate
+// IFOB in the same candle range would just be a duplicate.
+w_existsAifobInRange(int lo, int hi, bool bull) =>
+    found = false
+    n = array.size(w_obs)
+    for z = 0 to n - 1
+        if z < 0 or z >= n
+            continue
+        if not found
+            zz = array.get(w_obs, z)
+            if zz.origState == 4 and zz.bullish == bull and zz.candle >= lo and zz.candle <= hi
+                found := true
+    found
+
+// --- Weekly AOB: complete old locked procedure. ---
+w_tryBullAOB(int pReg, int aobSWHi, int newSwlI, float newSwlP, int k) =>
+    if pReg == 1 and aobSWHi >= 0
+        armedSwhPrice = array.get(w_H_, aobSWHi)
+        refViolated = false
+        for v = aobSWHi + 1 to newSwlI
+            if array.get(w_H_, v) >= armedSwhPrice
+                refViolated := true
+        if not refViolated
+            lo2 = math.max(0, math.min(aobSWHi - 1, newSwlI))
+            hi2 = math.max(aobSWHi - 1, newSwlI)
+            best2 = -1
+            for x = lo2 to hi2
+                cX = array.get(w_C_, x)
+                oX = array.get(w_O_, x)
+                if cX > oX
+                    if best2 == -1
+                        best2 := x
+                    else if cX > array.get(w_C_, best2)
+                        best2 := x
+            if best2 != -1 and array.get(w_L_, best2) > newSwlP
+                oB = array.get(w_O_, best2)
+                cB = array.get(w_C_, best2)
+                w_addOB(best2,math.min(oB,cB),math.max(oB,cB),false,k,1)
+                ai = array.size(w_obs)-1
+                if ai >= 0 and k > 0
+                    aob = array.get(w_obs,ai)
+                    ep = array.get(w_H_,k-1)
+                    if ep > aob.zt
+                        aob.rejected := true
+                        aob.eligibleK := -1
+                        aob.stopK := -1
+                    else
+                        aob.eligibleK := k
+                        // Old Weekly bullish AOB is immediately eligible on
+                        // this newly-confirmed swing low.  Preserve the exact
+                        // H4 child that confirmed it for the Weekly resolver.
+                        aob.eligibleKind := 1
+                        aob.eligibleTime := w_childEventTime(1, k, int(time("W")))
+                    array.set(w_obs,ai,aob)
+
+w_tryBearAOB(int pReg, int aobSWLi, int newSwhI, float newSwhP, int k) =>
+    if pReg == 2 and aobSWLi >= 0
+        armedSwlPrice = array.get(w_L_, aobSWLi)
+        refViolated = false
+        for v = aobSWLi + 1 to newSwhI
+            if array.get(w_L_, v) <= armedSwlPrice
+                refViolated := true
+        if not refViolated
+            lo2 = math.max(0, math.min(aobSWLi - 1, newSwhI))
+            hi2 = math.max(aobSWLi - 1, newSwhI)
+            best2 = -1
+            for x = lo2 to hi2
+                cX = array.get(w_C_, x)
+                oX = array.get(w_O_, x)
+                if cX < oX
+                    if best2 == -1
+                        best2 := x
+                    else if cX < array.get(w_C_, best2)
+                        best2 := x
+            if best2 != -1 and array.get(w_H_, best2) < newSwhP
+                oB = array.get(w_O_, best2)
+                cB = array.get(w_C_, best2)
+                w_addOB(best2,math.min(oB,cB),math.max(oB,cB),true,k,1)
+                ai = array.size(w_obs)-1
+                if ai >= 0 and k > 0
+                    aob = array.get(w_obs,ai)
+                    ep = array.get(w_L_,k-1)
+                    if ep < aob.zb
+                        aob.rejected := true
+                        aob.eligibleK := -1
+                        aob.stopK := -1
+                    else
+                        aob.eligibleK := k
+                        // Old Weekly bearish AOB is immediately eligible on
+                        // this newly-confirmed swing high.  Preserve its H4
+                        // confirmation time instead of falling back to week-open.
+                        aob.eligibleKind := 0
+                        aob.eligibleTime := w_childEventTime(0, k, int(time("W")))
+                    array.set(w_obs,ai,aob)
+
+// --- AIFOB HUNT: Bullish (returns w_obs[] index or -1) ---
+w_tryBullAIFOB(int pReg, bool pHaveSWH, int pSwhI, int pLastSWLi, int newSwlI, int k) =>
+    result = -1
+    // Exception: the confirming candle (k) can, in the same bar, ALSO break
+    // below the swing low it just confirmed (newSwlI) -- an outside/engulfing
+    // bar. That means we're not continuing bullish, we're reversing down in
+    // the same breath (the "Second break: SWL" check right after this will
+    // catch the w_regime flip). Don't create a bullish candidate on a premise
+    // this same candle already broke.
+    alreadyBrokeIt = array.get(w_L_, k) < array.get(w_L_, newSwlI)
+    if pReg == 1 and pHaveSWH and pSwhI >= 0 and pLastSWLi >= 0 and not alreadyBrokeIt
+        lo = math.max(0, math.min(math.min(pLastSWLi, newSwlI), pSwhI - 1))
+        hi = math.max(math.max(pLastSWLi, newSwlI), pSwhI - 1)
+        best = -1
+        for x = lo to hi
+            if x < 0
+                continue
+            cX = array.get(w_C_, x)
+            oX = array.get(w_O_, x)
+            okB = false
+            if cX < oX
+                if best == -1
+                    okB := true
+                else
+                    okB := cX < array.get(w_C_, best)
+            if okB
+                best := x
+        if best != -1 and not w_candleClaimed(best, true)
+            oB = array.get(w_O_, best)
+            cB = array.get(w_C_, best)
+            w_addOB(best, math.min(oB, cB), math.max(oB, cB), true, k, 4)
+            result := array.size(w_obs) - 1
+    result
+
+// --- AIFOB HUNT: Bearish (returns w_obs[] index or -1) ---
+w_tryBearAIFOB(int pReg, bool pHaveSWL, int pSwlI, int pLastSWHi, int newSwhI, int k) =>
+    result = -1
+    // Mirror of the bullish exception: don't create a bearish candidate if
+    // this same confirming candle already broke ABOVE the swing high it
+    // just confirmed -- that's reversing up in the same breath, not
+    // continuing down.
+    alreadyBrokeIt2 = array.get(w_H_, k) > array.get(w_H_, newSwhI)
+    if pReg == 2 and pHaveSWL and pSwlI >= 0 and pLastSWHi >= 0 and not alreadyBrokeIt2
+        lo = math.max(0, math.min(math.min(pLastSWHi, newSwhI), pSwlI - 1))
+        hi = math.max(math.max(pLastSWHi, newSwhI), pSwlI - 1)
+        best = -1
+        for x = lo to hi
+            if x < 0
+                continue
+            cX = array.get(w_C_, x)
+            oX = array.get(w_O_, x)
+            okB = false
+            if cX > oX
+                if best == -1
+                    okB := true
+                else
+                    okB := cX > array.get(w_C_, best)
+            if okB
+                best := x
+        if best != -1 and not w_candleClaimed(best, false)
+            oB = array.get(w_O_, best)
+            cB = array.get(w_C_, best)
+            w_addOB(best, math.min(oB, cB), math.max(oB, cB), false, k, 4)
+            result := array.size(w_obs) - 1
+    result
+
+w_pruneTerminalZones() =>
+    w_aoi = array.size(w_activeObs) - 1
+    while w_aoi >= 0
+        w_aidx = array.get(w_activeObs, w_aoi)
+        w_azone = array.get(w_obs, w_aidx)
+        if w_azone.state == 3 or w_azone.rejected
+            array.remove(w_activeObs, w_aoi)
+        w_aoi -= 1
+
+// ===================== MAIN PROCESSING =====================
+// Process each bar exactly once (matches MQL5 lastN guard)
+if wNewClosed and not w_skipBar and not na(wTimePrev) and int(wTimePrev) != w_lastProcessedBI
+    w_lastProcessedBI := int(wTimePrev)
+
+    // Push the just-closed Weekly candle, not the H4 chart candle.
+    array.push(w_O_, wOpenPrev)
+    array.push(w_H_, wHighPrev)
+    array.push(w_L_, wLowPrev)
+    array.push(w_C_, wClosePrev)
+    array.push(w_BI, bar_index)
+    array.push(w_BT, int(wTimePrev))
+
+    n = array.size(w_O_)
+    if n >= 2
+        i = n - 1    // current bar index in our arrays
+
+        // ========== SWING DETECTION ==========
+        // Use the H4 children of this exact Weekly candle for processing
+        // order. This is low-first/high-first order, not final W colour.
+        isBull   = not w_highFirst(array.get(w_O_, i), array.get(w_H_, i), array.get(w_L_, i), array.get(w_C_, i), array.get(w_BT, i), int(time("W")))
+        brkH     = array.get(w_H_, i) > array.get(w_H_, i - 1)
+        brkL     = array.get(w_L_, i) < array.get(w_L_, i - 1)
+        dualAct  = brkH and brkL
+
+        // prevDual: the previous candle confirmed BOTH a swing high and a
+        // swing low in one bar (a dual-action/outside-bar candle). We keep
+        // the (kind, swingIdx) of BOTH of those w_events -- not just a plain
+        // yes/no flag -- so we can tell a genuine duplicate (this candle
+        // re-confirming the EXACT same point again) apart from a totally
+        // different, legitimate confirmation that just happens to land the
+        // bar right after a dual-action candle (e.g. that same candle's
+        // high separately qualifying as its own swing high later).
+        prevDual = false
+        pdKind1 = -1
+        pdIdx1 = -1
+        pdKind2 = -1
+        pdIdx2 = -1
+        eCnt = array.size(w_events)
+        if eCnt >= 2
+            ev1 = array.get(w_events, eCnt - 1)
+            ev2 = array.get(w_events, eCnt - 2)
+            if (ev1.kind != ev2.kind) and (ev1.confirmIdx == ev2.confirmIdx) and (ev1.confirmIdx == i - 1)
+                prevDual := true
+                pdKind1 := ev1.kind
+                pdIdx1 := ev1.swingIdx
+                pdKind2 := ev2.kind
+                pdIdx2 := ev2.swingIdx
+
+        evBeforeSwing = array.size(w_events)  // save for STEP 3
+
+        if not isBull
+            // BEARISH: High first, then Low
+            if array.get(w_H_, i) > array.get(w_H_, w_peakIdx_)
+                w_peakIdx_ := i
+            if brkH
+                lk = array.size(w_events) > 0 ? array.get(w_events, array.size(w_events) - 1).kind : -1
+                // Would this re-confirm w_troughIdx_ as a swing LOW when the
+                // dual-action candle already confirmed that exact (kind=1,
+                // idx) pair? Only block that exact duplicate.
+                blockDup = prevDual and not dualAct and ((pdKind1 == 1 and pdIdx1 == w_troughIdx_) or (pdKind2 == 1 and pdIdx2 == w_troughIdx_))
+                if lk != 1 and not blockDup
+                    w_addSL(w_troughIdx_)
+                    w_addEv(i, 1, w_troughIdx_, array.get(w_L_, w_troughIdx_))
+                    w_peakIdx_ := i
+            if array.get(w_L_, i) < array.get(w_L_, w_troughIdx_)
+                w_troughIdx_ := i
+            if brkL
+                lk2 = array.size(w_events) > 0 ? array.get(w_events, array.size(w_events) - 1).kind : -1
+                blockDup2 = prevDual and not dualAct and ((pdKind1 == 0 and pdIdx1 == w_peakIdx_) or (pdKind2 == 0 and pdIdx2 == w_peakIdx_))
+                if lk2 != 0 and not blockDup2
+                    w_addSH(w_peakIdx_)
+                    w_addEv(i, 0, w_peakIdx_, array.get(w_H_, w_peakIdx_))
+                    w_troughIdx_ := i
+        else
+            // BULLISH: Low first, then High
+            if array.get(w_L_, i) < array.get(w_L_, w_troughIdx_)
+                w_troughIdx_ := i
+            if brkL
+                lk3 = array.size(w_events) > 0 ? array.get(w_events, array.size(w_events) - 1).kind : -1
+                blockDup3 = prevDual and not dualAct and ((pdKind1 == 0 and pdIdx1 == w_peakIdx_) or (pdKind2 == 0 and pdIdx2 == w_peakIdx_))
+                if lk3 != 0 and not blockDup3
+                    w_addSH(w_peakIdx_)
+                    w_addEv(i, 0, w_peakIdx_, array.get(w_H_, w_peakIdx_))
+                    w_troughIdx_ := i
+            if array.get(w_H_, i) > array.get(w_H_, w_peakIdx_)
+                w_peakIdx_ := i
+            if brkH
+                lk4 = array.size(w_events) > 0 ? array.get(w_events, array.size(w_events) - 1).kind : -1
+                blockDup4 = prevDual and not dualAct and ((pdKind1 == 1 and pdIdx1 == w_troughIdx_) or (pdKind2 == 1 and pdIdx2 == w_troughIdx_))
+                if lk4 != 1 and not blockDup4
+                    w_addSL(w_troughIdx_)
+                    w_addEv(i, 1, w_troughIdx_, array.get(w_L_, w_troughIdx_))
+                    w_peakIdx_ := i
+
+        // ========== REGIME / MSS / OB ENGINE ==========
+        k = i
+        evTotal = array.size(w_events)
+
+        // STEP 0: peek-ahead — update w_lastSWHidx/w_lastSWLidx
+        peek0 = w_ei
+        while peek0 < evTotal
+            pEv = array.get(w_events, peek0)
+            if pEv.confirmIdx != k
+                break
+            if pEv.kind == 0
+                w_lastSWHidx := pEv.swingIdx
+            else
+                w_lastSWLidx := pEv.swingIdx
+            peek0 += 1
+
+        prevReg = w_regime
+        swhCons = false
+        swlCons = false
+        aobSWHi = w_swhIdx
+        aobSWLi = w_swlIdx
+
+        // STEP 1 + MID-ARM: break checks, MSS, IFOB, AOB, AIFOB
+        kBull = not w_highFirst(array.get(w_O_, k), array.get(w_H_, k), array.get(w_L_, k), array.get(w_C_, k), array.get(w_BT, k), int(time("W")))
+
+        if not kBull
+            // --- BEARISH bar: high first -> SWH break first ---
+            if w_haveSWH and array.get(w_H_, k) > w_swhPrice
+                if w_regime == 0
+                    w_regime := 1
+                else if w_regime == 2
+                    w_regime := 1
+                    w_addMss(k, w_swhIdx, w_swhPrice, true)
+                // IFOB or promote AIFOB -- but only promote if the pending
+                // AIFOB is still ALIVE (state==4). If it already died (real
+                // impact touched it before this break confirmed), leave that
+                // record alone -- do NOT resurrect it -- and fall through to
+                // a fresh scan so this now-confirmed break gets its own IFOB.
+                pendAobPromoted = w_promoteWaitingAOB(w_pendBullAob, true)
+                w_pendBullAob := -1
+                pendStillAlive = false
+                if w_pendBullAifob != -1
+                    pendStillAlive := array.get(w_obs, w_pendBullAifob).state == 4
+                if pendStillAlive
+                    obRef = array.get(w_obs, w_pendBullAifob)
+                    obRef.state     := 0
+                    obRef.origState := 0
+                    obRef.eligibleK := -1  // was AIFOB's immediate eligibility -- now a real IFOB, must wait for a fresh same-direction swing
+                    array.set(w_obs, w_pendBullAifob, obRef)
+                    w_pendBullAifob := -1
+                else
+                    w_pendBullAifob := -1
+                if not pendAobPromoted and not pendStillAlive and w_lastSWLidx >= 0
+                    lo = math.min(math.min(w_lastSWLidx, k), w_swhIdx)
+                    hi = math.max(math.max(w_lastSWLidx, k), w_swhIdx)
+                    if not w_existsAifobInRange(lo, hi, true)
+                        best = -1
+                        for x = lo to hi
+                            // Weekly mirror: same one-hunt exclusion.
+                            if x == k
+                                continue
+                            cX = array.get(w_C_, x)
+                            oX = array.get(w_O_, x)
+                            okB = false
+                            if cX < oX
+                                if best == -1
+                                    okB := true
+                                else
+                                    okB := cX < array.get(w_C_, best)
+                            if okB
+                                best := x
+                        if best != -1 and not w_candleClaimed(best, true)
+                            oB = array.get(w_O_, best)
+                            cB = array.get(w_C_, best)
+                            w_addOB(best, math.min(oB, cB), math.max(oB, cB), true, k, 0)
+                w_haveSWH := false
+                swhCons := true
+
+            // MID-ARM
+            peek2 = w_ei
+            while peek2 < evTotal
+                pEv2 = array.get(w_events, peek2)
+                if pEv2.confirmIdx != k
+                    break
+                if pEv2.kind == 0
+                    w_haveSWH  := true
+                    w_swhPrice := pEv2.price
+                    w_swhIdx   := pEv2.swingIdx
+                    w_pendBullAifob := -1
+                    w_pendBullAob := -1
+                    w_tryBearAOB(prevReg, aobSWLi, pEv2.swingIdx, pEv2.price, k)
+                    if w_pendBearAifob == -1
+                        r2 = w_tryBearAIFOB(prevReg, w_haveSWL, aobSWLi, w_lastSWHidx, pEv2.swingIdx, k)
+                        if r2 != -1
+                            w_pendBearAifob := r2
+                else
+                    w_haveSWL  := true
+                    w_swlPrice := pEv2.price
+                    w_swlIdx   := pEv2.swingIdx
+                    w_pendBearAifob := -1
+                    w_pendBearAob := -1
+                    w_tryBullAOB(prevReg, aobSWHi, pEv2.swingIdx, pEv2.price, k)
+                    if w_pendBullAifob == -1
+                        r3 = w_tryBullAIFOB(prevReg, w_haveSWH, aobSWHi, w_lastSWLidx, pEv2.swingIdx, k)
+                        if r3 != -1
+                            w_pendBullAifob := r3
+                peek2 += 1
+
+            // Second break: SWL
+            if w_haveSWL and array.get(w_L_, k) < w_swlPrice
+                if w_regime == 0
+                    w_regime := 2
+                else if w_regime == 1
+                    w_regime := 2
+                    w_addMss(k, w_swlIdx, w_swlPrice, false)
+                pendAobPromoted2 = w_promoteWaitingAOB(w_pendBearAob, false)
+                w_pendBearAob := -1
+                pendStillAlive2 = false
+                if w_pendBearAifob != -1
+                    pendStillAlive2 := array.get(w_obs, w_pendBearAifob).state == 4
+                if pendStillAlive2
+                    obRef2 = array.get(w_obs, w_pendBearAifob)
+                    obRef2.state     := 0
+                    obRef2.origState := 0
+                    obRef2.eligibleK := -1  // was AIFOB's immediate eligibility -- now a real IFOB, must wait for a fresh same-direction swing
+                    array.set(w_obs, w_pendBearAifob, obRef2)
+                    w_pendBearAifob := -1
+                else
+                    w_pendBearAifob := -1
+                if not pendAobPromoted2 and not pendStillAlive2 and w_lastSWHidx >= 0
+                    lo2 = math.min(math.min(w_lastSWHidx, k), w_swlIdx)
+                    hi2 = math.max(math.max(w_lastSWHidx, k), w_swlIdx)
+                    if not w_existsAifobInRange(lo2, hi2, false)
+                        best2 = -1
+                        for x = lo2 to hi2
+                            if x == k
+                                continue
+                            cX = array.get(w_C_, x)
+                            oX = array.get(w_O_, x)
+                            okB2 = false
+                            if cX > oX
+                                if best2 == -1
+                                    okB2 := true
+                                else
+                                    okB2 := cX > array.get(w_C_, best2)
+                            if okB2
+                                best2 := x
+                        if best2 != -1 and not w_candleClaimed(best2, false)
+                            oB = array.get(w_O_, best2)
+                            cB = array.get(w_C_, best2)
+                            w_addOB(best2, math.min(oB, cB), math.max(oB, cB), false, k, 0)
+                w_haveSWL := false
+                swlCons := true
+
+        else
+            // --- BULLISH bar: low first -> SWL break first ---
+            if w_haveSWL and array.get(w_L_, k) < w_swlPrice
+                if w_regime == 0
+                    w_regime := 2
+                else if w_regime == 1
+                    w_regime := 2
+                    w_addMss(k, w_swlIdx, w_swlPrice, false)
+                pendAobPromoted3 = w_promoteWaitingAOB(w_pendBearAob, false)
+                w_pendBearAob := -1
+                pendStillAlive3 = false
+                if w_pendBearAifob != -1
+                    pendStillAlive3 := array.get(w_obs, w_pendBearAifob).state == 4
+                if pendStillAlive3
+                    obRef3 = array.get(w_obs, w_pendBearAifob)
+                    obRef3.state     := 0
+                    obRef3.origState := 0
+                    obRef3.eligibleK := -1  // was AIFOB's immediate eligibility -- now a real IFOB, must wait for a fresh same-direction swing
+                    array.set(w_obs, w_pendBearAifob, obRef3)
+                    w_pendBearAifob := -1
+                else
+                    w_pendBearAifob := -1
+                if not pendAobPromoted3 and not pendStillAlive3 and w_lastSWHidx >= 0
+                    lo3 = math.min(math.min(w_lastSWHidx, k), w_swlIdx)
+                    hi3 = math.max(math.max(w_lastSWHidx, k), w_swlIdx)
+                    if not w_existsAifobInRange(lo3, hi3, false)
+                        best3 = -1
+                        for x = lo3 to hi3
+                            if x == k
+                                continue
+                            cX = array.get(w_C_, x)
+                            oX = array.get(w_O_, x)
+                            okB3 = false
+                            if cX > oX
+                                if best3 == -1
+                                    okB3 := true
+                                else
+                                    okB3 := cX > array.get(w_C_, best3)
+                            if okB3
+                                best3 := x
+                        if best3 != -1 and not w_candleClaimed(best3, false)
+                            oB = array.get(w_O_, best3)
+                            cB = array.get(w_C_, best3)
+                            w_addOB(best3, math.min(oB, cB), math.max(oB, cB), false, k, 0)
+                w_haveSWL := false
+                swlCons := true
+
+            // MID-ARM
+            peek3 = w_ei
+            while peek3 < evTotal
+                pEv3 = array.get(w_events, peek3)
+                if pEv3.confirmIdx != k
+                    break
+                if pEv3.kind == 0
+                    w_haveSWH  := true
+                    w_swhPrice := pEv3.price
+                    w_swhIdx   := pEv3.swingIdx
+                    w_pendBullAifob := -1
+                    w_pendBullAob := -1
+                    w_tryBearAOB(prevReg, aobSWLi, pEv3.swingIdx, pEv3.price, k)
+                    if w_pendBearAifob == -1
+                        r4 = w_tryBearAIFOB(prevReg, w_haveSWL, aobSWLi, w_lastSWHidx, pEv3.swingIdx, k)
+                        if r4 != -1
+                            w_pendBearAifob := r4
+                else
+                    w_haveSWL  := true
+                    w_swlPrice := pEv3.price
+                    w_swlIdx   := pEv3.swingIdx
+                    w_pendBearAifob := -1
+                    w_pendBearAob := -1
+                    w_tryBullAOB(prevReg, aobSWHi, pEv3.swingIdx, pEv3.price, k)
+                    if w_pendBullAifob == -1
+                        r5 = w_tryBullAIFOB(prevReg, w_haveSWH, aobSWHi, w_lastSWLidx, pEv3.swingIdx, k)
+                        if r5 != -1
+                            w_pendBullAifob := r5
+                peek3 += 1
+
+            // Second break: SWH
+            if w_haveSWH and array.get(w_H_, k) > w_swhPrice
+                if w_regime == 0
+                    w_regime := 1
+                else if w_regime == 2
+                    w_regime := 1
+                    w_addMss(k, w_swhIdx, w_swhPrice, true)
+                pendAobPromoted4 = w_promoteWaitingAOB(w_pendBullAob, true)
+                w_pendBullAob := -1
+                pendStillAlive4 = false
+                if w_pendBullAifob != -1
+                    pendStillAlive4 := array.get(w_obs, w_pendBullAifob).state == 4
+                if pendStillAlive4
+                    obRef4 = array.get(w_obs, w_pendBullAifob)
+                    obRef4.state     := 0
+                    obRef4.origState := 0
+                    obRef4.eligibleK := -1  // was AIFOB's immediate eligibility -- now a real IFOB, must wait for a fresh same-direction swing
+                    array.set(w_obs, w_pendBullAifob, obRef4)
+                    w_pendBullAifob := -1
+                else
+                    w_pendBullAifob := -1
+                if not pendAobPromoted4 and not pendStillAlive4 and w_lastSWLidx >= 0
+                    lo4 = math.min(math.min(w_lastSWLidx, k), w_swhIdx)
+                    hi4 = math.max(math.max(w_lastSWLidx, k), w_swhIdx)
+                    if not w_existsAifobInRange(lo4, hi4, true)
+                        best4 = -1
+                        for x = lo4 to hi4
+                            if x == k
+                                continue
+                            cX = array.get(w_C_, x)
+                            oX = array.get(w_O_, x)
+                            okB4 = false
+                            if cX < oX
+                                if best4 == -1
+                                    okB4 := true
+                                else
+                                    okB4 := cX < array.get(w_C_, best4)
+                            if okB4
+                                best4 := x
+                        if best4 != -1 and not w_candleClaimed(best4, true)
+                            oB = array.get(w_O_, best4)
+                            cB = array.get(w_C_, best4)
+                            w_addOB(best4, math.min(oB, cB), math.max(oB, cB), true, k, 0)
+                w_haveSWH := false
+                swhCons := true
+        // STEP 2: arm swings (consumed check) + IFOB eligibility
+        while w_ei < evTotal
+            sEv = array.get(w_events, w_ei)
+            if sEv.confirmIdx != k
+                break
+            if sEv.kind == 0
+                if not swhCons
+                    w_haveSWH  := true
+                    w_swhPrice := sEv.price
+                    w_swhIdx   := sEv.swingIdx
+                w_lastSWHidx := sEv.swingIdx
+                obSz = array.size(w_activeObs)
+                for az = 0 to obSz - 1
+                    if az < 0 or az >= obSz
+                        continue
+                    z = array.get(w_activeObs, az)
+                    if z < 0 or z >= array.size(w_obs)
+                        continue
+                    obZ = array.get(w_obs, z)
+                    if obZ.bullish and (obZ.state == 0 or obZ.state == 1 or obZ.state == 4) and obZ.eligibleK == -1 and not obZ.rejected and k > obZ.triggerK
+                        // Weekly mirror: AOB and AIFOB use box top, not wick.
+                        sourceBoundaryOk = (obZ.origState != 1 and obZ.origState != 4) or obZ.zt < sEv.price
+                        ep = k > 0 ? array.get(w_L_,k-1) : na
+                        if not sourceBoundaryOk or (not na(ep) and ep < obZ.zb)
+                            obZ.rejected := true
+                            obZ.eligibleK := -1
+                            obZ.stopK := -1
+                        else
+                            obZ.eligibleK := k
+                            // This is the exact H4 child that confirmed the
+                            // existing Weekly swing rule; it is not week-open.
+                            obZ.eligibleKind := sEv.kind
+                            obZ.eligibleTime := w_childEventTime(sEv.kind, k, int(time("W")))
+                        array.set(w_obs, z, obZ)
+            else
+                if not swlCons
+                    w_haveSWL  := true
+                    w_swlPrice := sEv.price
+                    w_swlIdx   := sEv.swingIdx
+                w_lastSWLidx := sEv.swingIdx
+                obSz2 = array.size(w_activeObs)
+                for az2 = 0 to obSz2 - 1
+                    if az2 < 0 or az2 >= obSz2
+                        continue
+                    z = array.get(w_activeObs, az2)
+                    if z < 0 or z >= array.size(w_obs)
+                        continue
+                    obZ2 = array.get(w_obs, z)
+                    if not obZ2.bullish and (obZ2.state == 0 or obZ2.state == 1 or obZ2.state == 4) and obZ2.eligibleK == -1 and not obZ2.rejected and k > obZ2.triggerK
+                        // Weekly bearish mirror: AOB/AIFOB box bottom, not wick.
+                        sourceBoundaryOk = (obZ2.origState != 1 and obZ2.origState != 4) or obZ2.zb > sEv.price
+                        ep = k > 0 ? array.get(w_H_,k-1) : na
+                        if not sourceBoundaryOk or (not na(ep) and ep > obZ2.zt)
+                            obZ2.rejected := true
+                            obZ2.eligibleK := -1
+                            obZ2.stopK := -1
+                        else
+                            obZ2.eligibleK := k
+                            // Mirror: preserve the same Weekly rule, then
+                            // record the H4 child time which confirmed it.
+                            obZ2.eligibleKind := sEv.kind
+                            obZ2.eligibleTime := w_childEventTime(sEv.kind, k, int(time("W")))
+                        array.set(w_obs, z, obZ2)
+            w_ei += 1
+
+        // STEP 3: OB lifecycle at this candle
+        obTotal = array.size(w_activeObs)
+        hK = array.get(w_H_, k)
+        lK = array.get(w_L_, k)
+        for az3 = 0 to obTotal - 1
+            if az3 < 0 or az3 >= obTotal
+                continue
+            z = array.get(w_activeObs, az3)
+            if z < 0 or z >= array.size(w_obs)
+                continue
+            obZ3 = array.get(w_obs, z)
+            if obZ3.state == 3 or obZ3.rejected
+                continue
+
+            zb = obZ3.zb
+            zt = obZ3.zt
+            bull = obZ3.bullish
+
+            // IMPACT
+            if obZ3.eligibleK != -1 and k >= obZ3.eligibleK
+                // Weekly AOBs use the same H4 child resolver as every other
+                // Weekly OB.  An old-style immediate AOB eligibility has no
+                // child timestamp, so its search starts at the week start and
+                // returns the first real H4 overlap--never midnight by rule.
+                int wkStart = array.get(w_BT, k)
+                int wkEnd = int(time("W"))
+                int eligibleAt = obZ3.eligibleTime
+                if eligibleAt < 0
+                    eligibleAt := wkStart
+                int touchAt = w_childFirstTouch(eligibleAt, wkStart, wkEnd, zb, zt)
+                if touchAt != -1
+                    obZ3.preSpentState := obZ3.state
+                    obZ3.state := 3
+                    obZ3.stopK := k
+                    obZ3.impactTime := touchAt
+                    w_recordImpact(k)
+                    array.set(w_obs, z, obZ3)
+                    continue
+
+            // STRANDING -> OOB
+            if (obZ3.state == 0 or obZ3.state == 1 or obZ3.state == 4) and obZ3.eligibleK != -1
+                isIFOB = obZ3.origState != 1
+                // scan only w_events confirmed at THIS bar (they start at evBeforeSwing in worst case,
+                // but are contiguous at end of w_events array for this bar)
+                for e2 = evBeforeSwing to evTotal - 1
+                    if e2 < 0 or e2 >= evTotal
+                        continue
+                    stEv = array.get(w_events, e2)
+                    if stEv.confirmIdx != k
+                        continue
+                    stranded = false
+                    if isIFOB
+                        if bull and stEv.kind == 1 and stEv.price > zt
+                            stranded := true
+                        if not bull and stEv.kind == 0 and stEv.price < zb
+                            stranded := true
+                    else
+                        // Mirror the native AOB stranding rule exactly.
+                        if bull and stEv.kind == 1 and stEv.price > zt
+                            stranded := true
+                        if not bull and stEv.kind == 0 and stEv.price < zb
+                            stranded := true
+                    if stranded
+                        obZ3.state := 2
+                        array.set(w_obs, z, obZ3)
+                        break
+        w_pruneTerminalZones()
+
+
+
+// ===================== H4 WEEKLY REFLECTION / VISIBILITY HELPERS =====================
+var h4WinLeft = array.new<int>()
+var h4WinRight = array.new<int>()
+// Exact completed structure range.  This is deliberately separate from the
+// visual range below: the visual box extends one candle each side, but an H4
+// OB may never be accepted from those extra display candles.
+var h4CoreLeft = array.new<int>()
+var h4CoreRight = array.new<int>()
+var h4WinBullish = array.new<bool>()
+var h4WinClosed = array.new<bool>()
+var h4WinSetupId = array.new<int>()
+// One H4 zone may validly belong to more than one overlapping Weekly setup.
+// These links are output-only: the native H4 engine remains untouched.
+var h4ParentObIdx = array.new<int>()
+var h4ParentSetupId = array.new<int>()
+
+h4InsideWindow(int idx) =>
+    ok = false
+    wn = array.size(h4WinLeft)
+    if wn > 0
+        for q = 0 to wn - 1
+            if idx >= array.get(h4WinLeft,q) and idx <= array.get(h4WinRight,q)
+                ok := true
+                break
+    ok
+
+h4ObMatchesWeeklyDirection(int idx, bool bullish) =>
+    ok = false
+    wn = array.size(h4CoreLeft)
+    if wn > 0
+        for q = 0 to wn - 1
+            // Bearish: previous SL -> SH -> next SL.
+            // Bullish: previous SH -> SL -> next SH.
+            // Only this completed three-swing range is eligible for an H4 OB.
+            if idx >= array.get(h4CoreLeft,q) and idx <= array.get(h4CoreRight,q) and bullish == array.get(h4WinBullish,q) and array.get(h4WinClosed,q)
+                ok := true
+                break
+    ok
+
+// Locked H4 first-impact rule: OOB is never an H4 trade candidate.  A zone
+// that was OOB and later marked spent remains an OOB for this decision.
+h4AuditUsable(ObZone z) =>
+    shownState = z.state == 3 ? z.preSpentState : z.state
+    not z.rejected and shownState != 2
+
+h4HasParent(int obIdx) =>
+    ok = false
+    n = array.size(h4ParentObIdx)
+    if n > 0
+        for p = 0 to n - 1
+            bool _recentLink = p >= math.max(0, n - InpH4OBCount)
+            if _recentLink and array.get(h4ParentObIdx, p) == obIdx and (InpFocusWeeklySetupID == 0 or array.get(h4ParentSetupId, p) == InpFocusWeeklySetupID)
+                ok := true
+                break
+    ok
+// ===================== DRAWING (last bar only) =====================
+// Kept in a function so Pine's compiled main body stays below its scope-size
+// limit. This is a structural move only; the drawing statements are unchanged.
+drawAll() =>
+    // Delete previous drawings
+    lblSzD = array.size(drawnLabels)
+    for lb = 0 to lblSzD - 1
+        if lb < 0 or lb >= lblSzD
+            continue
+        label.delete(array.get(drawnLabels, lb))
+    array.clear(drawnLabels)
+    boxSzD = array.size(drawnBoxes)
+    for bx = 0 to boxSzD - 1
+        if bx < 0 or bx >= boxSzD
+            continue
+        box.delete(array.get(drawnBoxes, bx))
+    array.clear(drawnBoxes)
+    lnSzD = array.size(drawnLines)
+    for ln = 0 to lnSzD - 1
+        if ln < 0 or ln >= lnSzD
+            continue
+        line.delete(array.get(drawnLines, ln))
+    array.clear(drawnLines)
+
+    nArr = array.size(O_)
+    if nArr < 2
+        runtime.error("Insufficient data")
+
+    // Compute display-from time threshold (milliseconds)
+    dispFrom = useDisplayFrom ? InpDisplayFrom : (time - InpMonthsBack * 30 * 24 * 60 * 60 * 1000)
+
+    // On H4, reflect the requested most-recent Weekly OBs directly from the
+    // independent Weekly engine.  The right edge uses the stored exact impact
+    // timestamp when present; it is never snapped to the H4 candle open.
+    if timeframe.period == "240" and InpShowWeeklyOBs
+        int _wn = array.size(w_obs)
+        int _wstart = math.max(0, _wn - InpWeeklyOBCount)
+        if _wn > 0
+            for _wi = _wstart to _wn - 1
+                ObZone _wz = array.get(w_obs, _wi)
+                // H4 receives context only from IMPACTED OBs among the exact same
+                // most-recent Weekly N selected for the Weekly chart/table.
+                bool _wImpacted = not _wz.rejected and _wz.impactTime >= 0 and _wz.stopK >= 0
+                if _wImpacted and _wz.candle >= 0 and _wz.candle < array.size(w_BT)
+                    int _wl = array.get(w_BT, _wz.candle)
+                    int _wr = _wz.impactTime >= 0 ? _wz.impactTime : time + 50 * timeframe.in_seconds() * 1000
+                    int _wds = _wz.state == 3 ? _wz.preSpentState : _wz.state
+                    color _wc = _wds == 0 ? (_wz.bullish ? color.blue : color.black) : _wds == 1 ? color.green : _wds == 2 ? color.red : _wds == 4 ? color.orange : color.black
+                    box _wb = box.new(math.max(_wl,dispFrom), _wz.zt, _wr, _wz.zb, xloc=xloc.bar_time, border_color=color.new(_wc,20), border_width=2, bgcolor=na)
+                    array.push(drawnBoxes,_wb)
+                    if InpShowWeeklyImpactLines and _wz.impactTime >= 0
+                        line _wil = line.new(_wz.impactTime, _wz.zb, _wz.impactTime, _wz.zt, xloc=xloc.bar_time, extend=extend.both, color=color.new(color.red,30), width=1)
+                        array.push(drawnLines,_wil)
+
+    // Rebuild H4 visibility from each Weekly first impact.
+    array.clear(h4WinLeft)
+    array.clear(h4WinRight)
+    array.clear(h4CoreLeft)
+    array.clear(h4CoreRight)
+    array.clear(h4WinBullish)
+    array.clear(h4WinClosed)
+    array.clear(h4WinSetupId)
+    array.clear(h4ParentObIdx)
+    array.clear(h4ParentSetupId)
+    if timeframe.period == "240"
+        wzN = array.size(w_obs)
+        if wzN > 0
+            // Authoritative Weekly selection: the same last-N set used by the
+            // Weekly chart/table. Older Weekly OBs cannot open H4 contexts.
+            int wzStart = math.max(0, wzN - InpWeeklyOBCount)
+            for wz = wzStart to wzN - 1
+                wob = array.get(w_obs,wz)
+                if wob.rejected or wob.stopK < 0 or wob.stopK >= array.size(w_BT)
+                    continue
+                weekStart = array.get(w_BT,wob.stopK)
+                weekEnd = wob.stopK + 1 < array.size(w_BT) ? array.get(w_BT,wob.stopK+1) : weekStart + 7*24*60*60*1000
+                impactH4 = -1
+                // The Weekly lifecycle already resolved one true child-H4
+                // touch.  The display must use that same clock; it must not
+                // independently rescan from the weekly bar open.
+                resolvedImpactTime = wob.impactTime
+                if resolvedImpactTime < 0
+                    continue
+                hLo = 0
+                hHi = nArr
+                while hLo < hHi
+                    hMid = int(math.floor((hLo + hHi) / 2))
+                    if array.get(BT,hMid) < resolvedImpactTime
+                        hLo := hMid + 1
+                    else
+                        hHi := hMid
+                // resolvedImpactTime can be a 1m timestamp. Map it to the H4
+                // candle that CONTAINS that minute instead of requiring equality
+                // with the H4 open timestamp.
+                int _cand = hLo
+                if _cand < nArr and array.get(BT,_cand) > resolvedImpactTime
+                    _cand -= 1
+                if _cand >= 0 and _cand < nArr
+                    int _h4s = array.get(BT,_cand)
+                    int _h4e = _cand + 1 < nArr ? array.get(BT,_cand+1) : _h4s + 4*60*60*1000
+                    if resolvedImpactTime >= _h4s and resolvedImpactTime < _h4e
+                        impactH4 := _cand
+                if impactH4 < 0
+                    continue
+                // Always show the exact Weekly source and its first H4 touch.
+                wStart = wob.candle >= 0 and wob.candle < array.size(w_BT) ? array.get(w_BT,wob.candle) : weekStart
+                dStW = wob.state == 3 ? wob.preSpentState : wob.state
+                wc = dStW == 0 ? (wob.bullish ? color.blue : color.black) : dStW == 1 ? color.green : dStW == 2 ? color.red : dStW == 4 ? color.orange : color.black
+                // Weekly source box + its ONE impact line are already drawn in
+                // the selected-Weekly reflection pass above. Never draw a second
+                // legacy line here; one Weekly OB ID owns one impact line.
+
+                // Bearish W1 needs an H4 swing high inside the box; bullish W1
+                // needs an H4 swing low inside the box. A breach before it means
+                // no H4 structure, therefore no interested/H4-OB drawings.
+                target = -1
+                srcN = wob.bullish ? array.size(swLows) : array.size(swHighs)
+                if srcN > 0
+                    for sp = 0 to srcN - 1
+                        ix = wob.bullish ? array.get(swLows,sp) : array.get(swHighs,sp)
+                        if ix >= impactH4 and ix >= 0 and ix < nArr
+                            inside = wob.bullish ? (array.get(L_,ix) >= wob.zb and array.get(L_,ix) <= wob.zt) : (array.get(H_,ix) >= wob.zb and array.get(H_,ix) <= wob.zt)
+                            if inside
+                                target := ix
+                                break
+                if target < 0
+                    continue
+                breachedFirst = false
+                for q = impactH4 to target
+                    if wob.bullish ? array.get(L_,q) < wob.zb : array.get(H_,q) > wob.zt
+                        breachedFirst := true
+                if breachedFirst
+                    continue
+
+                oppN = wob.bullish ? array.size(swHighs) : array.size(swLows)
+                prevOpp = -1
+                nextOpp = -1
+                if oppN > 0
+                    for op = 0 to oppN - 1
+                        ox = wob.bullish ? array.get(swHighs,op) : array.get(swLows,op)
+                        if ox < target
+                            prevOpp := ox
+                        else if ox > target and nextOpp < 0
+                            nextOpp := ox
+                if prevOpp < 0
+                    continue
+                leftIx = math.max(0,prevOpp - 2)
+                rightIx = nextOpp >= 0 ? math.min(nArr - 1,nextOpp + 2) : nArr - 1
+                array.push(h4WinLeft,leftIx)
+                array.push(h4WinRight,rightIx)
+                // The +/- 2 candles above are visual padding only.  The OB
+                // search/audit must use the exact completed structure.
+                array.push(h4CoreLeft,prevOpp)
+                array.push(h4CoreRight,nextOpp)
+                array.push(h4WinBullish,wob.bullish)
+                array.push(h4WinClosed,nextOpp >= 0)
+                // Stable ID is the Weekly zone's permanent array position.
+                array.push(h4WinSetupId,wz + 1)
+                topS = wob.bullish ? math.max(array.get(H_,prevOpp),array.get(H_,target)) : array.get(H_,target)
+                botS = wob.bullish ? array.get(L_,target) : math.min(array.get(L_,prevOpp), nextOpp >= 0 ? array.get(L_,nextOpp) : array.get(L_,prevOpp))
+                if topS > botS and InpShowInterestedZones
+                    sb = box.new(array.get(BT,leftIx),topS,array.get(BT,rightIx),botS,xloc=xloc.bar_time,border_color=color.green,border_width=2,bgcolor=na)
+                    array.push(drawnBoxes,sb)
+
+    // Build one explicit H4-to-Weekly parent link per completed first
+    // structure.  The native H4 engine may continue finding zones elsewhere,
+    // but a Weekly setup owns only its earliest valid candidate whose origin
+    // AND hunt trigger both occurred inside its frozen three-swing sequence.
+    // A later structure can therefore never replace or add to this setup.
+    if timeframe.period == "240"
+        int setupN = array.size(h4WinSetupId)
+        int obN = array.size(obs)
+        if setupN > 0 and obN > 0
+            for s = 0 to setupN - 1
+                int coreL = array.get(h4CoreLeft, s)
+                int coreR = array.get(h4CoreRight, s)
+                bool setupBull = array.get(h4WinBullish, s)
+                bool setupClosed = array.get(h4WinClosed, s)
+                int setupId = array.get(h4WinSetupId, s)
+                if setupClosed
+                    int selectedOi = -1
+                    int selectedTrigger = -1
+                    int selectedOrigin = -1
+                    for oi = 0 to obN - 1
+                        ObZone oz = array.get(obs, oi)
+                        bool bornInFirstStructure = oz.candle >= coreL and oz.candle <= coreR and oz.triggerK >= coreL and oz.triggerK <= coreR
+                        bool earlierCandidate = selectedOi == -1 or oz.triggerK < selectedTrigger or (oz.triggerK == selectedTrigger and oz.candle < selectedOrigin)
+                        if not oz.rejected and oz.bullish == setupBull and bornInFirstStructure and earlierCandidate
+                            selectedOi := oi
+                            selectedTrigger := oz.triggerK
+                            selectedOrigin := oz.candle
+                    // Select first, then apply the locked OOB rule.  If that
+                    // first candidate became OOB, this setup has no usable H4
+                    // opportunity; a later zone is never used as fallback.
+                    if selectedOi != -1
+                        ObZone selected = array.get(obs, selectedOi)
+                        if h4AuditUsable(selected)
+                            array.push(h4ParentObIdx, selectedOi)
+                            array.push(h4ParentSetupId, setupId)
+
+    // OOB is never traded off 5m/1h/4h (see docs/trading_logic.md's cascade),
+    // so its box is hidden on those chart timeframes only -- see OOB draw skip below.
+    hideOOBHere = timeframe.period == "5" or timeframe.period == "60" or timeframe.period == "240"
+
+    // --- Swing HIGHS: blue up arrow ---
+    bool _hideStruct = timeframe.period == "240" and not InpShowH4Structure
+    // Trim to the most recent InpMaxLabelsPerCategory before drawing -- swing
+    // highs/lows/MSS all share Pine's single 500-label budget, and on noisy
+    // timeframes (5m/1h) the raw count can blow past that, causing Pine to
+    // silently auto-evict the OLDEST-created labels first. Since this loop
+    // runs first (creating the oldest labels of the pass), swing highs were
+    // the first to get silently wiped, then swing lows -- MSS (created last)
+    // was never touched. Trimming ourselves, per category, in recency order
+    // makes what's shown deterministic instead of leaving it to Pine's
+    // creation-order eviction.
+    shSz = _hideStruct ? 0 : array.size(swHighs)
+    shStart = timeframe.period == "240" ? 0 : math.max(0, shSz - InpMaxLabelsPerCategory)
+    for s = shStart to shSz - 1
+        if s < 0 or s >= shSz
+            continue
+        idx = array.get(swHighs, s)
+        if idx < 0 or idx >= nArr
+            continue
+        bt = array.get(BT, idx)
+        if bt < dispFrom
+            continue
+        if timeframe.period == "240" and not h4InsideWindow(idx)
+            continue
+        yP = array.get(H_, idx)
+        lbl = label.new(bt, yP, "▲", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=color.blue, size=size.small)
+        array.push(drawnLabels, lbl)
+
+    // --- Swing LOWS: black down arrow ---
+    slSz = _hideStruct ? 0 : array.size(swLows)
+    slStart = timeframe.period == "240" ? 0 : math.max(0, slSz - InpMaxLabelsPerCategory)
+    for s = slStart to slSz - 1
+        if s < 0 or s >= slSz
+            continue
+        idx = array.get(swLows, s)
+        if idx < 0 or idx >= nArr
+            continue
+        bt = array.get(BT, idx)
+        if bt < dispFrom
+            continue
+        if timeframe.period == "240" and not h4InsideWindow(idx)
+            continue
+        // Pushed slightly below the literal low (ATR-scaled, see
+        // swLowGapOffset above) to match the small visual gap the swing-high
+        // arrow already has above its high -- style_none appears to anchor
+        // "▲" and "▼" differently even at the same yloc.price value, so this
+        // nudges the low arrow to look the same way, not a change to the
+        // detected swing-low price itself.
+        yP = array.get(L_, idx) - swLowGapOffset
+        lbl = label.new(bt, yP, "▼", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=color.black, size=size.small)
+        array.push(drawnLabels, lbl)
+
+    // --- MSS flips: cross mark at broken swing's location ---
+    mssSz = _hideStruct ? 0 : array.size(msses)
+    mssStart = timeframe.period == "240" ? 0 : math.max(0, mssSz - InpMaxLabelsPerCategory)
+    for m = mssStart to mssSz - 1
+        if m < 0 or m >= mssSz
+            continue
+        mEv = array.get(msses, m)
+        bIdx = mEv.brokenIdx
+        if bIdx < 0 or bIdx >= nArr
+            continue
+        bt = array.get(BT, bIdx)
+        if bt < dispFrom
+            continue
+        if timeframe.period == "240" and not h4InsideWindow(bIdx)
+            continue
+        isUp = mEv.toUp
+        // Down-MSS shares the same swLowGapOffset nudge as the swing-low
+        // arrow (both sit at a candle's low with the same style_none glyph-
+        // anchor issue); up-MSS is left at the literal high, same as the
+        // swing-high arrow.
+        yP = isUp ? array.get(H_, bIdx) : array.get(L_, bIdx) - swLowGapOffset
+        col = isUp ? color.blue : color.black
+        lbl = label.new(bt, yP, "✕", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=col, size=size.small)
+        array.push(drawnLabels, lbl)
+
+    // --- Weekly OB exact 1m impact lines ---
+    if timeframe.isweekly and InpShowWeeklyImpactLines
+        int _wobN = array.size(obs)
+        int _wobStart = math.max(0, _wobN - InpWeeklyOBCount)
+        if _wobN > 0
+            for _wii = _wobStart to _wobN - 1
+                ObZone _wio = array.get(obs,_wii)
+                if not _wio.rejected and _wio.impactTime >= 0
+                    line _wln = line.new(_wio.impactTime,_wio.zb,_wio.impactTime,_wio.zt,xloc=xloc.bar_time,extend=extend.both,color=color.new(color.red,30),width=1)
+                    array.push(drawnLines,_wln)
+
+    // --- OB zones: hollow boxes ---
+    // IFOB bull=blue, IFOB bear=black, AOB=green, OOB=red, AIFOB=orange
+    // SPENT uses preSpentState color
+    obSzD = array.size(obs)
+    extT = time + 50 * timeframe.in_seconds() * 1000
+
+    for z = 0 to obSzD - 1
+        if z < 0 or z >= obSzD
+            continue
+        obD = array.get(obs, z)
+        if obD.rejected
+            continue
+        idx = obD.candle
+        if idx < 0 or idx >= nArr
+            continue
+        if timeframe.period == "240" and (not InpShowH4OBs or not h4HasParent(z))
+            continue
+        // One count controls chart + table for each timeframe.
+        if timeframe.isweekly and z < math.max(0, obSzD - InpWeeklyOBCount)
+            continue
+
+        // Focus filter
+        if InpFocusOB > 0
+            if obSzD - z != InpFocusOB
+                continue
+        else
+            bt = array.get(BT, idx)
+            if bt < dispFrom
+                continue
+
+        leftT = array.get(BT, idx)
+        rightT = extT
+        if obD.impactTime != -1
+            rightT := obD.impactTime
+        else if obD.stopK != -1 and obD.stopK < nArr
+            rightT := array.get(BT, obD.stopK)
+
+        // Color
+        dSt = obD.state == 3 ? obD.preSpentState : obD.state
+        // AIFOB display RE-ENABLED (matches ICT_OB_Diagnostic.pine) -- we're
+        // actively verifying its creation/promotion logic now, need to see
+        // it drawn. Orange = still-pending AIFOB (dSt==4, not yet promoted).
+        // OOB display disabled by request on 5m/1h/4h -- never used at those
+        // timeframes per the trading cascade (docs/trading_logic.md), so hide
+        // the clutter there. Stranding detection/lifecycle above (a zone can
+        // still go OOB and later flip to SPENT on touch) is untouched, and
+        // OOB still draws normally on Daily/Weekly/Monthly/any other TF.
+        if dSt == 2 and hideOOBHere
+            continue
+        col = color.blue
+        if dSt == 0
+            col := obD.bullish ? color.blue : color.black
+        else if dSt == 1
+            col := color.green
+        else if dSt == 2
+            col := color.red
+        else if dSt == 4
+            col := color.orange
+        else
+            col := obD.bullish ? color.blue : color.black
+
+        bx = box.new(leftT, obD.zt, rightT, obD.zb, border_color=col, border_width=1, bgcolor=na, xloc=xloc.bar_time)
+        array.push(drawnBoxes, bx)
+
+h4AuditFrom = useDisplayFrom ? InpDisplayFrom : last_bar_time - InpMonthsBack * 30 * 24 * 60 * 60 * 1000
+
+drawFocusedH4Audit() =>
+    if timeframe.period == "240"
+        int count = 0
+        int nLinks = array.size(h4ParentObIdx)
+        if nLinks > 0
+            for li = 0 to nLinks - 1
+                int ai = array.get(h4ParentObIdx, li)
+                ObZone az = array.get(obs, ai)
+                int originT = az.candle >= 0 and az.candle < array.size(BT) ? array.get(BT, az.candle) : na
+                int parentId = array.get(h4ParentSetupId, li)
+                if not na(originT) and originT >= h4AuditFrom and (InpFocusWeeklySetupID == 0 or parentId == InpFocusWeeklySetupID)
+                    count += 1
+                    bool drawThisImpact = InpFocusH4AuditID == 0 or count == InpFocusH4AuditID
+                    if drawThisImpact and InpShowH4ImpactLines
+                        // The baseline lifecycle owns the one true impact.
+                        // stopK is set on the exact candle where this OB box ends.
+                        int impactK = az.stopK
+                        if impactK >= 0 and impactK < array.size(BT)
+                            int impactT = az.impactTime != -1 ? az.impactTime : array.get(BT, impactK)
+                            ln = line.new(impactT, array.get(L_, impactK), impactT, array.get(H_, impactK), xloc=xloc.bar_time, extend=extend.both, color=color.purple, width=2)
+                            array.push(drawnLines, ln)
+
+
+// ===================== EA CASCADE STATUS TABLE =====================
+// H4 table owns bottom_right. Weekly lifecycle table uses top_right so an empty
+// Weekly table cannot mask the H4 table on a 4H chart.
+var table cascadeTable = table.new(position.bottom_right, 8, 31, border_width=1)
+drawCascadeTable() =>
+    table.clear(cascadeTable, 0, 0, 7, 30)
+    if InpShowCascadeTable and InpShowH4Table and timeframe.period == "240"
+        color hd = color.new(color.green, 15)
+        table.cell(cascadeTable,0,0,"Setup",text_color=color.white,bgcolor=hd)
+        table.cell(cascadeTable,1,0,"W Side",text_color=color.white,bgcolor=hd)
+        table.cell(cascadeTable,2,0,"W Impact time",text_color=color.white,bgcolor=hd)
+        table.cell(cascadeTable,3,0,"H4 Structure",text_color=color.white,bgcolor=hd)
+        table.cell(cascadeTable,4,0,"H4 OB",text_color=color.white,bgcolor=hd)
+        table.cell(cascadeTable,5,0,"H4 Impact",text_color=color.white,bgcolor=hd)
+        table.cell(cascadeTable,6,0,"Next Gate",text_color=color.white,bgcolor=hd)
+        table.cell(cascadeTable,7,0,"Status",text_color=color.white,bgcolor=hd)
+        int rn = math.min(math.min(array.size(h4WinSetupId), InpH4OBCount), 30)
+        if rn > 0
+            for rr = 0 to rn - 1
+                int s = array.size(h4WinSetupId) - 1 - rr
+                int sid = array.get(h4WinSetupId,s)
+                bool sbull = array.get(h4WinBullish,s)
+                bool closed = array.get(h4WinClosed,s)
+                int linked = -1
+                int ln = array.size(h4ParentSetupId)
+                if ln > 0
+                    for li = 0 to ln - 1
+                        if array.get(h4ParentSetupId,li) == sid
+                            linked := array.get(h4ParentObIdx,li)
+                string obTxt = linked >= 0 ? "#" + str.tostring(linked+1) : "—"
+                string impTxt = "—"
+                string stat = closed ? (linked >= 0 ? "H4 OB ARMED" : "NO H4 OB / OOB") : "WAIT H4 SWING"
+                if linked >= 0
+                    ObZone zz = array.get(obs,linked)
+                    if zz.impactTime >= 0
+                        impTxt := str.format_time(zz.impactTime,"MM-dd HH:mm:ss")
+                        stat := "H4 IMPACTED"
+                int row = rr + 1
+                string wImpactTxt = "—"
+                int widx = sid - 1
+                if widx >= 0 and widx < array.size(w_obs)
+                    ObZone wzT = array.get(w_obs,widx)
+                    if wzT.impactTime >= 0
+                        wImpactTxt := str.format_time(wzT.impactTime,"MM-dd HH:mm:ss")
+                table.cell(cascadeTable,0,row,"#" + str.tostring(sid))
+                table.cell(cascadeTable,1,row,sbull ? "BUY" : "SELL")
+                table.cell(cascadeTable,2,row,wImpactTxt)
+                table.cell(cascadeTable,3,row,closed ? "COMPLETE" : "WAIT")
+                table.cell(cascadeTable,4,row,obTxt)
+                table.cell(cascadeTable,5,row,impTxt)
+                table.cell(cascadeTable,6,row,stat == "H4 IMPACTED" ? "5M ENTRY" : "H4")
+                table.cell(cascadeTable,7,row,stat)
+
+// Resolve the Weekly OB creation/trigger to the first confirmed 1m event that made it knowable.
+// AOB/AIFOB creation is tied to the Weekly swing-confirmation event that launched their hunt.
+// IFOB creation is tied to strict exceedance of the latest relevant confirmed Weekly swing level.
+weeklyTriggerEventTime(ObZone z) =>
+    int rt = -1
+    int k = z.triggerK
+    if k >= 0 and k < array.size(w_BT)
+        int wkStart = array.get(w_BT, k)
+        int wkEnd = k + 1 < array.size(w_BT) ? array.get(w_BT, k + 1) : wkStart + 7 * 24 * 60 * 60 * 1000
+        int sourceState = z.origState
+        if sourceState == 1 or sourceState == 4
+            // AOB: BUY is born on SWH confirmation; SELL on SWL confirmation.
+            // AIFOB: BUY is born on SWL confirmation; SELL on SWH confirmation.
+            int wantedKind = sourceState == 1 ? (z.bullish ? 0 : 1) : (z.bullish ? 1 : 0)
+            int en = array.size(w_events)
+            if en > 0
+                for e = 0 to en - 1
+                    SwEv ev = array.get(w_events, e)
+                    if rt == -1 and ev.confirmIdx == k and ev.kind == wantedKind
+                        rt := w_childEventTime(ev.kind, k, wkEnd)
+        else
+            // IFOB: use the most recent confirmed same-direction break reference before trigger week.
+            int en = array.size(w_events)
+            float level = na
+            if en > 0
+                for e = 0 to en - 1
+                    SwEv ev = array.get(w_events, e)
+                    bool relevant = z.bullish ? ev.kind == 0 : ev.kind == 1
+                    if relevant and ev.confirmIdx <= k
+                        level := ev.price
+            if not na(level)
+                int mn = array.size(M1T)
+                if mn > 0
+                    for m = 0 to mn - 1
+                        int mt = array.get(M1T, m)
+                        if rt == -1 and mt >= wkStart and mt < wkEnd
+                            bool crossed = z.bullish ? array.get(M1H,m) > level : array.get(M1L,m) < level
+                            if crossed
+                                rt := mt
+    rt
+
+// ===================== WEEKLY OB LIFECYCLE TABLE =====================
+// IMPORTANT: On a Weekly chart the native `obs/events/BT` arrays ARE the Weekly engine.
+// The independent `w_obs/w_events/w_BT` mirror exists only on the H4 chart.  The old
+// Stage-3 table always read w_obs, so it had zero rows on W1.  These helpers deliberately
+// select the correct engine for the chart while using the common confirmed-1m clock.
+
+m1FirstSwingConfirmInWindow(int fromT, int toT, int kind) =>
+    int rt = -1
+    int mn = array.size(M1T)
+    if mn >= 2
+        for m = 1 to mn - 1
+            int mt = array.get(M1T,m)
+            if rt == -1 and mt >= fromT and mt < toT
+                bool hit = kind == 1 ? array.get(M1H,m) > array.get(M1H,m-1) : array.get(M1L,m) < array.get(M1L,m-1)
+                if hit
+                    rt := mt
+    rt
+
+m1FirstStrictImpact(int fromT, int toT, bool bull, float zb, float zt) =>
+    int rt = -1
+    int mn = array.size(M1T)
+    if mn > 0
+        for m = 0 to mn - 1
+            int mt = array.get(M1T,m)
+            if rt == -1 and mt >= fromT and mt < toT
+                bool hit = bull ? array.get(M1L,m) < zt : array.get(M1H,m) > zb
+                if hit
+                    rt := mt
+    rt
+
+nativeWeeklyTriggerTime(ObZone z) =>
+    int rt = -1
+    int k = z.triggerK
+    if k >= 0 and k < array.size(BT)
+        int wkStart = array.get(BT,k)
+        int wkEnd = k + 1 < array.size(BT) ? array.get(BT,k+1) : wkStart + 7*24*60*60*1000
+        int sourceState = z.origState
+        if sourceState == 1 or sourceState == 4
+            int wantedKind = sourceState == 1 ? (z.bullish ? 0 : 1) : (z.bullish ? 1 : 0)
+            rt := m1FirstSwingConfirmInWindow(wkStart,wkEnd,wantedKind)
+        else
+            // IFOB: find the latest relevant confirmed swing level available before/at trigger week,
+            // then resolve its first strict 1m exceedance inside the trigger week.
+            float level = na
+            int en = array.size(events)
+            if en > 0
+                for e = 0 to en - 1
+                    SwEv ev = array.get(events,e)
+                    bool relevant = z.bullish ? ev.kind == 0 : ev.kind == 1
+                    if relevant and ev.confirmIdx <= k
+                        level := ev.price
+            if not na(level)
+                int mn = array.size(M1T)
+                if mn > 0
+                    for m = 0 to mn - 1
+                        int mt = array.get(M1T,m)
+                        if rt == -1 and mt >= wkStart and mt < wkEnd
+                            bool crossed = z.bullish ? array.get(M1H,m) > level : array.get(M1L,m) < level
+                            if crossed
+                                rt := mt
+    rt
+
+nativeWeeklyEligibilityTime(ObZone z) =>
+    int rt = -1
+    int k = z.eligibleK
+    if k >= 0 and k < array.size(BT)
+        int wkStart = array.get(BT,k)
+        int wkEnd = k + 1 < array.size(BT) ? array.get(BT,k+1) : wkStart + 7*24*60*60*1000
+        // Some legacy Weekly paths set eligibleK without persisting eligibleKind.
+        // The locked rule is unambiguous: BUY eligibility is a Swing High (0),
+        // SELL eligibility is a Swing Low (1).  Use that as the authoritative fallback.
+        int kind = z.eligibleKind
+        if kind != 0 and kind != 1
+            kind := z.bullish ? 0 : 1
+        rt := m1FirstSwingConfirmInWindow(wkStart,wkEnd,kind)
+    rt
+
+nativeWeeklyImpactTime(ObZone z, int eligibilityT) =>
+    int rt = -1
+    if z.stopK >= 0 and z.stopK < array.size(BT)
+        int wkStart = array.get(BT,z.stopK)
+        int wkEnd = z.stopK + 1 < array.size(BT) ? array.get(BT,z.stopK+1) : wkStart + 7*24*60*60*1000
+        int fromT = eligibilityT >= 0 ? math.max(eligibilityT,wkStart) : wkStart
+        rt := m1FirstStrictImpact(fromT,wkEnd,z.bullish,z.zb,z.zt)
+    rt
+
+var table weeklyTable = table.new(position.top_right, 13, 21, border_width=1)
+
+m1CoverageContains(int t) =>
+    bool ok = false
+    int n = array.size(M1T)
+    if n > 0 and t >= 0
+        ok := t >= array.get(M1T,0) and t <= array.get(M1T,n-1) + 60*1000
+    ok
+
+weeklyEventPriceAt(int t, bool bull, bool useExtreme, float level) =>
+    float p = na
+    int n = array.size(M1T)
+    if t >= 0 and n > 0
+        for m = 0 to n - 1
+            if na(p) and array.get(M1T,m) == t
+                p := useExtreme ? (bull ? array.get(M1H,m) : array.get(M1L,m)) : level
+    p
+
+drawWeeklyTable() =>
+    table.clear(weeklyTable, 0, 0, 12, 20)
+    if InpShowWeeklyTable and timeframe.isweekly
+        color _hd = color.new(color.green,15)
+        table.cell(weeklyTable,0,0,"W OB",text_color=color.white,bgcolor=_hd)
+        table.cell(weeklyTable,1,0,"Type",text_color=color.white,bgcolor=_hd)
+        table.cell(weeklyTable,2,0,"Side",text_color=color.white,bgcolor=_hd)
+        table.cell(weeklyTable,3,0,"Bottom",text_color=color.white,bgcolor=_hd)
+        table.cell(weeklyTable,4,0,"Top",text_color=color.white,bgcolor=_hd)
+        table.cell(weeklyTable,5,0,"Origin",text_color=color.white,bgcolor=_hd)
+        table.cell(weeklyTable,6,0,"Trigger time",text_color=color.white,bgcolor=_hd)
+        table.cell(weeklyTable,7,0,"Trigger px",text_color=color.white,bgcolor=_hd)
+        table.cell(weeklyTable,8,0,"Eligible time",text_color=color.white,bgcolor=_hd)
+        table.cell(weeklyTable,9,0,"Eligible px",text_color=color.white,bgcolor=_hd)
+        table.cell(weeklyTable,10,0,"Impact time",text_color=color.white,bgcolor=_hd)
+        table.cell(weeklyTable,11,0,"Impact px",text_color=color.white,bgcolor=_hd)
+        table.cell(weeklyTable,12,0,"Status / ledger",text_color=color.white,bgcolor=_hd)
+        int _n = array.size(obs)
+        int _rows = math.min(math.min(_n,InpWeeklyOBCount),20)
+        if _rows > 0
+            for _r = 0 to _rows - 1
+                int _i = _n - 1 - _r
+                ObZone _z = array.get(obs,_i)
+                int _ds = _z.state == 3 ? _z.preSpentState : _z.state
+                string _ty = _ds == 0 ? "IFOB" : _ds == 1 ? "AOB" : _ds == 2 ? "OOB" : _ds == 4 ? "AIFOB" : "SPENT"
+                int _originT = _z.candle >= 0 and _z.candle < array.size(BT) ? array.get(BT,_z.candle) : -1
+                int _trigT = nativeWeeklyTriggerTime(_z)
+                int _eligT = nativeWeeklyEligibilityTime(_z)
+                int _impT = nativeWeeklyImpactTime(_z,_eligT)
+                string _origin = _originT >= 0 ? str.format_time(_originT,"yyyy-MM-dd HH:mm:ss") : "—"
+                string _trig = _trigT >= 0 ? str.format_time(_trigT,"yyyy-MM-dd HH:mm:ss") : "—"
+                string _elig = _eligT >= 0 ? str.format_time(_eligT,"yyyy-MM-dd HH:mm:ss") : "—"
+                string _imp = _impT >= 0 ? str.format_time(_impT,"yyyy-MM-dd HH:mm:ss") : "—"
+
+                // Event prices: preserve the structural boundary and the observed 1m extreme separately in the engine later.
+                // For the compact verification table, show the observed 1m extreme for trigger/eligibility and the exact OB boundary for impact.
+                float _trigPx = na
+                float _eligPx = na
+                if _trigT >= 0
+                    _trigPx := weeklyEventPriceAt(_trigT,_z.bullish,true,na)
+                if _eligT >= 0
+                    _eligPx := weeklyEventPriceAt(_eligT,_z.bullish,true,na)
+                float _impPx = _impT >= 0 ? (_z.bullish ? _z.zt : _z.zb) : na
+
+                string _base = _z.rejected ? "REJECTED" : _z.state == 3 ? "IMPACTED" : _z.state == 2 ? "OOB" : _z.eligibleK >= 0 ? "ELIGIBLE" : "WAIT"
+                bool _triggerExpected = _z.triggerK >= 0
+                bool _eligExpected = _z.eligibleK >= 0
+                bool _impactExpected = _z.state == 3 or _z.stopK >= 0
+                int _trigWeekT = _z.triggerK >= 0 and _z.triggerK < array.size(BT) ? array.get(BT,_z.triggerK) : -1
+                int _eligWeekT = _z.eligibleK >= 0 and _z.eligibleK < array.size(BT) ? array.get(BT,_z.eligibleK) : -1
+                int _impWeekT = _z.stopK >= 0 and _z.stopK < array.size(BT) ? array.get(BT,_z.stopK) : -1
+                bool _missingCovered = (_triggerExpected and _trigT < 0 and m1CoverageContains(_trigWeekT)) or (_eligExpected and _eligT < 0 and m1CoverageContains(_eligWeekT)) or (_impactExpected and _impT < 0 and m1CoverageContains(_impWeekT))
+                bool _missingUncovered = (_triggerExpected and _trigT < 0 and not m1CoverageContains(_trigWeekT)) or (_eligExpected and _eligT < 0 and not m1CoverageContains(_eligWeekT)) or (_impactExpected and _impT < 0 and not m1CoverageContains(_impWeekT))
+                string _ledger = _missingCovered ? "LEDGER ERROR" : _missingUncovered ? "1M DATA UNAVAILABLE" : "EXACT 1M"
+                string _st = _base + " | " + _ledger
+                color _statusBg = _missingCovered ? color.new(color.red,65) : _missingUncovered ? color.new(color.orange,70) : na
+                int _row = _r + 1
+                table.cell(weeklyTable,0,_row,"#"+str.tostring(_i+1))
+                table.cell(weeklyTable,1,_row,_ty)
+                table.cell(weeklyTable,2,_row,_z.bullish ? "BUY" : "SELL")
+                table.cell(weeklyTable,3,_row,str.tostring(_z.zb,format.mintick))
+                table.cell(weeklyTable,4,_row,str.tostring(_z.zt,format.mintick))
+                table.cell(weeklyTable,5,_row,_origin)
+                table.cell(weeklyTable,6,_row,_trig)
+                table.cell(weeklyTable,7,_row,na(_trigPx) ? "—" : str.tostring(_trigPx,format.mintick))
+                table.cell(weeklyTable,8,_row,_elig)
+                table.cell(weeklyTable,9,_row,na(_eligPx) ? "—" : str.tostring(_eligPx,format.mintick))
+                table.cell(weeklyTable,10,_row,_imp)
+                table.cell(weeklyTable,11,_row,na(_impPx) ? "—" : str.tostring(_impPx,format.mintick))
+                table.cell(weeklyTable,12,_row,_st,bgcolor=_statusBg)
+
+if barstate.islast
+    drawAll()
+    drawFocusedH4Audit()
+    drawCascadeTable()
+    drawWeeklyTable()
+
+// ===================== H4 OB IMPACT AUDIT =====================
+// The baseline H4 OB lifecycle owns impact.  The audit reads stopK directly:
+// one impact only, on the exact candle where the baseline OB box stops.
+var bool h4AuditLogged = false
+if barstate.islast and InpH4AuditLog and not h4AuditLogged
+    log.info("H4AUDIT_META|FROM_MS=" + str.tostring(h4AuditFrom) + "|TO_MS=" + str.tostring(last_bar_time))
+    log.info("H4AUDIT_HEADER|ID|W1_SETUP_ID|TYPE|SIDE|ORIGIN_MS|BOTTOM|TOP|IMPACT_MS|IMPACT_PRICE|STATUS")
+    int auditRows = 0
+    int nLinks = array.size(h4ParentObIdx)
+    if nLinks > 0
+        for li = 0 to nLinks - 1
+            int ai = array.get(h4ParentObIdx, li)
+            int parentId = array.get(h4ParentSetupId, li)
+            ObZone az = array.get(obs, ai)
+            int originT = az.candle >= 0 and az.candle < array.size(BT) ? array.get(BT, az.candle) : na
+            if not na(originT) and originT >= h4AuditFrom and (InpFocusWeeklySetupID == 0 or parentId == InpFocusWeeklySetupID)
+                int impactK = az.stopK
+                int ds = az.state == 3 ? az.preSpentState : az.state
+                string typ = ds == 0 ? "IFOB" : ds == 1 ? "AOB" : ds == 2 ? "OOB" : ds == 4 ? "AIFOB" : "SPENT"
+                string side = az.bullish ? "BUY" : "SELL"
+                bool hasImpact = impactK >= 0 and impactK < array.size(BT)
+                string impactT = hasImpact ? str.tostring(az.impactTime != -1 ? az.impactTime : array.get(BT, impactK)) : ""
+                string impactP = hasImpact ? str.tostring(az.bullish ? az.zt : az.zb) : ""
+                string status = hasImpact ? "IMPACTED" : "NO_IMPACT"
+                auditRows += 1
+                log.info("H4AUDIT_ROW|" + str.tostring(auditRows) + "|" + str.tostring(parentId) + "|" + typ + "|" + side + "|" + str.tostring(originT) + "|" + str.tostring(az.zb) + "|" + str.tostring(az.zt) + "|" + impactT + "|" + impactP + "|" + status)
+    log.info("H4AUDIT_END|ROWS=" + str.tostring(auditRows))
+    h4AuditLogged := true
