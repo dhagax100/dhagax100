@@ -6,17 +6,22 @@ h4_ob_engine.py/full_viewer.py, optionally scoped to one Weekly zone via
 --focus-weekly-id), runs a native 5m structure engine (reuses
 wob.WeeklyOBEngine's swing detection only -- its OB/lifecycle machinery is
 not needed at 5m and is ignored) to find the resting swing and entry
-candidate, races entry against candidate replacement and H4 far-boundary
-breach, then computes the structural SL and fixed 3R TP.
+candidate, races entry against candidate replacement and against
+invalidation, then computes the structural SL and fixed 3R TP.
+
+Invalidation is NOT a raw 1m wick touching the H4 OB's far boundary -- an
+earlier version used that and killed setups where price wicked through the
+zone and was later respected. Two confirmed conditions instead, whichever
+comes first: (a) a fully completed H4 candle whose CLOSE breaches the far
+boundary, or (b) a confirmed 5m swing of the resting kind whose own price
+already exceeds the far boundary. Both require confirmation, not a raw tick.
 
 SCOPE OF THIS FIRST PASS -- explicitly NOT yet implemented:
   - Break-even (SPEC.md SS25): not computed. Every trade record's
-    effective stop equals its original SL.
+    effective stop equals its original SL. Deferred until after MFE/MAE
+    are recorded, per the user's explicit instruction.
   - Post-SL re-entry (SS27): not computed. Each H4 OB gets at most one
     BSO attempt.
-  - "Completed-H4 close invalidation" (SS22's second race condition): only
-    the exact-1m far-boundary breach is checked. A completed-H4-candle
-    -close-based invalidation is not yet implemented.
   - MFE/MAE (SS34): not computed.
 These are follow-up stages, matching the build order's own stage split
 (SS36 stages 11-12 vs 13). Every record is clearly one BSO attempt, not a
@@ -82,7 +87,8 @@ def aggregate_5m(minutes: List["wob.Minute"]) -> List["wob.Week"]:
 
 
 def run_bso(z, it: datetime, five_bar_starts: List[datetime], five_events: List["wob.Event"],
-            minutes: List["wob.Minute"], mt: List[datetime]) -> Dict:
+            minutes: List["wob.Minute"], mt: List[datetime],
+            h4_bars: List["wob.Week"], h4_bar_starts: List[datetime]) -> Dict:
     bull = z.bullish
     need_rest_kind = 1 if bull else 0   # bullish BSO needs a resting LOW inside the H4 POI
     need_cand_kind = 0 if bull else 1   # bearish BSO needs a resting HIGH; candidate is the opposite kind
@@ -116,31 +122,63 @@ def run_bso(z, it: datetime, five_bar_starts: List[datetime], five_events: List[
         key=lambda e: e.at)
 
     far_boundary = z.zb if bull else z.zt
+
+    # Invalidation: NOT a raw 1m wick touching the far boundary any more --
+    # that killed setups that wicked through and were later respected. Two
+    # confirmed conditions instead, whichever comes first:
+    #  (a) a fully COMPLETED H4 candle whose CLOSE breaches the far boundary
+    #      (a body close through the zone, not a wick);
+    #  (b) a CONFIRMED 5m swing of the resting kind whose own price already
+    #      exceeds the far boundary (a genuine structural break, faster to
+    #      arrive than waiting a full H4 candle, but still a confirmed swing
+    #      rather than raw 1m noise).
+    h4_close_invalid_at = None
+    h4_start_idx = bisect_left(h4_bar_starts, resting.at)
+    for hb in h4_bars[h4_start_idx:]:
+        breach = (hb.c < far_boundary) if bull else (hb.c > far_boundary)
+        if breach:
+            h4_close_invalid_at = hb.end
+            break
+
+    swing_exceed_at = None
+    for ev in events_sorted:
+        if ev.kind != need_rest_kind or ev.at is None or ev.at <= resting.at:
+            continue
+        exceeded = (ev.price < far_boundary) if bull else (ev.price > far_boundary)
+        if exceeded:
+            swing_exceed_at = ev.at
+            break
+
+    invalid_candidates = [t for t in (h4_close_invalid_at, swing_exceed_at) if t is not None]
+    invalidated_at = min(invalid_candidates) if invalid_candidates else None
+
     idx = bisect_left(mt, resting.at)
     entry_m = None
-    invalidated_at = None
+    stopped = False
     cand_ptr = 0
     replacements = 0
     current = candidate
+    current_since = resting.at
     for i in range(idx, len(minutes)):
         m = minutes[i]
         while cand_ptr < len(later_candidates) and later_candidates[cand_ptr].at <= m.t:
             current = later_candidates[cand_ptr]
+            current_since = current.at
             replacements += 1
             cand_ptr += 1
         broke = (m.h > current.price) if bull else (m.l < current.price)
         if broke:
             entry_m = m
             break
-        breach = (m.l < far_boundary) if bull else (m.h > far_boundary)
-        if breach:
-            invalidated_at = m.t
+        if invalidated_at is not None and m.t >= invalidated_at:
+            stopped = True
             break
 
     if entry_m is None:
-        return dict(stage="H4_OB_BREACHED" if invalidated_at else "NO_ENTRY_IN_DATA",
+        return dict(stage="H4_OB_BREACHED" if stopped else "NO_ENTRY_IN_DATA",
                     resting_at=resting.at, candidate_price=current.price, replacements=replacements,
-                    invalidated_at=invalidated_at)
+                    invalidated_at=invalidated_at,
+                    invalidation_reason=("h4_close" if invalidated_at == h4_close_invalid_at else "swing_exceed") if stopped else None)
 
     entry_price = current.price
     entry_time = entry_m.t
@@ -177,6 +215,7 @@ def run_bso(z, it: datetime, five_bar_starts: List[datetime], five_events: List[
 
     return dict(stage="ENTERED", resting_at=resting.at, resting_price=resting.price,
                 candidate_price=entry_price, replacements=replacements,
+                candidate_since=current_since,
                 entry_time=entry_time, entry_price=entry_price,
                 sl_price=sl_price, risk=risk, tp_price=tp_price,
                 result=result or "OPEN", exit_time=exit_time, exit_price=exit_price)
@@ -239,6 +278,7 @@ def main() -> int:
     print(f"{len(targets)} authorized 4H OBs to run BSO on"
           + (f" (--focus-weekly-id {args.focus_weekly_id})" if args.focus_weekly_id else ""))
 
+    h4_bar_starts = [b.start for b in h4_bars]
     five_bars = aggregate_5m(minutes)
     five_bar_starts = [b.start for b in five_bars]
     five_engine = wob.WeeklyOBEngine(minutes, five_bars, origin_gap_window=None)
@@ -246,11 +286,12 @@ def main() -> int:
 
     rows = []
     for z, it, parent_id in targets:
-        res = run_bso(z, it, five_bar_starts, five_engine.events, minutes, mt)
+        res = run_bso(z, it, five_bar_starts, five_engine.events, minutes, mt, h4_bars, h4_bar_starts)
         row = dict(
             h4_ob_id=z.id, parent_weekly_id=parent_id, side="BUY" if z.bullish else "SELL",
             h4_impact_riyadh=wob.display_iso(it, display_tz), stage=res.get("stage"),
             resting_riyadh=wob.display_iso(res.get("resting_at"), display_tz),
+            candidate_since_riyadh=wob.display_iso(res.get("candidate_since"), display_tz),
             entry_riyadh=wob.display_iso(res.get("entry_time"), display_tz),
             entry_price="" if res.get("entry_price") is None else f"{res['entry_price']:.5f}",
             sl_price="" if res.get("sl_price") is None else f"{res['sl_price']:.5f}",
@@ -260,12 +301,15 @@ def main() -> int:
             result=res.get("result", ""),
             exit_riyadh=wob.display_iso(res.get("exit_time"), display_tz),
             exit_price="" if res.get("exit_price") is None else f"{res['exit_price']:.5f}",
+            invalidated_riyadh=wob.display_iso(res.get("invalidated_at"), display_tz),
+            invalidation_reason=res.get("invalidation_reason", ""),
         )
         rows.append(row)
 
     fields = ["h4_ob_id", "parent_weekly_id", "side", "h4_impact_riyadh", "stage", "resting_riyadh",
-              "entry_riyadh", "entry_price", "sl_price", "risk_price", "tp_price",
-              "candidate_replacements", "result", "exit_riyadh", "exit_price"]
+              "candidate_since_riyadh", "entry_riyadh", "entry_price", "sl_price", "risk_price", "tp_price",
+              "candidate_replacements", "result", "exit_riyadh", "exit_price",
+              "invalidated_riyadh", "invalidation_reason"]
     with (base / "five_bso_ledger.csv").open("w", newline="", encoding="utf-8") as f:
         wr = csv.DictWriter(f, fieldnames=fields)
         wr.writeheader()

@@ -19,6 +19,13 @@ no separate engine run, no separate array packing. Same boxes, same times,
 just an extra chart to draw on, matching how the Weekly layer already
 renders unchanged on the H4 chart.
 
+A third, 5m-only layer (`onFive`, see build_bso_extra_lines) runs
+five_bso_engine.run_bso() on exactly the OBs drawn above and shows the entry
+machine: a blue line at the entry/candidate price from when that candidate
+became active to the moment price broke it, then a red line (SL hit first)
+or green line (TP hit first) at that level from entry to the exit minute.
+Writes five_bso_ledger.csv alongside h4_ob_ledger.csv.
+
 Each drawn H4 OB also carries `parent_weekly_id`, read from
 weekly_control_ledger.csv's `controlling_zone_id` column (SPEC.md SS17
 "Parent Weekly POI").
@@ -44,6 +51,7 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import weekly_ob_generator as wob  # noqa: E402  (locked engine, unmodified)
 import h4_ob_engine as h4          # noqa: E402  (reuses its aggregate_h4/permits)
+import five_bso_engine as bso      # noqa: E402  (reuses its aggregate_5m/run_bso)
 
 UTC = timezone.utc
 
@@ -241,6 +249,63 @@ def build_h4_extra_lines(h4_engine, h4_bars, drawn: List[tuple], ob_cap: int, di
     return lines
 
 
+def build_bso_extra_lines(bso_results: List[tuple]) -> List[str]:
+    """5m entry-machine visualization -- 5m chart only (`onFive`), nothing on
+    H4/Weekly: this is 5m execution detail, not higher-timeframe structure.
+
+    For every H4 OB whose BSO run reached ENTERED:
+      - a BLUE horizontal line at the entry/candidate price, from the moment
+        that candidate became the active trigger (`candidate_since` -- the
+        resting swing's time for the original candidate, or a later
+        candidate's own confirm time if it replaced the original one) to the
+        moment price broke it (the entry minute).
+      - a RED horizontal line at the SL price, from entry to the exact
+        minute price reached it, if SL was hit first.
+      - a GREEN horizontal line at the TP price, from entry to the exact
+        minute price reached it, if TP was hit first.
+    Nothing is drawn for an H4 OB whose BSO never reached an entry
+    (H4_OB_BREACHED, NO_RESTING_SWING, etc) -- there is no entry to show.
+    OPEN/AMBIGUOUS results get the blue line but no red/green, since the
+    outcome isn't resolved (OPEN) or isn't orderable from 1m OHLC alone
+    (AMBIGUOUS)."""
+    blefts, brights, bys = [], [], []
+    clefts, crights, cys, ccols = [], [], [], []
+    for _z, _it, res in bso_results:
+        if res.get("stage") != "ENTERED":
+            continue
+        cs, entry_t, entry_p = res.get("candidate_since"), res.get("entry_time"), res.get("entry_price")
+        if cs is not None and entry_t is not None and entry_p is not None:
+            blefts.append(pine_time(cs))
+            brights.append(pine_time(entry_t))
+            bys.append(f"{entry_p:.5f}")
+        result = res.get("result")
+        exit_t, exit_p = res.get("exit_time"), res.get("exit_price")
+        if result in ("SL", "TP") and entry_t is not None and exit_t is not None and exit_p is not None:
+            clefts.append(pine_time(entry_t))
+            crights.append(pine_time(exit_t))
+            cys.append(f"{exit_p:.5f}")
+            ccols.append("color.red" if result == "SL" else "color.green")
+
+    def arr(kind: str, values: List[str]) -> str:
+        return f"array.from({', '.join(values)})" if values else f"array.new<{kind}>()"
+
+    return [
+        f"var array<int> bsoBLeft = {arr('int', blefts)}",
+        f"var array<int> bsoBRight = {arr('int', brights)}",
+        f"var array<float> bsoBY = {arr('float', bys)}",
+        f"var array<int> bsoCLeft = {arr('int', clefts)}",
+        f"var array<int> bsoCRight = {arr('int', crights)}",
+        f"var array<float> bsoCY = {arr('float', cys)}",
+        f"var array<color> bsoCCol = {arr('color', ccols)}",
+        "if barstate.islast",
+        "    if onFive",
+        "        for i = 0 to array.size(bsoBLeft) - 1",
+        "            line.new(array.get(bsoBLeft, i), array.get(bsoBY, i), array.get(bsoBRight, i), array.get(bsoBY, i), xloc=xloc.bar_time, extend=extend.none, color=color.blue, width=2)",
+        "        for i = 0 to array.size(bsoCLeft) - 1",
+        "            line.new(array.get(bsoCLeft, i), array.get(bsoCY, i), array.get(bsoCRight, i), array.get(bsoCY, i), xloc=xloc.bar_time, extend=extend.none, color=array.get(bsoCCol, i), width=2)",
+    ]
+
+
 def main() -> int:
     args = parse_args()
     path = Path(args.csv_file).expanduser().resolve()
@@ -339,8 +404,51 @@ def main() -> int:
         if matching_weeks:
             window_start = weeks[min(matching_weeks)].start
             window_end = weeks[max(matching_weeks)].end
-    extra_lines = build_h4_extra_lines(h4_engine, h4_bars, focused_drawn, args.h4_pine_obs, display_tz,
-                                       window_start, window_end, args.h4_pine_labels)
+    h4_extra_lines = build_h4_extra_lines(h4_engine, h4_bars, focused_drawn, args.h4_pine_obs, display_tz,
+                                          window_start, window_end, args.h4_pine_labels)
+
+    # 5m BSO layer: run the entry engine on exactly the OBs drawn above (same
+    # window, same authorization gate -- "the OBs of this window only").
+    mt = [m.t for m in minutes]
+    h4_bar_starts = [b.start for b in h4_bars]
+    five_bars = bso.aggregate_5m(minutes)
+    five_bar_starts = [b.start for b in five_bars]
+    five_engine = wob.WeeklyOBEngine(minutes, five_bars, origin_gap_window=None)
+    five_engine.run()
+    bso_results = []
+    for z, tt, tp, et, ep, it, parent_id in focused_drawn:
+        res = bso.run_bso(z, it, five_bar_starts, five_engine.events, minutes, mt, h4_bars, h4_bar_starts)
+        bso_results.append((z, it, res))
+    bso_extra_lines = build_bso_extra_lines(bso_results)
+
+    bso_id_to_parent = {z.id: parent_id for z, *_rest, parent_id in focused_drawn}
+    with (base / "five_bso_ledger.csv").open("w", newline="", encoding="utf-8") as f:
+        fields = ["h4_ob_id", "parent_weekly_id", "side", "h4_impact_riyadh", "stage", "resting_riyadh",
+                  "candidate_since_riyadh", "entry_riyadh", "entry_price", "sl_price", "risk_price", "tp_price",
+                  "candidate_replacements", "result", "exit_riyadh", "exit_price",
+                  "invalidated_riyadh", "invalidation_reason"]
+        wr = csv.DictWriter(f, fieldnames=fields)
+        wr.writeheader()
+        for z, it, res in bso_results:
+            wr.writerow(dict(
+                h4_ob_id=z.id, parent_weekly_id=bso_id_to_parent.get(z.id, ""), side="BUY" if z.bullish else "SELL",
+                h4_impact_riyadh=wob.display_iso(it, display_tz), stage=res.get("stage"),
+                resting_riyadh=wob.display_iso(res.get("resting_at"), display_tz),
+                candidate_since_riyadh=wob.display_iso(res.get("candidate_since"), display_tz),
+                entry_riyadh=wob.display_iso(res.get("entry_time"), display_tz),
+                entry_price="" if res.get("entry_price") is None else f"{res['entry_price']:.5f}",
+                sl_price="" if res.get("sl_price") is None else f"{res['sl_price']:.5f}",
+                risk_price="" if res.get("risk") is None else f"{res['risk']:.5f}",
+                tp_price="" if res.get("tp_price") is None else f"{res['tp_price']:.5f}",
+                candidate_replacements=res.get("replacements", ""),
+                result=res.get("result", ""),
+                exit_riyadh=wob.display_iso(res.get("exit_time"), display_tz),
+                exit_price="" if res.get("exit_price") is None else f"{res['exit_price']:.5f}",
+                invalidated_riyadh=wob.display_iso(res.get("invalidated_at"), display_tz),
+                invalidation_reason=res.get("invalidation_reason", ""),
+            ))
+
+    extra_lines = h4_extra_lines + bso_extra_lines
 
     wob.write_ob_pine(base, weekly_engine, args.pine_labels, args.pine_obs, args.pine_table,
                        args.box_body_minutes, display_tz, args.origin_first_price,
@@ -349,11 +457,15 @@ def main() -> int:
     wob.write_report(base, minutes, weeks, warnings, weekly_engine, args)
 
     print("Created:")
-    print("  full_viewer.pine   (Weekly layer unchanged + separate 4H layer/table)")
-    print("  h4_ob_ledger.csv")
+    print("  full_viewer.pine   (Weekly layer + 4H layer/table + 5m BSO entry lines)")
+    print("  h4_ob_ledger.csv, five_bso_ledger.csv")
     print("  weekly_ob_ledger.csv, weekly_ob_swings.csv, weekly_ob_report.txt")
     focus_note = f", {len(focused_drawn)} shown (--focus-weekly-id {args.focus_weekly_id})" if args.focus_weekly_id else ""
     print(f"{len(h4_bars)} 4H bars, {len(h4_engine.zones)} H4 OBs computed, {len(drawn)} drawn (impacted + authorized){focus_note}.")
+    bso_stages = {}
+    for _z, _it, res in bso_results:
+        bso_stages[res.get("stage")] = bso_stages.get(res.get("stage"), 0) + 1
+    print(f"5m BSO on {len(bso_results)} drawn OBs: {bso_stages}")
     return 0
 
 
