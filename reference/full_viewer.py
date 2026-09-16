@@ -56,7 +56,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--pine-labels", type=int, default=120, choices=range(1, 161))
     p.add_argument("--pine-obs", type=int, default=120, choices=range(1, 451))
     p.add_argument("--pine-table", type=int, default=20, choices=range(1, 21))
-    p.add_argument("--h4-anchor-hour", type=int, default=0, choices=range(4), help="UTC hour the 4H grid starts from. VERIFY against the real chart.")
+    p.add_argument("--h4-anchor-hour", type=int, default=1, choices=range(4), help="UTC hour the 4H grid starts from (1 => 01/05/09/13/17/21 UTC = 04/08/12/16/20/00 Riyadh). Chart-verified 2026-09-16 against a real FXCM 4H candle open at 16:00 Riyadh (=13:00 UTC).")
     p.add_argument("--h4-pine-obs", type=int, default=200, choices=range(1, 451))
     p.add_argument("--h4-pine-labels", type=int, default=80, choices=range(1, 161), help="max recent H4 swing-high/swing-low/MSS labels shown (each)")
     p.add_argument("--control-ledger", default=None)
