@@ -497,7 +497,7 @@ def main() -> int:
     # yield more than one attempt.
     bso_results = []
     for z, tt, tp, et, ep, it, parent_id in focused_drawn:
-        invalidated_at, invalidation_reason = bso.structural_invalid_at(z, it, h4_bars, h4_bar_starts, h4_engine.msses, minutes)
+        invalidated_at, invalidation_reason = bso.structural_invalid_at(z, it, h4_bars, h4_bar_starts, h4_engine.events, minutes, mt)
         attempts = bso.run_bso_chain(z, it, five_bar_starts, five_engine.events, minutes, mt, invalidated_at)
         for res in attempts:
             bso_results.append((z, it, parent_id, invalidation_reason, res))

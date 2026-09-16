@@ -11,16 +11,23 @@ invalidation, then computes the structural SL and fixed 3R TP.
 
 Invalidation is computed once per OB by `structural_invalid_at()` (SPEC.md
 SS17's parent-POI premise, per the user's explicit rule, 2026-09-16) --
-NOT a raw 1m wick touching the H4 OB's far boundary, and NOT "any new 4H
-swing forms" (two earlier, progressively-corrected approximations). The OB
-stays valid until whichever of these happens first:
+NOT a raw 1m wick touching the H4 OB's far boundary, NOT "any new 4H swing
+forms", and NOT "a formal MSS against the OB's bias" (three progressively
+corrected approximations). The OB stays valid until whichever of these
+happens first:
   (a) 'h4_close' -- a fully completed H4 candle closes its BODY at or
       beyond the NEAR boundary (the side price approaches the zone from).
       Per the user: every POI except FVG invalidates on a body close either
       inside its zone or through it -- a bare wick doesn't count.
-  (b) 'mss_break' -- the specific 4H swing that supports/protects this OB
-      gets broken: a confirmed MSS against the OB's own bias (a bullish MSS
-      for a SELL OB, a bearish MSS for a BUY OB). Not just any new swing.
+  (b) 'swing_break' -- the specific 4H swing currently protecting this OB
+      (the last confirmed swing of the protecting kind at/before impact)
+      gets exceeded, at the exact 1m moment it happens -- whether or not
+      the core engine's own regime tracking classifies that as a formal
+      MSS. It usually does (that's why the "MSS against the OB's bias"
+      approximation worked for a while), but not always: a SELL OB sitting
+      inside an already-local-uptrend pullback has no down-regime left to
+      shift FROM, so a continuation swing taking out its supporting high
+      never registers as an MSS, even though the OB is just as dead.
 Both require confirmation, never a raw tick or an unrelated swing.
 
 Post-SL re-entry (SS27, made universal per the user's explicit instruction,
@@ -219,24 +226,13 @@ def run_bso(z, it: datetime, five_bar_starts: List[datetime], five_events: List[
                 result=result or "OPEN", exit_time=exit_time, exit_price=exit_price)
 
 
-def mss_confirm_time(mss: "wob.MSS", h4_bars: List["wob.Week"], minutes: List["wob.Minute"]) -> datetime:
-    """Exact 1m confirmation time for a native-4H MSS event: scan the
-    confirming H4 bar's own minutes for the first strict cross of the
-    broken swing's price, the same way the locked engine itself resolves a
-    promoted trigger's exact minute (see set_promoted_ifob_trigger)."""
-    hb = h4_bars[mss.at]
-    for m in minutes[hb.first:hb.last]:
-        if (m.h > mss.price) if mss.up else (m.l < mss.price):
-            return m.t
-    return hb.start
-
-
 def structural_invalid_at(z, it: datetime, h4_bars: List["wob.Week"], h4_bar_starts: List[datetime],
-                           h4_msses: List["wob.MSS"], minutes: List["wob.Minute"]) -> Tuple[Optional[datetime], Optional[str]]:
+                           h4_events: List["wob.Event"], minutes: List["wob.Minute"], mt: List[datetime]
+                           ) -> Tuple[Optional[datetime], Optional[str]]:
     """When does this H4 OB's own structural premise stop being valid, per
-    the user's explicit rule (2026-09-16, correcting an earlier, cruder
-    approximation): whichever of these happens first, computed once from the
-    OB's own impact time --
+    the user's explicit rule (2026-09-16, twice corrected -- see below):
+    whichever of these happens first, computed once from the OB's own
+    impact time --
       (a) 'h4_close' -- a fully completed H4 candle closes its BODY at or
           beyond the NEAR boundary (the side price approaches the zone
           from -- zb for a SELL OB approached from below, zt for a BUY OB
@@ -244,23 +240,36 @@ def structural_invalid_at(z, it: datetime, h4_bars: List["wob.Week"], h4_bar_sta
           invalidates on a body close either inside its zone or through it
           -- a bare wick, or a close that hasn't even reached the zone yet,
           does not count.
-      (b) 'mss_break' -- the specific 4H swing that supports/protects this
-          OB gets broken: a confirmed MSS AGAINST the OB's own bias (a
-          bullish MSS for a SELL OB, a bearish MSS for a BUY OB) whose
-          broken swing sits on the PROTECTING side of the OB's own zone --
-          above zt for a SELL OB, below zb for a BUY OB. This replaces an
-          earlier, wrong stand-in ("any new 4H swing at all, either
-          direction") that the user corrected: "we do not have swing point
-          breach unless you confuse it [with] OB box breach... a downtrend
-          IFOB has a swing high ABOVE it that if broken will change MSS to
-          up -- that is it." A real bug in the first version of this fix
-          (found via OB #186, 2026-09-16): it accepted the first opposing
-          MSS anywhere, including one breaking an unrelated swing far below
-          the OB's own zone -- structurally meaningless to this OB, since
-          price never even reached back up near it. Filtering to the
-          protecting side fixed it: #186's real supporting swing doesn't
-          break until 2026-05-27, five days later than the first (wrong)
-          answer.
+      (b) 'swing_break' -- the specific 4H swing that currently
+          supports/protects this OB gets exceeded. That swing is simply the
+          LAST native-4H swing of the protecting kind (a swing HIGH for a
+          SELL OB, a swing LOW for a BUY OB) confirmed at or before the
+          OB's own impact -- whatever swing happens to be "the one in
+          force" at the moment of impact. Invalidation is the exact 1m
+          moment price first crosses that swing's price afterward.
+
+          This does NOT require a formal MSS (regime-shift) classification
+          from the core engine -- corrected 2026-09-16 per the user, on OB
+          #190: "190 is AOB, meaning we are uptrend, so price took the
+          supporting swing high, this is not MSS to up and it does not
+          have to be, but our whole pull back leg is blown and our OB is
+          no longer there." An earlier version of this rule only counted a
+          break when the core engine's own regime tracking happened to
+          also register it as an MSS -- true for #190 by coincidence (the
+          engine was still in a down regime), but not something to depend
+          on: a SELL OB sitting inside what's already a local uptrend has
+          no down-regime left to flip FROM, so the engine would never
+          register a "MSS to up" for a continuation swing there, even
+          though the swing that supported this specific OB was still
+          genuinely taken out. Checking the raw swing sequence directly,
+          independent of MSS classification, fixes this for both cases.
+
+          Before that, an even earlier version accepted "any new 4H swing
+          at all, either direction" -- corrected first to "an MSS on the
+          protecting side" (fixing OB #186, where an unrelated MSS far
+          below the OB's own zone was wrongly counted), and now to this:
+          "the specific swing this OB depends on, exceeded, whether or not
+          that counts as an MSS."
     Returns (time, reason); (None, None) if the OB is never structurally
     invalidated in the available data.
 
@@ -288,17 +297,21 @@ def structural_invalid_at(z, it: datetime, h4_bars: List["wob.Week"], h4_bar_sta
             h4_close_invalid_at = hb.end
             break
 
-    want_up = not bull
-    protecting = z.zb if bull else z.zt
-    mss_times = [mss_confirm_time(m, h4_bars, minutes) for m in h4_msses
-                 if m.up == want_up and ((m.price < protecting) if bull else (m.price > protecting))]
-    mss_times = [t for t in mss_times if t > it]
-    mss_break_at = min(mss_times) if mss_times else None
+    protect_kind = 1 if bull else 0  # swing LOW protects a BUY OB; swing HIGH protects a SELL OB
+    protecting_events = [e for e in h4_events if e.kind == protect_kind and e.at is not None and e.at <= it]
+    swing_break_at = None
+    if protecting_events:
+        protecting_price = max(protecting_events, key=lambda e: e.at).price
+        idx = bisect_right(mt, it)
+        for m in minutes[idx:]:
+            if (m.l < protecting_price) if bull else (m.h > protecting_price):
+                swing_break_at = m.t
+                break
 
-    if h4_close_invalid_at is not None and (mss_break_at is None or h4_close_invalid_at <= mss_break_at):
+    if h4_close_invalid_at is not None and (swing_break_at is None or h4_close_invalid_at <= swing_break_at):
         return h4_close_invalid_at, "h4_close"
-    if mss_break_at is not None:
-        return mss_break_at, "mss_break"
+    if swing_break_at is not None:
+        return swing_break_at, "swing_break"
     return None, None
 
 
@@ -431,7 +444,7 @@ def main() -> int:
 
     rows = []
     for z, it, parent_id in targets:
-        invalidated_at, invalidation_reason = structural_invalid_at(z, it, h4_bars, h4_bar_starts, h4_engine.msses, minutes)
+        invalidated_at, invalidation_reason = structural_invalid_at(z, it, h4_bars, h4_bar_starts, h4_engine.events, minutes, mt)
         attempts = run_bso_chain(z, it, five_bar_starts, five_engine.events, minutes, mt, invalidated_at)
         for res in attempts:
             row = dict(
