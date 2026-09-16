@@ -158,12 +158,12 @@ def run_bso(z, it: datetime, five_bar_starts: List[datetime], five_events: List[
     cand_ptr = 0
     replacements = 0
     current = candidate
-    current_since = resting.at
+    current_since = five_bar_starts[current.swing]
     for i in range(idx, len(minutes)):
         m = minutes[i]
         while cand_ptr < len(later_candidates) and later_candidates[cand_ptr].at <= m.t:
             current = later_candidates[cand_ptr]
-            current_since = current.at
+            current_since = five_bar_starts[current.swing]
             replacements += 1
             cand_ptr += 1
         broke = (m.h > current.price) if bull else (m.l < current.price)

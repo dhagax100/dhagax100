@@ -260,11 +260,15 @@ def build_bso_extra_lines(bso_results: List[tuple], display_tz: ZoneInfo) -> Lis
     isolated the same way a single H4 OB already can.
 
     For an attempt that reached ENTERED:
-      - a BLUE horizontal line at the entry/candidate price, from the moment
-        that candidate became the active trigger (`candidate_since` -- the
-        resting swing's time for the original candidate, or a later
-        candidate's own confirm time if it replaced the original one) to the
-        moment price broke it (the entry minute).
+      - a BLUE horizontal line at the entry/candidate price, from the
+        winning candidate swing's OWN bar (`candidate_since` -- where that
+        exact price level first printed as a 5m swing, whichever candidate
+        ultimately won after any replacements) to the moment price broke it
+        (the entry minute). Anchoring to the swing's own bar rather than to
+        when it merely became "the active one being watched" (an earlier
+        version) matters when a resting swing forms only a few minutes
+        before entry -- that earlier definition could collapse to a line so
+        short it was effectively invisible on the chart.
       - a RED horizontal line at the SL price, from entry to the exact
         minute price reached it, if SL was hit first.
       - a GREEN horizontal line at the TP price, from entry to the exact
