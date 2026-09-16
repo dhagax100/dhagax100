@@ -33,7 +33,7 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -83,10 +83,20 @@ def is_pro(z: "wob.Zone", trend: int) -> bool:
     return False
 
 
-def is_alive(z: "wob.Zone") -> bool:
+def is_alive_state(state: Optional[int], rejected: bool) -> bool:
     """Not rejected, not OOB (stranded), not yet spent -- i.e. still capable
-    of forcing or contributing to control."""
-    return not z.rejected and z.state in (0, 1, 4)
+    of forcing or contributing to control.
+
+    Takes a (state, rejected) SNAPSHOT, never a live Zone object -- see
+    `state_by_week` below for why. A zone not yet created as of the week in
+    question (state is None) is not alive."""
+    return state is not None and not rejected and state in (0, 1, 4)
+
+
+def is_spent_state(state: Optional[int], rejected: bool) -> bool:
+    """Reached its own impact reaction (SPENT) and isn't rejected, as of a
+    given week snapshot -- see `state_by_week` below."""
+    return state == 3 and not rejected
 
 
 def run(args: argparse.Namespace) -> int:
@@ -106,15 +116,43 @@ def run(args: argparse.Namespace) -> int:
     # Drive the locked engine week-by-week (instead of engine.run()) purely to
     # capture its regime AFTER each week, since WeeklyOBEngine only exposes
     # final state. This changes nothing about how each week is processed.
+    #
+    # Real bug fixed 2026-09-16 (user-caught): an earlier version ran this
+    # loop to completion (processing the ENTIRE dataset) before the control
+    # loop below even started, then had every is_alive()/newly_oob check in
+    # that control loop read live z.state/z.rejected off the SAME mutable
+    # Zone objects -- which by then already reflected each zone's FINAL,
+    # end-of-dataset outcome, not its state as of the week actually being
+    # examined. Concretely: at the week zone #5 (BUY) got impacted, zone #8
+    # (SELL) was genuinely still alive (only triggered, not yet spent) -- but
+    # the old code saw zone #8's eventual SPENT state from two and a half
+    # months later, and wrongly answered "no live sell zone" (a direct
+    # switch to BUY_ONLY) instead of "yes" (BOTH, per SS12). Every
+    # is_alive()-style check in this module was equally exposed to this,
+    # not just that one case.
+    #
+    # Fixed by snapshotting each zone's own (state, rejected) immediately
+    # after processing each week -- before any later week's processing can
+    # move that zone further -- and having every later check read from that
+    # week's snapshot (`state_by_week[k]`) instead of the live, ever-mutating
+    # Zone object. `bullish`/`candle`/`created_state`/`id` are set once at a
+    # zone's creation and never mutated afterward by the locked engine, so
+    # those remain safe to read straight off the live object at any point --
+    # only `state` and `rejected` (the two fields the locked engine keeps
+    # advancing as later weeks are processed) needed this treatment.
     trend_at: List[int] = []
+    state_by_week: List[Dict[int, Tuple[int, bool]]] = []
     for k in range(len(weeks)):
         engine.process(k)
         trend_at.append(engine.regime)
+        state_by_week.append({z.id: (z.state, z.rejected) for z in engine.zones})
 
     n = len(weeks)
-    # Week -> zones impacted that week (already-finalized facts, safe to index
-    # post-hoc since we only ever look at week k using trend_at[<=k] and zone
-    # facts whose own week index is <= k).
+    # Week -> zones impacted that week. Safe to index post-hoc off the FINAL
+    # zone list: a zone's impact week (`z.stop`) and its ever having reached
+    # SPENT are both facts fixed permanently at the exact moment they
+    # happen, not "current state as of week k" -- unlike is_alive(), there is
+    # no lookahead risk in bucketing by them.
     impacts_by_week: Dict[int, List["wob.Zone"]] = {}
     for z in engine.zones:
         if z.state == 3 and 0 <= z.stop < n:
@@ -122,7 +160,8 @@ def run(args: argparse.Namespace) -> int:
     swing_high_weeks = sorted({e.confirm for e in engine.events if e.kind == 0})
     swing_low_weeks = sorted({e.confirm for e in engine.events if e.kind == 1})
 
-    # Track OOB/rejected transitions week-by-week for "loses control".
+    # Track OOB/rejected transitions week-by-week for "loses control", from
+    # the per-week snapshot -- not live z.state, for the same reason as above.
     prev_state: Dict[int, int] = {}
     prev_rejected: Dict[int, bool] = {}
 
@@ -150,20 +189,23 @@ def run(args: argparse.Namespace) -> int:
             # straight through a trend flip until one of those rules fires.
             log(k, "TREND_FLIP", f"Weekly trend -> {trend}", None)
 
-        zones_this_week = [z for z in engine.zones if z.candle <= k]
+        snapshot_k = state_by_week[k]
+        zones_this_week = [z for z in engine.zones if z.id in snapshot_k]
         impacts_this_week = impacts_by_week.get(k, [])
 
-        # OOB / rejection transitions this week, for "loses control".
-        newly_oob, newly_rejected = [], []
+        # OOB / rejection transitions this week, for "loses control". Reads
+        # this week's snapshot, not live z.state -- see the fix note above.
+        newly_oob_ids, newly_rejected_ids = set(), set()
         for z in zones_this_week:
+            state_now, rejected_now = snapshot_k[z.id]
             was_state = prev_state.get(z.id, z.created_state)
             was_rej = prev_rejected.get(z.id, False)
-            if z.state == 2 and was_state != 2:
-                newly_oob.append(z)
-            if z.rejected and not was_rej:
-                newly_rejected.append(z)
-            prev_state[z.id] = z.state
-            prev_rejected[z.id] = z.rejected
+            if state_now == 2 and was_state != 2:
+                newly_oob_ids.add(z.id)
+            if rejected_now and not was_rej:
+                newly_rejected_ids.add(z.id)
+            prev_state[z.id] = state_now
+            prev_rejected[z.id] = rejected_now
 
         if trend == "UNDEFINED":
             weekly_rows.append((k, trend, control, "", ""))
@@ -196,7 +238,10 @@ def run(args: argparse.Namespace) -> int:
         if control in ("BUY_ONLY", "SELL_ONLY"):
             opp_impacts = [z for z in impacts_this_week if z.bullish != control_bull]
             if opp_impacts:
-                old_side_alive = any(z.bullish == control_bull and is_alive(z) for z in engine.zones if z.candle <= k)
+                old_side_alive = any(
+                    z.bullish == control_bull and is_alive_state(*snapshot_k[z.id])
+                    for z in engine.zones if z.id in snapshot_k
+                )
                 if old_side_alive:
                     control = "BOTH"
                     controlling_zone_id = None
@@ -217,8 +262,14 @@ def run(args: argparse.Namespace) -> int:
             # try both directions as "the opposing side that could take over."
             for candidate_bull in (True, False):
                 need_kind_weeks = swing_high_weeks if candidate_bull else swing_low_weeks
-                candidates = [z for z in engine.zones if z.bullish == candidate_bull and z.state == 3 and not z.rejected]
-                other_side_alive = any(z.bullish != candidate_bull and is_alive(z) for z in engine.zones if z.candle <= k)
+                candidates = [
+                    z for z in engine.zones
+                    if z.bullish == candidate_bull and z.id in snapshot_k and is_spent_state(*snapshot_k[z.id])
+                ]
+                other_side_alive = any(
+                    z.bullish != candidate_bull and is_alive_state(*snapshot_k[z.id])
+                    for z in engine.zones if z.id in snapshot_k
+                )
                 if other_side_alive:
                     continue
                 for z in candidates:
@@ -239,12 +290,18 @@ def run(args: argparse.Namespace) -> int:
         # 4) Opposing loses control: the controlling zone breaches.
         if controlling_opp is not None:
             opp_zone = next((z for z in engine.zones if z.id == controlling_opp), None)
-            if opp_zone is not None and opp_zone in newly_oob + newly_rejected:
+            if opp_zone is not None and (controlling_opp in newly_oob_ids or controlling_opp in newly_rejected_ids):
                 log(k, "OPPOSING_LOSES_CONTROL", f"Zone {controlling_opp} breached", controlling_opp)
                 controlling_opp = None
                 controlling_zone_id = None
-                other_opp_alive = any(z.bullish != control_bull and is_alive(z) for z in engine.zones if z.candle <= k)
-                pro_alive = any(z.bullish == control_bull and is_alive(z) for z in engine.zones if z.candle <= k)
+                other_opp_alive = any(
+                    z.bullish != control_bull and is_alive_state(*snapshot_k[z.id])
+                    for z in engine.zones if z.id in snapshot_k
+                )
+                pro_alive = any(
+                    z.bullish == control_bull and is_alive_state(*snapshot_k[z.id])
+                    for z in engine.zones if z.id in snapshot_k
+                )
                 if other_opp_alive:
                     control = "BOTH"
                 elif pro_alive:
@@ -313,6 +370,13 @@ def write_outputs(base: Path, weeks, weekly_rows, events: List[ControlEvent], di
         "3. 'Active/alive' POI (forcing continued control) = not rejected, not",
         "   OOB, not yet SPENT (state in IFOB/AOB/AIFOB). A SPENT zone is",
         "   treated as having already done its job, not as still forcing control.",
+        "   Fixed 2026-09-16 (real lookahead bug, user-caught): this check used",
+        "   to read each zone's FINAL end-of-dataset state, not its state as of",
+        "   the week being examined, because the whole dataset was processed",
+        "   before the control loop below ever started. Every alive/spent check",
+        "   now reads a per-week snapshot instead -- see state_by_week in the",
+        "   source. This can change past BOTH-vs-direct-switch answers; treat",
+        "   every one as unverified again until re-checked against the chart.",
         "4a. An opposing-direction impact only escalates to BOTH if the",
         "   currently-controlling side still has a live (unspent) zone. If",
         "   the old side already delivered its reaction and is spent, control",
