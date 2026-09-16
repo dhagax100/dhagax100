@@ -481,14 +481,24 @@ class WeeklyOBEngine:
         for zidx in self.active[:]:
             z = self.zones[zidx]
             if z.rejected or z.state == 3: continue
+            # A zone can become eligible for BOTH impact and stranding within
+            # the same bar k. Compute both candidates first, then resolve the
+            # true order using their exact 1m timestamps (SPEC's exact-1m
+            # event clock) -- do not let impact win purely by code order.
+            touch = None
             if z.eligible >= 0 and k >= z.eligible:
                 touch = self.first_touch(z.eligible_time or self.w[k].start, k, z.bullish, z.zb, z.zt)
-                if touch:
-                    z.pre_spent_state = z.state; z.state = 3; z.stop = k; z.impact_time = touch; continue
+            strand_ev = None
             if z.state in (0,1,4) and z.eligible >= 0:
                 for ev in self.events[before:total]:
                     if ev.confirm == k and ((z.bullish and ev.kind == 1 and ev.price > z.zt) or (not z.bullish and ev.kind == 0 and ev.price < z.zb)):
-                        z.state = 2; break
+                        strand_ev = ev; break
+            if touch and strand_ev is not None and strand_ev.at is not None and strand_ev.at < touch:
+                z.state = 2
+            elif touch:
+                z.pre_spent_state = z.state; z.state = 3; z.stop = k; z.impact_time = touch
+            elif strand_ev is not None:
+                z.state = 2
         self.active = [i for i in self.active if not self.zones[i].rejected and self.zones[i].state != 3]
 
     def process(self, k: int) -> None:

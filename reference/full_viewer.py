@@ -259,6 +259,15 @@ def main() -> int:
         authorized = bool(impacted and pre_spent_ok and h4.permits(ctrl, z.bullish))
         origin_bar = h4_bars[z.candle]
         origin_dir = "UP" if origin_bar.c > origin_bar.o else "DOWN" if origin_bar.c < origin_bar.o else "FLAT"
+        # Real M1 row count inside the origin bar vs the expected 240 (4h x
+        # 60m). A count well under 240 means the bar is truncated -- e.g. the
+        # first bar after a weekend close, where the "open" is genuinely the
+        # first available post-gap price, not invented, but only a fraction
+        # of the bar is real continuous trading. Same disclosure policy as
+        # the Weekly origin-gap work: never invent data, always show the
+        # real coverage so a thin bar is visible without re-investigating by
+        # hand each time.
+        origin_m1_count = origin_bar.last - origin_bar.first
         rows.append(dict(
             id=z.id, side="BUY" if z.bullish else "SELL", type=h4.status(z),
             bottom=f"{z.zb:.5f}", top=f"{z.zt:.5f}",
@@ -269,6 +278,7 @@ def main() -> int:
             # exactly this candle, per SPEC.md SS4.
             origin_open=f"{origin_bar.o:.5f}", origin_high=f"{origin_bar.h:.5f}",
             origin_low=f"{origin_bar.l:.5f}", origin_close=f"{origin_bar.c:.5f}", origin_direction=origin_dir,
+            origin_m1_count=origin_m1_count, origin_m1_expected=240,
             trigger_riyadh=wob.display_iso(tt, display_tz), trigger_price="" if tp is None else f"{tp:.5f}",
             eligible_riyadh=wob.display_iso(et, display_tz), eligible_price="" if ep is None else f"{ep:.5f}",
             impact_riyadh=wob.display_iso(it, display_tz),
@@ -280,6 +290,7 @@ def main() -> int:
     with (base / "h4_ob_ledger.csv").open("w", newline="", encoding="utf-8") as f:
         fields = ["id", "side", "type", "bottom", "top", "origin_utc", "origin_riyadh",
                    "origin_open", "origin_high", "origin_low", "origin_close", "origin_direction",
+                   "origin_m1_count", "origin_m1_expected",
                    "trigger_riyadh", "trigger_price", "eligible_riyadh", "eligible_price",
                    "impact_riyadh", "control_at_impact", "parent_weekly_id", "authorized"]
         wr = csv.DictWriter(f, fieldnames=fields)
