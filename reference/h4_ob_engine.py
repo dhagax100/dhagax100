@@ -124,7 +124,12 @@ def main() -> int:
     control_by_week = load_control_by_week(control_path)
 
     h4_bars = aggregate_h4(minutes, args.h4_anchor_hour)
-    engine = wob.WeeklyOBEngine(minutes, h4_bars)
+    # origin_gap_window=None: the Weekly-only Friday-close gap repair
+    # doesn't apply to H4 bars; a hardcoded 5-day window would otherwise
+    # bisect into a candle days later, corrupting direct-IFOB origin
+    # selection (found via the SELL OB the user flagged with a bearish
+    # origin candle).
+    engine = wob.WeeklyOBEngine(minutes, h4_bars, origin_gap_window=None)
     engine.run()
 
     def control_at(t: Optional[datetime]) -> str:

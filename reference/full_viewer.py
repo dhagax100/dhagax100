@@ -233,7 +233,9 @@ def main() -> int:
     weekly_engine.run()
 
     h4_bars = h4.aggregate_h4(minutes, args.h4_anchor_hour)
-    h4_engine = wob.WeeklyOBEngine(minutes, h4_bars)
+    # origin_gap_window=None: see h4_ob_engine.py's identical comment --
+    # the Weekly-only Friday-close gap repair must not apply to H4 bars.
+    h4_engine = wob.WeeklyOBEngine(minutes, h4_bars, origin_gap_window=None)
     h4_engine.run()
 
     def control_and_parent_at(t: Optional[datetime]) -> Tuple[str, str]:

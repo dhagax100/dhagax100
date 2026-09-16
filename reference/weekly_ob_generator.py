@@ -202,8 +202,15 @@ def aggregate_weeks(minutes: List[Minute], close_zone: ZoneInfo, close_hour: int
 
 class WeeklyOBEngine:
     """Direct Python transcription of the locked Weekly swing/MSS/OB process."""
-    def __init__(self, minutes: List[Minute], weeks: List[Week]):
+    def __init__(self, minutes: List[Minute], weeks: List[Week], origin_gap_window: Optional[timedelta] = timedelta(days=5)):
         self.m, self.w = minutes, weeks
+        # Weekly-only weekend-gap repair window for ifob_origin_body()
+        # (Friday close, ignoring Sunday pre-open quotes). Pass None when
+        # reusing this class for a timeframe with no such gap-within-a-bar
+        # issue (e.g. H4) -- ifob_origin_body then returns the bar's own
+        # true open/close directly instead of bisecting 5 days ahead into
+        # an unrelated later candle.
+        self.origin_gap_window = origin_gap_window
         self.mt = [x.t for x in minutes]
         self.events: List[Event] = []
         self.msses: List[MSS] = []
@@ -320,11 +327,15 @@ class WeeklyOBEngine:
         return chosen
 
     def ifob_origin_body(self, k: int) -> Optional[Tuple[float, float]]:
-        """First tradable M1 open and Friday's final tradable M1 close."""
+        """First tradable M1 open and (for Weekly) Friday's final tradable
+        M1 close -- see origin_gap_window in __init__ for why this is
+        parametrized rather than a hardcoded 5-day Weekly assumption."""
         if not (0 <= k < len(self.w)):
             return None
         wk = self.w[k]
-        last = bisect_left(self.mt, wk.start + timedelta(days=5)) - 1
+        if self.origin_gap_window is None:
+            return (wk.o, wk.c)
+        last = bisect_left(self.mt, wk.start + self.origin_gap_window) - 1
         return None if last < wk.first else (self.m[wk.first].o, self.m[last].c)
 
     def try_bull_aob(self, preg: int, armed_h: int, new_low: int, price: float, k: int) -> None:
