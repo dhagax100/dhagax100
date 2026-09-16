@@ -792,13 +792,32 @@ def write_ob_pine(base: Path, engine: WeeklyOBEngine, label_cap: int, ob_cap: in
     `extra_lines`/`out_name` let a caller (e.g. full_viewer.py) append an
     additional layer -- such as the H4 engine's own boxes/table -- into the
     SAME generated Pine file, reusing this function's Weekly rendering
-    unchanged rather than duplicating it."""
+    unchanged rather than duplicating it.
+
+    Rendering fixed 2026-09-16 (real bug, user-caught): every draw call here
+    used to be unrolled one statement per swing/MSS event, per OB (box +
+    audit label + impact line), and per table row -- including a SECOND,
+    completely uncapped table loop over every zone in the whole dataset for
+    single-OB inspection mode. Zone #3's original narrow window never had
+    enough events/zones to hit Pine's total-statement ceiling; a wider
+    render (the --manual-gates window) did, failing with CE10295 ("main
+    body is too long") the moment it was pasted into Pine Editor -- the
+    exact failure mode full_viewer.py's own H4/5m layers were already
+    written to avoid via array-packing. Fixed the same way here: every
+    swing/MSS label, OB box/label/line, and table row is now packed into
+    arrays and drawn by one small runtime loop each, regardless of how many
+    items there are. This changes ONLY how the already-computed facts get
+    rendered into Pine text -- no swing/OB/MSS detection logic changed."""
     sh = [e for e in engine.events if e.kind == 0][-label_cap:]
     sl = [e for e in engine.events if e.kind == 1][-label_cap:]
     ms = engine.msses[-label_cap:]
     shown = engine.zones[-ob_cap:]
     table_zones = engine.zones[-table_cap:][::-1]
     max_ob_offset = max(1, len(engine.zones))
+
+    def arr(kind: str, values: List[str]) -> str:
+        return f"array.from({', '.join(values)})" if values else f"array.new<{kind}>()"
+
     lines = [
         "//@version=6",
         "indicator(\"FXCM Weekly OB - Python Reference\", overlay=true, max_labels_count=500, max_boxes_count=500, max_lines_count=500)",
@@ -815,10 +834,30 @@ def write_ob_pine(base: Path, engine: WeeklyOBEngine, label_cap: int, ob_cap: in
         "bool onH4 = timeframe.period == \"240\"",
         "bool onFive = timeframe.period == \"5\"",
     ]
+
+    # Swing-high/swing-low/MSS labels -- packed. Exact locked visual
+    # convention preserved: blue ▲ high, black ▼ low, ✕ MSS (blue up / black
+    # down).
+    struct_x, struct_y, struct_txt, struct_col = [], [], [], []
+    for e in sh:
+        struct_x.append(pine_time(engine.w[e.swing].start)); struct_y.append(f"{e.price:.5f}")
+        struct_txt.append("\"▲\""); struct_col.append("color.blue")
+    for e in sl:
+        struct_x.append(pine_time(engine.w[e.swing].start)); struct_y.append(f"{e.price:.5f} - lowGap")
+        struct_txt.append("\"▼\""); struct_col.append("color.black")
+    for m in ms:
+        struct_x.append(pine_time(engine.w[m.broken].start))
+        struct_y.append(f"{m.price:.5f}" if m.up else f"{m.price:.5f} - lowGap")
+        struct_txt.append("\"✕\""); struct_col.append("color.blue" if m.up else "color.black")
+
     # Resolve each static M1 impact into the opening time of whichever chart
     # candle contains it. This is deliberately evaluated on every chart bar,
     # so 5m, 15m, H1, Daily and Weekly all anchor to their own containing bar.
+    # Inherently one var+if pair per zone (each needs its own named runtime
+    # tracker) -- not array-packable the same way, same as full_viewer.py's
+    # identical h4impact_x_<id> mechanism.
     impact_vars: dict[int, str] = {}
+    impact_watchers: List[str] = []
     for z in shown:
         if z.rejected:
             continue
@@ -827,25 +866,18 @@ def write_ob_pine(base: Path, engine: WeeklyOBEngine, label_cap: int, ob_cap: in
             name = f"impact_x_{z.id}"
             impact_vars[z.id] = name
             stamp = pine_time(it)
-            lines += [f"var int {name} = na", f"if time <= {stamp} and {stamp} < time_close", f"    {name} := time"]
-    lines.append("if barstate.islast")
-    # Weekly-only: swings, MSS, table. Weekly+H4: OB boxes and impact lines
-    # only (SPEC.md SS17: "Display Weekly POIs on Weekly and 4H charts").
-    # Every other timeframe draws nothing here -- a plain, error-free chart.
-    lines.append("    if onWeekly")
-    # Exact locked visual convention: blue ▲ high, black ▼ low, and ✕ MSS.
-    for e in sh:
-        lines.append(f"        label.new({pine_time(engine.w[e.swing].start)}, {e.price:.5f}, \"▲\", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=color.blue, size=size.small)")
-    for e in sl:
-        lines.append(f"        label.new({pine_time(engine.w[e.swing].start)}, {e.price:.5f} - lowGap, \"▼\", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=color.black, size=size.small)")
-    for m in ms:
-        y = f"{m.price:.5f}" if m.up else f"{m.price:.5f} - lowGap"
-        colour = "color.blue" if m.up else "color.black"
-        lines.append(f"        label.new({pine_time(engine.w[m.broken].start)}, {y}, \"✕\", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor={colour}, size=size.small)")
-    # Match the locked visual convention: hollow color box, red vertical impact line,
-    # rejected zones not drawn, and SPENT shown in its pre-spent colour.
+            impact_watchers += [f"var int {name} = na", f"if time <= {stamp} and {stamp} < time_close", f"    {name} := time"]
+
+    # OB boxes + origin-audit labels + impact lines -- packed. Match the
+    # locked visual convention: hollow color box, red vertical impact line,
+    # rejected zones not drawn, SPENT shown in its pre-spent colour.
+    # `obRight` depends on the impact_x_<id> watcher vars above, which are
+    # only fully resolved by the time barstate.islast fires -- so it (unlike
+    # everything else here) cannot be a top-level `var` array; it must be
+    # (re)computed fresh inside the `if barstate.islast` block, same as
+    # full_viewer.py's h4Right.
     right_edge = engine.m[-1].t + timedelta(days=365)
-    lines.append("    if onWeekly or onH4")
+    ob_left, ob_top, ob_bottom, ob_right_expr, ob_col, ob_rank, ob_audit, ob_origin_h, ob_has_line = ([] for _ in range(9))
     for z in shown:
         if z.rejected:
             continue
@@ -855,20 +887,116 @@ def write_ob_pine(base: Path, engine: WeeklyOBEngine, label_cap: int, ob_cap: in
         origin = engine.w[z.candle]
         left = origin.start
         body = observed_box_body(engine, z.candle, box_body_minutes, origin_first_price, origin_body_offset_minutes)
-        body_bottom, body_top = body.bottom, body.top
         et = eligibility_time(engine, z)
         it = impact_time(engine, z, et)
         fallback_right = it or (engine.w[z.stop].start if 0 <= z.stop < len(engine.w) else right_edge)
         right = f"(na({impact_vars[z.id]}) ? {pine_time(fallback_right)} : {impact_vars[z.id]})" if it is not None else pine_time(fallback_right)
         col = pine_colour(z)
-        lines.append(f"        if not inspectOneOB or obFromLast == {rank_from_last}")
-        lines.append(f"            box.new({pine_time(left)}, {body_top:.5f}, {right}, {body_bottom:.5f}, border_color={col}, border_width=1, bgcolor=na, xloc=xloc.bar_time)")
         audit_text = f"#{z.id} {STATE[z.pre_spent_state if z.state == 3 else z.state]} {'BUY' if z.bullish else 'SELL'}"
-        lines.append(f"            if showOriginAudit\n                label.new({pine_time(left)}, {origin.h:.5f}, \"{audit_text}\", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_down, color=color.new({col}, 85), textcolor={col}, size=size.tiny)")
-        if it is not None:
-            lines.append(f"            line.new({right}, {body_bottom:.5f}, {right}, {body_top:.5f}, xloc=xloc.bar_time, extend=extend.both, color=color.new(color.red, 30), width=1)")
-    lines.append("    if onWeekly")
+        ob_left.append(pine_time(left)); ob_top.append(f"{body.top:.5f}"); ob_bottom.append(f"{body.bottom:.5f}")
+        ob_right_expr.append(right); ob_col.append(col); ob_rank.append(str(rank_from_last))
+        ob_audit.append(f"\"{pine_text(audit_text)}\""); ob_origin_h.append(f"{origin.h:.5f}")
+        ob_has_line.append("true" if it is not None else "false")
+
+    # Capped ledger table (table_zones, newest-first rows 1..N) -- packed.
+    t_id, t_type, t_side, t_bottom, t_top, t_origin, t_trigger, t_eligible, t_impact, t_status, t_bg = ([] for _ in range(11))
+    for z in table_zones:
+        origin = engine.w[z.candle]
+        body = observed_box_body(engine, z.candle, box_body_minutes, origin_first_price, origin_body_offset_minutes)
+        tt, tp, _ = trigger_display_detail(engine, z)
+        et, ep = eligibility_detail(engine, z)
+        it = impact_time(engine, z, et)
+        trigger_text = display_iso(tt, display_zone) + (" @ " + f"{tp:.5f}" if tp is not None else "")
+        eligible_text = display_iso(et, display_zone) + (" @ " + f"{ep:.5f}" if ep is not None else "")
+        t_id.append(f"\"#{z.id}\""); t_type.append(f"\"{STATE[z.pre_spent_state if z.state == 3 else z.state]}\"")
+        t_side.append(f"\"{'BUY' if z.bullish else 'SELL'}\"")
+        t_bottom.append(f"\"{body.bottom:.5f}\""); t_top.append(f"\"{body.top:.5f}\"")
+        t_origin.append(f"\"{pine_text(display_iso(engine.w[z.candle].start, display_zone))}\"")
+        t_trigger.append(f"\"{pine_text(trigger_text)}\""); t_eligible.append(f"\"{pine_text(eligible_text)}\"")
+        t_impact.append(f"\"{pine_text(display_iso(it, display_zone))}\""); t_status.append(f"\"{status(z)}\"")
+        t_bg.append(f"color.new({pine_colour(z)}, 80)")
+
+    # Full-zone inspection table (every zone ever created, not just the
+    # capped table_cap) -- packed. Previously the single worst offender:
+    # unrolled one 10-column table.cell block PER ZONE IN THE WHOLE DATASET,
+    # uncapped by anything, purely so "inspect one OB" could pick any of
+    # them by rank at runtime.
+    i_id, i_type, i_side, i_bottom, i_top, i_origin, i_trigger, i_eligible, i_impact, i_status, i_bg, i_rank = ([] for _ in range(12))
+    for z in engine.zones[::-1]:
+        rank_from_last = len(engine.zones) - z.id + 1
+        origin = engine.w[z.candle]
+        body = observed_box_body(engine, z.candle, box_body_minutes, origin_first_price, origin_body_offset_minutes)
+        tt, tp, _ = trigger_display_detail(engine, z)
+        et, ep = eligibility_detail(engine, z)
+        it = impact_time(engine, z, et)
+        trigger_text = display_iso(tt, display_zone) + (" @ " + f"{tp:.5f}" if tp is not None else "")
+        eligible_text = display_iso(et, display_zone) + (" @ " + f"{ep:.5f}" if ep is not None else "")
+        i_id.append(f"\"#{z.id}\""); i_type.append(f"\"{STATE[z.pre_spent_state if z.state == 3 else z.state]}\"")
+        i_side.append(f"\"{'BUY' if z.bullish else 'SELL'}\"")
+        i_bottom.append(f"\"{body.bottom:.5f}\""); i_top.append(f"\"{body.top:.5f}\"")
+        i_origin.append(f"\"{pine_text(display_iso(origin.start, display_zone))}\"")
+        i_trigger.append(f"\"{pine_text(trigger_text)}\""); i_eligible.append(f"\"{pine_text(eligible_text)}\"")
+        i_impact.append(f"\"{pine_text(display_iso(it, display_zone))}\""); i_status.append(f"\"{status(z)}\"")
+        i_bg.append(f"color.new({pine_colour(z)}, 80)"); i_rank.append(str(rank_from_last))
+
+    # Every var array declared here, BEFORE "if barstate.islast" opens --
+    # a real bug (CE10013) hit once already this session came from putting a
+    # new array declaration in between an if-block's body and its sibling
+    # if-line, which silently closes the enclosing block early in Pine's
+    # indentation-driven parser. Keeping every declaration in one place,
+    # all before any conditional, avoids that class of mistake entirely.
     lines += [
+        f"var array<int> structX = {arr('int', struct_x)}",
+        f"var array<float> structY = {arr('float', struct_y)}",
+        f"var array<string> structTxt = {arr('string', struct_txt)}",
+        f"var array<color> structCol = {arr('color', struct_col)}",
+        f"var array<int> obLeft = {arr('int', ob_left)}",
+        f"var array<float> obTop = {arr('float', ob_top)}",
+        f"var array<float> obBottom = {arr('float', ob_bottom)}",
+        f"var array<color> obCol = {arr('color', ob_col)}",
+        f"var array<int> obRank = {arr('int', ob_rank)}",
+        f"var array<string> obAudit = {arr('string', ob_audit)}",
+        f"var array<float> obOriginH = {arr('float', ob_origin_h)}",
+        f"var array<bool> obHasLine = {arr('bool', ob_has_line)}",
+        f"var array<string> tId = {arr('string', t_id)}",
+        f"var array<string> tType = {arr('string', t_type)}",
+        f"var array<string> tSide = {arr('string', t_side)}",
+        f"var array<string> tBottom = {arr('string', t_bottom)}",
+        f"var array<string> tTop = {arr('string', t_top)}",
+        f"var array<string> tOrigin = {arr('string', t_origin)}",
+        f"var array<string> tTrigger = {arr('string', t_trigger)}",
+        f"var array<string> tEligible = {arr('string', t_eligible)}",
+        f"var array<string> tImpact = {arr('string', t_impact)}",
+        f"var array<string> tStatus = {arr('string', t_status)}",
+        f"var array<color> tBg = {arr('color', t_bg)}",
+        f"var array<string> iId = {arr('string', i_id)}",
+        f"var array<string> iType = {arr('string', i_type)}",
+        f"var array<string> iSide = {arr('string', i_side)}",
+        f"var array<string> iBottom = {arr('string', i_bottom)}",
+        f"var array<string> iTop = {arr('string', i_top)}",
+        f"var array<string> iOrigin = {arr('string', i_origin)}",
+        f"var array<string> iTrigger = {arr('string', i_trigger)}",
+        f"var array<string> iEligible = {arr('string', i_eligible)}",
+        f"var array<string> iImpact = {arr('string', i_impact)}",
+        f"var array<string> iStatus = {arr('string', i_status)}",
+        f"var array<color> iBg = {arr('color', i_bg)}",
+        f"var array<int> iRank = {arr('int', i_rank)}",
+        *impact_watchers,
+        "if barstate.islast",
+        "    if onWeekly",
+        "        for i = 0 to array.size(structX) - 1",
+        "            label.new(array.get(structX, i), array.get(structY, i), array.get(structTxt, i), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=array.get(structCol, i), size=size.small)",
+        "    if onWeekly or onH4",
+        f"        array<int> obRight = {arr('int', ob_right_expr)}",
+        "        for i = 0 to array.size(obLeft) - 1",
+        "            if not inspectOneOB or obFromLast == array.get(obRank, i)",
+        "                obColI = array.get(obCol, i)",
+        "                box.new(array.get(obLeft, i), array.get(obTop, i), array.get(obRight, i), array.get(obBottom, i), border_color=obColI, border_width=1, bgcolor=na, xloc=xloc.bar_time)",
+        "                if showOriginAudit",
+        "                    label.new(array.get(obLeft, i), array.get(obOriginH, i), array.get(obAudit, i), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_down, color=color.new(obColI, 85), textcolor=obColI, size=size.tiny)",
+        "                if array.get(obHasLine, i)",
+        "                    line.new(array.get(obRight, i), array.get(obBottom, i), array.get(obRight, i), array.get(obTop, i), xloc=xloc.bar_time, extend=extend.both, color=color.new(color.red, 30), width=1)",
+        "    if onWeekly",
         "        table.clear(ledger, 0, 0, 9, 20)",
         "        table.cell(ledger, 0, 0, \"W OB\", text_color=color.white, bgcolor=color.new(color.green, 15))",
         "        table.cell(ledger, 1, 0, \"Type\", text_color=color.white, bgcolor=color.new(color.green, 15))",
@@ -880,36 +1008,31 @@ def write_ob_pine(base: Path, engine: WeeklyOBEngine, label_cap: int, ob_cap: in
         "        table.cell(ledger, 7, 0, \"Eligible (RYD / px)\", text_color=color.white, bgcolor=color.new(color.green, 15))",
         "        table.cell(ledger, 8, 0, \"Impact (RYD)\", text_color=color.white, bgcolor=color.new(color.green, 15))",
         "        table.cell(ledger, 9, 0, \"Status\", text_color=color.white, bgcolor=color.new(color.green, 15))",
+        "        if not inspectOneOB",
+        "            for i = 0 to array.size(tId) - 1",
+        "                table.cell(ledger, 0, i + 1, array.get(tId, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 1, i + 1, array.get(tType, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 2, i + 1, array.get(tSide, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 3, i + 1, array.get(tBottom, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 4, i + 1, array.get(tTop, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 5, i + 1, array.get(tOrigin, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 6, i + 1, array.get(tTrigger, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 7, i + 1, array.get(tEligible, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 8, i + 1, array.get(tImpact, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 9, i + 1, array.get(tStatus, i), text_color=color.black, bgcolor=array.get(tBg, i))",
+        "        for i = 0 to array.size(iId) - 1",
+        "            if inspectOneOB and obFromLast == array.get(iRank, i)",
+        "                table.cell(ledger, 0, 1, array.get(iId, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 1, 1, array.get(iType, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 2, 1, array.get(iSide, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 3, 1, array.get(iBottom, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 4, 1, array.get(iTop, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 5, 1, array.get(iOrigin, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 6, 1, array.get(iTrigger, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 7, 1, array.get(iEligible, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 8, 1, array.get(iImpact, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 9, 1, array.get(iStatus, i), text_color=color.black, bgcolor=array.get(iBg, i))",
     ]
-    for row, z in enumerate(table_zones, 1):
-        origin = engine.w[z.candle]
-        body = observed_box_body(engine, z.candle, box_body_minutes, origin_first_price, origin_body_offset_minutes)
-        body_bottom, body_top = body.bottom, body.top
-        tt, tp, _ = trigger_display_detail(engine, z)
-        et, ep = eligibility_detail(engine, z)
-        it = impact_time(engine, z, et)
-        trigger_text = display_iso(tt, display_zone) + (" @ " + f"{tp:.5f}" if tp is not None else "")
-        eligible_text = display_iso(et, display_zone) + (" @ " + f"{ep:.5f}" if ep is not None else "")
-        values = [f"#{z.id}", STATE[z.pre_spent_state if z.state == 3 else z.state], "BUY" if z.bullish else "SELL", f"{body_bottom:.5f}", f"{body_top:.5f}", display_iso(engine.w[z.candle].start, display_zone), trigger_text, eligible_text, display_iso(it, display_zone), status(z)]
-        lines.append("        if not inspectOneOB")
-        for col, value in enumerate(values):
-            bg = f"color.new({pine_colour(z)}, 80)" if col == 9 else "na"
-            lines.append(f"            table.cell(ledger, {col}, {row}, \"{pine_text(value)}\", text_color=color.black, bgcolor={bg})")
-    # Inspection mode always uses row 1 so the selected record is easy to read.
-    for z in engine.zones[::-1]:
-        rank_from_last = len(engine.zones) - z.id + 1
-        origin = engine.w[z.candle]
-        body = observed_box_body(engine, z.candle, box_body_minutes, origin_first_price, origin_body_offset_minutes)
-        tt, tp, _ = trigger_display_detail(engine, z)
-        et, ep = eligibility_detail(engine, z)
-        it = impact_time(engine, z, et)
-        trigger_text = display_iso(tt, display_zone) + (" @ " + f"{tp:.5f}" if tp is not None else "")
-        eligible_text = display_iso(et, display_zone) + (" @ " + f"{ep:.5f}" if ep is not None else "")
-        values = [f"#{z.id}", STATE[z.pre_spent_state if z.state == 3 else z.state], "BUY" if z.bullish else "SELL", f"{body.bottom:.5f}", f"{body.top:.5f}", display_iso(origin.start, display_zone), trigger_text, eligible_text, display_iso(it, display_zone), status(z)]
-        lines.append(f"        if inspectOneOB and obFromLast == {rank_from_last}")
-        for col, value in enumerate(values):
-            bg = f"color.new({pine_colour(z)}, 80)" if col == 9 else "na"
-            lines.append(f"            table.cell(ledger, {col}, 1, \"{pine_text(value)}\", text_color=color.black, bgcolor={bg})")
     if extra_lines:
         lines += extra_lines
     lines.append("")
