@@ -210,15 +210,24 @@ def build_h4_extra_lines(h4_engine, h4_bars, drawn: List[tuple], ob_cap: int, di
     sh = [e for e in h4_engine.events if e.kind == 0 and in_window(h4_bars[e.swing].start)][-label_cap:]
     sl = [e for e in h4_engine.events if e.kind == 1 and in_window(h4_bars[e.swing].start)][-label_cap:]
     ms = [m for m in h4_engine.msses if in_window(h4_bars[m.broken].start)][-label_cap:]
-    struct_lines: List[str] = []
+    # Packed into arrays + one small draw loop, same technique as the OB
+    # boxes/lines below -- NOT one label.new per event. An earlier version
+    # unrolled these one statement per swing/MSS (fine at zone #3's original
+    # ~6-week scope, at most a couple dozen events), but a wider window (the
+    # --manual-gates render, ~13 weeks) pushed the count well past 80 per
+    # kind and blew CE10295 ("main body is too long") -- the exact failure
+    # mode this file's own box/line code was already written to avoid.
+    struct_x, struct_y, struct_txt, struct_col = [], [], [], []
     for e in sh:
-        struct_lines.append(f"        label.new({pine_time(h4_bars[e.swing].start)}, {e.price:.5f}, \"▲\", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=color.blue, size=size.small)")
+        struct_x.append(pine_time(h4_bars[e.swing].start)); struct_y.append(f"{e.price:.5f}")
+        struct_txt.append("\"▲\""); struct_col.append("color.blue")
     for e in sl:
-        struct_lines.append(f"        label.new({pine_time(h4_bars[e.swing].start)}, {e.price:.5f} - lowGap, \"▼\", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=color.black, size=size.small)")
+        struct_x.append(pine_time(h4_bars[e.swing].start)); struct_y.append(f"{e.price:.5f} - lowGap")
+        struct_txt.append("\"▼\""); struct_col.append("color.black")
     for m in ms:
-        y = f"{m.price:.5f}" if m.up else f"{m.price:.5f} - lowGap"
-        colour = "color.blue" if m.up else "color.black"
-        struct_lines.append(f"        label.new({pine_time(h4_bars[m.broken].start)}, {y}, \"✕\", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor={colour}, size=size.small)")
+        struct_x.append(pine_time(h4_bars[m.broken].start))
+        struct_y.append(f"{m.price:.5f}" if m.up else f"{m.price:.5f} - lowGap")
+        struct_txt.append("\"✕\""); struct_col.append("color.blue" if m.up else "color.black")
 
     # Same cross-timeframe impact-resolution technique as the Weekly layer
     # (write_ob_pine's impact_vars): a `var int` tracker per drawn OB, updated
@@ -288,8 +297,13 @@ def build_h4_extra_lines(h4_engine, h4_bars, drawn: List[tuple], ob_cap: int, di
         "                box.new(array.get(h4Left, i), array.get(h4Top, i), array.get(h4Right, i), array.get(h4Bottom, i), border_color=hCol, border_width=1, bgcolor=na, xloc=xloc.bar_time)",
         "                label.new(array.get(h4Left, i), array.get(h4Top, i), array.get(h4Label, i), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_down, color=color.new(hCol,85), textcolor=hCol, size=size.tiny)",
         "                line.new(array.get(h4Right, i), array.get(h4Bottom, i), array.get(h4Right, i), array.get(h4Top, i), xloc=xloc.bar_time, extend=extend.both, color=color.new(color.blue,55), width=1)",
+        f"var array<int> h4StructX = {arr('int', struct_x)}",
+        f"var array<float> h4StructY = {arr('float', struct_y)}",
+        f"var array<string> h4StructTxt = {arr('string', struct_txt)}",
+        f"var array<color> h4StructCol = {arr('color', struct_col)}",
         "    if onH4",
-        *struct_lines,
+        "        for i = 0 to array.size(h4StructX) - 1",
+        "            label.new(array.get(h4StructX, i), array.get(h4StructY, i), array.get(h4StructTxt, i), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=array.get(h4StructCol, i), size=size.small)",
         f"        table.cell(h4Ledger, 0, 0, \"4H OB\", text_color=color.white, bgcolor=color.new(color.blue,15))",
         f"        table.cell(h4Ledger, 1, 0, \"Parent W\", text_color=color.white, bgcolor=color.new(color.blue,15))",
         f"        table.cell(h4Ledger, 2, 0, \"Side\", text_color=color.white, bgcolor=color.new(color.blue,15))",
