@@ -264,7 +264,15 @@ def run_bso_chain(z, it: datetime, five_bar_starts: List[datetime], five_events:
     as it was before re-entry existed, since a 4H swing forms constantly and
     would otherwise veto entries that were already validated): any re-entry
     whose resting swing is at/after the ceiling is converted to a
-    disallowed, non-tradeable stage instead of being accepted."""
+    disallowed, non-tradeable stage instead of being accepted.
+
+    Reporting rule (user, 2026-09-16): a RE-ENTRY (attempt_no > 1) that never
+    actually became a trade -- breached, swing-stop-reached, no resting
+    swing, whatever the reason -- is not a "second opportunity" and is not
+    reported at all: no table row, no ledger row, nothing. It is still used
+    internally to decide the chain should stop there, just never appended to
+    the returned list. The OB's original first attempt is always reported
+    regardless of its outcome (that's the OB's own result, not a re-entry)."""
     attempts: List[Dict] = []
     search_from = it
     attempt_no = 1
@@ -273,9 +281,11 @@ def run_bso_chain(z, it: datetime, five_bar_starts: List[datetime], five_events:
         resting_at = res.get("resting_at")
         if attempt_no > 1 and swing_stop_at is not None and resting_at is not None and resting_at >= swing_stop_at:
             res = dict(stage="SWING_STOP_REACHED", resting_at=resting_at)
-        res["attempt"] = attempt_no
-        attempts.append(res)
-        if res.get("stage") != "ENTERED" or res.get("result") != "SL":
+        entered = res.get("stage") == "ENTERED"
+        if attempt_no == 1 or entered:
+            res["attempt"] = attempt_no
+            attempts.append(res)
+        if not entered or res.get("result") != "SL":
             break
         exit_time = res.get("exit_time")
         if exit_time is None:
