@@ -275,11 +275,24 @@ def build_bso_extra_lines(bso_results: List[tuple], display_tz: ZoneInfo) -> Lis
         minute price reached it, if SL was hit first.
       - a GREEN horizontal line at the TP price, from entry to the exact
         minute price reached it, if TP was hit first.
+      - ADDITIONALLY (2026-09-16, user: "it would be amazing if you can
+        draw the order mark with the green on the profit side and red on
+        the loss side starting from the entry and stopping on whichever
+        comes first, win or loss" -- kept alongside the SL/TP lines above,
+        not instead of them, per the user's explicit correction) a filled
+        box ("the order mark") from (entry time, entry price) to (exit
+        time, exit price), GREEN if TP was hit first, RED if SL was hit
+        first -- shows the actual profit/loss zone visually, on top of the
+        SL/TP lines' exact levels.
     An attempt that never reached an entry (H4_OB_BREACHED, NO_RESTING_SWING,
     etc) gets a table row (stage shown in the Result column) but no lines.
-    OPEN/AMBIGUOUS results get the blue line but no red/green, since the
-    outcome isn't resolved (OPEN) or isn't orderable from 1m OHLC alone
-    (AMBIGUOUS).
+    OPEN/AMBIGUOUS results get the blue line but no SL/TP line or box,
+    since the outcome isn't resolved (OPEN) or isn't orderable from 1m OHLC
+    alone (AMBIGUOUS).
+
+    MFE/MAE (SPEC.md SS34, 2026-09-16) get one combined table column,
+    "N.N/N.N" pips (MFE/MAE), matching the SL column's own pips-then-price
+    convention.
 
     The table reports the full lineage per SPEC.md SS17's parent-POI chain:
     Weekly OB (grandparent) -> 4H OB (parent) -> 5m entry (child)."""
@@ -291,9 +304,10 @@ def build_bso_extra_lines(bso_results: List[tuple], display_tz: ZoneInfo) -> Lis
     def pf(v: Optional[float]) -> str:
         return f"{v:.5f}" if v is not None else "na"
 
-    ids, weeklys, sides, restings, entries, sls, tps, results, exits = ([] for _ in range(9))
+    ids, weeklys, sides, restings, entries, sls, tps, results, exits, excursions = ([] for _ in range(10))
     blefts, brights, bys = [], [], []
     clefts, crights, cys, ccols = [], [], [], []
+    oleft, oright, otop, obottom, ocol = [], [], [], [], []
     for z, _it, parent_id, _invalidation_reason, res in bso_results:
         attempt_no = res.get("attempt")
         ids.append(f"\"#{z.id}\"" if attempt_no in (None, 1) else f"\"#{z.id} (re-entry {attempt_no})\"")
@@ -314,6 +328,9 @@ def build_bso_extra_lines(bso_results: List[tuple], display_tz: ZoneInfo) -> Lis
         exit_t, exit_p = res.get("exit_time"), res.get("exit_price")
         exit_txt = f"{wob.display_iso(exit_t, display_tz)} @ {exit_p:.5f}" if exit_t is not None and exit_p is not None else "-"
         exits.append(f"\"{pine_text(exit_txt)}\"")
+        mfe_v, mae_v = res.get("mfe"), res.get("mae")
+        excursion_txt = f"{mfe_v / 0.0001:.1f}/{mae_v / 0.0001:.1f}" if mfe_v is not None and mae_v is not None else "-"
+        excursions.append(f"\"{excursion_txt}\"")
 
         cs, ep = res.get("candidate_since"), res.get("entry_price")
         blefts.append(pt(cs) if cs is not None and entry_t is not None else "na")
@@ -324,8 +341,12 @@ def build_bso_extra_lines(bso_results: List[tuple], display_tz: ZoneInfo) -> Lis
         if result in ("SL", "TP") and entry_t is not None and exit_t is not None and exit_p is not None:
             clefts.append(pt(entry_t)); crights.append(pt(exit_t)); cys.append(pf(exit_p))
             ccols.append("color.red" if result == "SL" else "color.green")
+            oleft.append(pt(entry_t)); oright.append(pt(exit_t))
+            otop.append(pf(max(entry_p, exit_p))); obottom.append(pf(min(entry_p, exit_p)))
+            ocol.append("color.red" if result == "SL" else "color.green")
         else:
             clefts.append("na"); crights.append("na"); cys.append("na"); ccols.append("na")
+            oleft.append("na"); oright.append("na"); otop.append("na"); obottom.append("na"); ocol.append("na")
 
     def arr(kind: str, values: List[str]) -> str:
         return f"array.from({', '.join(values)})" if values else f"array.new<{kind}>()"
@@ -333,7 +354,7 @@ def build_bso_extra_lines(bso_results: List[tuple], display_tz: ZoneInfo) -> Lis
     return [
         "bool inspectOne5mBSO = input.bool(false, \"Inspect one 5m BSO only\", group=\"5m BSO inspection\")",
         f"int bso5FromLast = input.int(1, \"5m BSO from last\", minval=1, maxval={max(1, n)}, group=\"5m BSO inspection\", tooltip=\"1 = most recent 5m BSO attempt, 2 = the one before it, and so on.\")",
-        f"var table bso5Ledger = table.new(position.top_right, 9, {n + 1}, border_width=1)",
+        f"var table bso5Ledger = table.new(position.top_right, 10, {n + 1}, border_width=1)",
         f"var array<string> bso5Id = {arr('string', ids)}",
         f"var array<string> bso5Weekly = {arr('string', weeklys)}",
         f"var array<string> bso5Side = {arr('string', sides)}",
@@ -343,6 +364,7 @@ def build_bso_extra_lines(bso_results: List[tuple], display_tz: ZoneInfo) -> Lis
         f"var array<string> bso5Tp = {arr('string', tps)}",
         f"var array<string> bso5Result = {arr('string', results)}",
         f"var array<string> bso5Exit = {arr('string', exits)}",
+        f"var array<string> bso5Excursion = {arr('string', excursions)}",
         "if barstate.islast",
         "    if onFive",
         f"        array<int> bso5BLeft = {arr('int', blefts)}",
@@ -352,6 +374,11 @@ def build_bso_extra_lines(bso_results: List[tuple], display_tz: ZoneInfo) -> Lis
         f"        array<int> bso5CRight = {arr('int', crights)}",
         f"        array<float> bso5CY = {arr('float', cys)}",
         f"        array<color> bso5CCol = {arr('color', ccols)}",
+        f"        array<int> bso5OLeft = {arr('int', oleft)}",
+        f"        array<int> bso5ORight = {arr('int', oright)}",
+        f"        array<float> bso5OTop = {arr('float', otop)}",
+        f"        array<float> bso5OBottom = {arr('float', obottom)}",
+        f"        array<color> bso5OCol = {arr('color', ocol)}",
         "        table.cell(bso5Ledger, 0, 0, \"Weekly OB\", text_color=color.white, bgcolor=color.new(color.purple,15))",
         "        table.cell(bso5Ledger, 1, 0, \"4H OB\", text_color=color.white, bgcolor=color.new(color.purple,15))",
         "        table.cell(bso5Ledger, 2, 0, \"Side\", text_color=color.white, bgcolor=color.new(color.purple,15))",
@@ -361,6 +388,7 @@ def build_bso_extra_lines(bso_results: List[tuple], display_tz: ZoneInfo) -> Lis
         "        table.cell(bso5Ledger, 6, 0, \"TP\", text_color=color.white, bgcolor=color.new(color.purple,15))",
         "        table.cell(bso5Ledger, 7, 0, \"Result\", text_color=color.white, bgcolor=color.new(color.purple,15))",
         "        table.cell(bso5Ledger, 8, 0, \"Exit (RYD / px)\", text_color=color.white, bgcolor=color.new(color.purple,15))",
+        "        table.cell(bso5Ledger, 9, 0, \"MFE/MAE (pips)\", text_color=color.white, bgcolor=color.new(color.purple,15))",
         "        for i = 0 to array.size(bso5Id) - 1",
         "            bRank = array.size(bso5Id) - i",
         "            if not inspectOne5mBSO or bRank == bso5FromLast",
@@ -374,10 +402,13 @@ def build_bso_extra_lines(bso_results: List[tuple], display_tz: ZoneInfo) -> Lis
         "                table.cell(bso5Ledger, 6, bRow, array.get(bso5Tp, i), text_color=color.black, bgcolor=na)",
         "                table.cell(bso5Ledger, 7, bRow, array.get(bso5Result, i), text_color=color.black, bgcolor=na)",
         "                table.cell(bso5Ledger, 8, bRow, array.get(bso5Exit, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(bso5Ledger, 9, bRow, array.get(bso5Excursion, i), text_color=color.black, bgcolor=na)",
         "                if not na(array.get(bso5BLeft, i))",
         "                    line.new(array.get(bso5BLeft, i), array.get(bso5BY, i), array.get(bso5BRight, i), array.get(bso5BY, i), xloc=xloc.bar_time, extend=extend.none, color=color.blue, width=2)",
         "                if not na(array.get(bso5CLeft, i))",
         "                    line.new(array.get(bso5CLeft, i), array.get(bso5CY, i), array.get(bso5CRight, i), array.get(bso5CY, i), xloc=xloc.bar_time, extend=extend.none, color=array.get(bso5CCol, i), width=2)",
+        "                if not na(array.get(bso5OLeft, i))",
+        "                    box.new(array.get(bso5OLeft, i), array.get(bso5OTop, i), array.get(bso5ORight, i), array.get(bso5OBottom, i), border_color=array.get(bso5OCol, i), bgcolor=color.new(array.get(bso5OCol, i), 80), xloc=xloc.bar_time)",
     ]
 
 
@@ -506,7 +537,7 @@ def main() -> int:
     with (base / "five_bso_ledger.csv").open("w", newline="", encoding="utf-8") as f:
         fields = ["h4_ob_id", "attempt", "parent_weekly_id", "side", "h4_impact_riyadh", "stage", "resting_riyadh",
                   "candidate_since_riyadh", "entry_riyadh", "entry_price", "sl_price", "risk_price", "tp_price",
-                  "candidate_replacements", "result", "exit_riyadh", "exit_price",
+                  "candidate_replacements", "result", "exit_riyadh", "exit_price", "mfe_pips", "mae_pips",
                   "invalidated_riyadh", "invalidation_reason"]
         wr = csv.DictWriter(f, fieldnames=fields)
         wr.writeheader()
@@ -525,6 +556,8 @@ def main() -> int:
                 result=res.get("result", ""),
                 exit_riyadh=wob.display_iso(res.get("exit_time"), display_tz),
                 exit_price="" if res.get("exit_price") is None else f"{res['exit_price']:.5f}",
+                mfe_pips="" if res.get("mfe") is None else f"{res['mfe'] / 0.0001:.1f}",
+                mae_pips="" if res.get("mae") is None else f"{res['mae'] / 0.0001:.1f}",
                 invalidated_riyadh=wob.display_iso(res.get("invalidated_at"), display_tz),
                 invalidation_reason=invalidation_reason if res.get("invalidated_at") is not None else "",
             ))

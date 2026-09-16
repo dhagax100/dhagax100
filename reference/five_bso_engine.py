@@ -39,12 +39,18 @@ other than a plain SL (TP, OPEN, AMBIGUOUS, a breach, or any no-entry
 stage). Each H4 OB can now produce more than one row in the ledger,
 numbered by `attempt`.
 
+MFE/MAE (SS34, 2026-09-16): every ENTERED attempt now tracks Maximum
+Favorable/Adverse Excursion -- the best and worst price reached between
+entry (exclusive) and exit (inclusive), same 1m-OHLC-ordering exclusion
+rule as exit resolution. Reported in the ledger as pips ahead of price,
+same "N.N/price" convention as the SL column.
+
 SCOPE OF THIS FIRST PASS -- explicitly NOT yet implemented:
   - Break-even (SPEC.md SS25): not computed. Every trade record's
     effective stop equals its original SL. Deferred until after MFE/MAE
-    are recorded, per the user's explicit instruction.
-  - MFE/MAE (SS34): not computed.
-These are follow-up stages, matching the build order's own stage split
+    are used to inform where it should trigger, per the user's explicit
+    instruction -- MFE/MAE are now recorded; break-even is next.
+This is a follow-up stage, matching the build order's own stage split
 (SS36 stages 11-12 vs 13). Every record is clearly one BSO attempt, not a
 finished trade-management lifecycle.
 
@@ -202,10 +208,20 @@ def run_bso(z, it: datetime, five_bar_starts: List[datetime], five_events: List[
 
     # Exit resolution (no break-even yet -- see module docstring): first SL
     # or TP touch after the entry minute (excluded, per SS34's own rule that
-    # 1m OHLC can't order the entry minute's own high/low).
+    # 1m OHLC can't order the entry minute's own high/low). MFE/MAE (SS34)
+    # accumulate over the same window, from entry (exclusive) through exit
+    # (inclusive) -- or through all available data if the trade never
+    # resolves (OPEN).
     result, exit_time, exit_price = None, None, None
+    mfe_price, mae_price = entry_price, entry_price
     for i in range(bisect_left(mt, entry_time) + 1, len(minutes)):
         m = minutes[i]
+        if bull:
+            mfe_price = max(mfe_price, m.h)
+            mae_price = min(mae_price, m.l)
+        else:
+            mfe_price = min(mfe_price, m.l)
+            mae_price = max(mae_price, m.h)
         hit_sl = (m.l <= sl_price) if bull else (m.h >= sl_price)
         hit_tp = (m.h >= tp_price) if bull else (m.l <= tp_price)
         if hit_sl and hit_tp:
@@ -217,13 +233,16 @@ def run_bso(z, it: datetime, five_bar_starts: List[datetime], five_events: List[
         if hit_tp:
             result, exit_time, exit_price = "TP", m.t, tp_price
             break
+    mfe = abs(mfe_price - entry_price)
+    mae = abs(mae_price - entry_price)
 
     return dict(stage="ENTERED", resting_at=resting.at, resting_price=resting.price,
                 candidate_price=entry_price, replacements=replacements,
                 candidate_since=current_since,
                 entry_time=entry_time, entry_price=entry_price,
                 sl_price=sl_price, risk=risk, tp_price=tp_price,
-                result=result or "OPEN", exit_time=exit_time, exit_price=exit_price)
+                result=result or "OPEN", exit_time=exit_time, exit_price=exit_price,
+                mfe=mfe, mae=mae)
 
 
 def structural_invalid_at(z, it: datetime, h4_bars: List["wob.Week"], h4_bar_starts: List[datetime],
@@ -461,6 +480,8 @@ def main() -> int:
                 result=res.get("result", ""),
                 exit_riyadh=wob.display_iso(res.get("exit_time"), display_tz),
                 exit_price="" if res.get("exit_price") is None else f"{res['exit_price']:.5f}",
+                mfe_pips="" if res.get("mfe") is None else f"{res['mfe'] / 0.0001:.1f}",
+                mae_pips="" if res.get("mae") is None else f"{res['mae'] / 0.0001:.1f}",
                 invalidated_riyadh=wob.display_iso(res.get("invalidated_at"), display_tz),
                 invalidation_reason=invalidation_reason if res.get("invalidated_at") is not None else "",
             )
@@ -468,7 +489,7 @@ def main() -> int:
 
     fields = ["h4_ob_id", "attempt", "parent_weekly_id", "side", "h4_impact_riyadh", "stage", "resting_riyadh",
               "candidate_since_riyadh", "entry_riyadh", "entry_price", "sl_price", "risk_price", "tp_price",
-              "candidate_replacements", "result", "exit_riyadh", "exit_price",
+              "candidate_replacements", "result", "exit_riyadh", "exit_price", "mfe_pips", "mae_pips",
               "invalidated_riyadh", "invalidation_reason"]
     with (base / "five_bso_ledger.csv").open("w", newline="", encoding="utf-8") as f:
         wr = csv.DictWriter(f, fieldnames=fields)
