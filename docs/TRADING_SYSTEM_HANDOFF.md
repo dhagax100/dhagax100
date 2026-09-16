@@ -785,3 +785,8 @@ Chart-verify at least one `five_bso_ledger.csv` trade (entry/SL/TP/candidate cha
 - `bso_results` tuples changed from `(z, it, res)` to `(z, it, parent_id, res)` throughout `full_viewer.py` (the parent Weekly zone id is what the table's "Weekly OB" column reads).
 - Validated: regenerated for zone #3's window — 627 lines total, well within Pine limits. Confirmed OB #194 (the one `H4_OB_BREACHED` attempt) correctly shows `na` in both `bso5BLeft`/`bso5CLeft` (no lines drawn) and `"H4_OB_BREACHED"` in `bso5Result`, while the other 9 have real timestamps/prices. Not yet re-confirmed on the actual TradingView chart by the user.
 - Next: user re-pastes the regenerated Pine, tries the new 5m BSO inspect-one toggle and reviews the lineage table, then reports back per-attempt findings (per their own stated plan: "I will give you report on each one and we will fix the brokens").
+
+## Per-attempt 5m BSO verification log (zone #3's window, 10 attempts, chart-confirmed one at a time)
+
+- **5m BSO from last = 1 (OB #197, SELL)**: confirmed correct by the user (chart screenshot). Noted a small visual offset between the blue entry line and the red SL line's exact pixel placement, but the user said "no worries now" -- explicitly not asking for a fix at this time. Not a structural/logic defect report; do not investigate or change anything from this note alone. Revisit only if the user raises it again or it turns out to affect a real value (not just line rendering).
+- Remaining attempts (from last = 2 through 10, i.e. OB #192, #190, #186, #181, #175, #173, #167, #159, and the #194 breach) not yet individually confirmed. Continue one at a time as the user reports back.
