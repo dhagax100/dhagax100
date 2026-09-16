@@ -303,8 +303,11 @@ def build_bso_extra_lines(bso_results: List[tuple], display_tz: ZoneInfo) -> Lis
         entry_t, entry_p = res.get("entry_time"), res.get("entry_price")
         entry_txt = f"{wob.display_iso(entry_t, display_tz)} @ {entry_p:.5f}" if entry_t is not None and entry_p is not None else "-"
         entries.append(f"\"{pine_text(entry_txt)}\"")
-        sl_v, tp_v = res.get("sl_price"), res.get("tp_price")
-        sls.append(f"\"{sl_v:.5f}\"" if sl_v is not None else "\"-\"")
+        sl_v, tp_v, risk_v = res.get("sl_price"), res.get("tp_price"), res.get("risk")
+        # SL column shows risk in pips (1 pip = 0.0001 for EURUSD) ahead of
+        # the price itself, separated by "/", e.g. "6.5/1.16527".
+        sl_txt = f"{risk_v / 0.0001:.1f}/{sl_v:.5f}" if sl_v is not None and risk_v is not None else ("-" if sl_v is None else f"{sl_v:.5f}")
+        sls.append(f"\"{sl_txt}\"")
         tps.append(f"\"{tp_v:.5f}\"" if tp_v is not None else "\"-\"")
         result_txt = res.get("result") or res.get("stage") or "?"
         results.append(f"\"{pine_text(result_txt)}\"")

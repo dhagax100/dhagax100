@@ -259,12 +259,21 @@ def run_bso_chain(z, it: datetime, five_bar_starts: List[datetime], five_events:
     resting swing landed at/after the ceiling once actually found. Since
     search_from only advances to the previous exit, a slow-forming resting
     swing could (and did) print well past swing_stop_at and still get
-    accepted as a live trade. Now validated per-attempt (RE-ENTRIES ONLY --
-    attempt_no > 1; the OB's original first attempt is unconditional, exactly
-    as it was before re-entry existed, since a 4H swing forms constantly and
-    would otherwise veto entries that were already validated): any re-entry
-    whose resting swing is at/after the ceiling is converted to a
-    disallowed, non-tradeable stage instead of being accepted.
+    accepted as a live trade. Now validated per-attempt: any attempt whose
+    resting swing is at/after the ceiling is converted to a disallowed,
+    non-tradeable stage instead of being accepted.
+
+    This check applies to attempt 1 as well, not just re-entries -- a fix
+    initially tried, then wrongly reverted the same day on an unverified
+    assumption ("a 4H swing forms constantly, so this would veto valid
+    entries"), then re-applied after a second user report (OB #190) with
+    direct evidence: its resting swing didn't form until 6 days after
+    impact, by which point a new 4H swing had confirmed within an hour of
+    impact. Checking the data for the earlier "reverted" OBs (#159, #181,
+    #186) showed the exact same pattern -- 12 hours to 6 days of staleness
+    -- confirming they were real defects, not false positives. The 6 OBs
+    that were never flagged all have their resting swing forming BEFORE any
+    subsequent 4H swing, so this check does not touch them.
 
     Reporting rule (user, 2026-09-16): a RE-ENTRY (attempt_no > 1) that never
     actually became a trade -- breached, swing-stop-reached, no resting
@@ -279,7 +288,7 @@ def run_bso_chain(z, it: datetime, five_bar_starts: List[datetime], five_events:
     while True:
         res = run_bso(z, search_from, five_bar_starts, five_events, minutes, mt, h4_bars, h4_bar_starts)
         resting_at = res.get("resting_at")
-        if attempt_no > 1 and swing_stop_at is not None and resting_at is not None and resting_at >= swing_stop_at:
+        if swing_stop_at is not None and resting_at is not None and resting_at >= swing_stop_at:
             res = dict(stage="SWING_STOP_REACHED", resting_at=resting_at)
         entered = res.get("stage") == "ENTERED"
         if attempt_no == 1 or entered:
