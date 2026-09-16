@@ -758,3 +758,12 @@ python five_bso_engine.py EURUSD_m1_BidAndAsk.csv --focus-weekly-id 3   # BSO le
 ### Next exact action
 
 Chart-verify at least one `five_bso_ledger.csv` trade (entry/SL/TP/candidate chain) against TradingView before building its Pine visualization. Resume the remaining OB-by-OB checks in zone #3's window if the user flags any. Do not start break-even/re-entry/MFE-MAE work until the base BSO entry/SL/TP logic is chart-verified.
+
+## Session update — 2026-09-16 (5m impact-line placement bug; H4 swing/MSS added to 5m)
+
+- User reported: on the 5m chart, the H4 OB box's right edge / impact line stopped at the open of the containing 4H candle instead of at the exact 1-minute impact, defeating the purpose of storing exact 1m impact data.
+- Root cause: `build_h4_extra_lines()` computed the box right edge as `h4_bars[z.stop].start` (the H4 bar's own open) — a fixed constant. That's indistinguishable from the exact impact when the layer only ever rendered on the H4 chart itself (the containing-bar-open equals the H4 bar's own start there), but once the layer also renders on 5m (previous session's change), the exact 1m impact usually lands several 5m bars after that H4-bar open, so 5m drew the line in the wrong place.
+- Fix: reused the Weekly layer's own per-chart-bar resolution technique — a `var int h4impact_x_<id>` tracker per drawn OB, updated every bar via `if time <= stamp and stamp < time_close: h4impact_x_<id> := time`. The `h4Right` array is now built *inside* the `if barstate.islast: if onH4 or onFive:` block (not as a top-level `var array`, which would have frozen it at its bar-0 unresolved value) so it reads each tracker's fully-resolved value. Works correctly on both the 4H and 5m chart now.
+- Also moved the H4 swing-high/swing-low/MSS labels (▲▼✕) into the same `onH4 or onFive` gate, per the user's request to see H4 structure on the 5m chart too. The H4 table remains H4-only, unchanged.
+- Validated: regenerated `full_viewer.pine` for zone #3's window (580 lines, well within Pine's statement limits), confirmed the new `h4Right` array expression references the live `h4impact_x_*` trackers and the swing/MSS labels now sit inside the `onH4 or onFive` block. Not yet re-confirmed on the actual TradingView chart by the user.
+- Next: user re-pastes the regenerated Pine and confirms the 5m impact lines now land on the exact 1m impact minute and H4 swing/MSS labels appear on 5m, then proceeds to 5m entry work (`five_bso_engine.py` verification).
