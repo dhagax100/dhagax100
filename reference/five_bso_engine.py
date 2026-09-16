@@ -155,6 +155,14 @@ def run_bso(z, it: datetime, five_bar_starts: List[datetime], five_events: List[
     current_since = five_bar_starts[current.swing]
     for i in range(idx, len(minutes)):
         m = minutes[i]
+        # Invalidation checked BEFORE the break test, not after: a real bug
+        # (user-caught, OB #194) let an entry fire on the exact same minute
+        # the OB's own impact-containing H4 candle closed through the zone,
+        # since the old order let "price broke the candidate" win a tie
+        # against "the OB just died" on that shared minute.
+        if invalidated_at is not None and m.t >= invalidated_at:
+            stopped = True
+            break
         while cand_ptr < len(later_candidates) and later_candidates[cand_ptr].at <= m.t:
             current = later_candidates[cand_ptr]
             current_since = five_bar_starts[current.swing]
@@ -163,9 +171,6 @@ def run_bso(z, it: datetime, five_bar_starts: List[datetime], five_events: List[
         broke = (m.h > current.price) if bull else (m.l < current.price)
         if broke:
             entry_m = m
-            break
-        if invalidated_at is not None and m.t >= invalidated_at:
-            stopped = True
             break
 
     if entry_m is None:
@@ -257,12 +262,26 @@ def structural_invalid_at(z, it: datetime, h4_bars: List["wob.Week"], h4_bar_sta
           break until 2026-05-27, five days later than the first (wrong)
           answer.
     Returns (time, reason); (None, None) if the OB is never structurally
-    invalidated in the available data."""
+    invalidated in the available data.
+
+    Real bug fixed 2026-09-16 (user-caught, OB #194): the h4_close scan
+    started at `bisect_left(h4_bar_starts, it)`, which finds the first bar
+    starting AT OR AFTER `it`. Since the impact minute almost always falls
+    MID-candle (not exactly on a 4H bar boundary), this skipped the very
+    candle containing the impact -- exactly the candle most likely to close
+    through the zone right as/after the OB gets touched. For #194, that
+    candle (2026-05-27 00:00-04:00) closed at 1.16377, above both zb
+    (1.16293) and zt (1.16360) -- the OB was impacted and closed fully
+    through on the SAME 4H candle, yet the old scan started at the NEXT
+    candle (04:00) and never saw it, letting two "entries" happen after
+    the OB should already have been dead. Fixed by starting from the bar
+    that CONTAINS `it` (bisect_right - 1), the same pattern run_bso() uses
+    for start5."""
     bull = z.bullish
     near_boundary = z.zt if bull else z.zb
 
     h4_close_invalid_at = None
-    start_idx = bisect_left(h4_bar_starts, it)
+    start_idx = max(0, bisect_right(h4_bar_starts, it) - 1)
     for hb in h4_bars[start_idx:]:
         breach = (hb.c <= near_boundary) if bull else (hb.c >= near_boundary)
         if breach:
