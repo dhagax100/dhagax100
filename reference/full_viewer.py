@@ -249,11 +249,17 @@ def build_h4_extra_lines(h4_engine, h4_bars, drawn: List[tuple], ob_cap: int, di
     return lines
 
 
-def build_bso_extra_lines(bso_results: List[tuple]) -> List[str]:
+def build_bso_extra_lines(bso_results: List[tuple], display_tz: ZoneInfo) -> List[str]:
     """5m entry-machine visualization -- 5m chart only (`onFive`), nothing on
     H4/Weekly: this is 5m execution detail, not higher-timeframe structure.
 
-    For every H4 OB whose BSO run reached ENTERED:
+    One row per BSO attempt (`bso_results` = every drawn H4 OB in the
+    focused window, whether or not it reached an entry), with its own
+    `Inspect one 5m BSO only` / `5m BSO from last` toggle -- same pattern as
+    the H4 OB inspector -- so a single attempt's table row and lines can be
+    isolated the same way a single H4 OB already can.
+
+    For an attempt that reached ENTERED:
       - a BLUE horizontal line at the entry/candidate price, from the moment
         that candidate became the active trigger (`candidate_since` -- the
         resting swing's time for the original candidate, or a later
@@ -263,46 +269,105 @@ def build_bso_extra_lines(bso_results: List[tuple]) -> List[str]:
         minute price reached it, if SL was hit first.
       - a GREEN horizontal line at the TP price, from entry to the exact
         minute price reached it, if TP was hit first.
-    Nothing is drawn for an H4 OB whose BSO never reached an entry
-    (H4_OB_BREACHED, NO_RESTING_SWING, etc) -- there is no entry to show.
+    An attempt that never reached an entry (H4_OB_BREACHED, NO_RESTING_SWING,
+    etc) gets a table row (stage shown in the Result column) but no lines.
     OPEN/AMBIGUOUS results get the blue line but no red/green, since the
     outcome isn't resolved (OPEN) or isn't orderable from 1m OHLC alone
-    (AMBIGUOUS)."""
+    (AMBIGUOUS).
+
+    The table reports the full lineage per SPEC.md SS17's parent-POI chain:
+    Weekly OB (grandparent) -> 4H OB (parent) -> 5m entry (child)."""
+    n = len(bso_results)
+
+    def pt(t: Optional[datetime]) -> str:
+        return pine_time(t) if t is not None else "na"
+
+    def pf(v: Optional[float]) -> str:
+        return f"{v:.5f}" if v is not None else "na"
+
+    ids, weeklys, sides, restings, entries, sls, tps, results, exits = ([] for _ in range(9))
     blefts, brights, bys = [], [], []
     clefts, crights, cys, ccols = [], [], [], []
-    for _z, _it, res in bso_results:
-        if res.get("stage") != "ENTERED":
-            continue
-        cs, entry_t, entry_p = res.get("candidate_since"), res.get("entry_time"), res.get("entry_price")
-        if cs is not None and entry_t is not None and entry_p is not None:
-            blefts.append(pine_time(cs))
-            brights.append(pine_time(entry_t))
-            bys.append(f"{entry_p:.5f}")
-        result = res.get("result")
+    for z, _it, parent_id, res in bso_results:
+        ids.append(f"\"#{z.id}\"")
+        weeklys.append(f"\"{pine_text('#' + parent_id if parent_id else '-')}\"")
+        sides.append(f"\"{'BUY' if z.bullish else 'SELL'}\"")
+        restings.append(f"\"{pine_text(wob.display_iso(res.get('resting_at'), display_tz))}\"")
+        entry_t, entry_p = res.get("entry_time"), res.get("entry_price")
+        entry_txt = f"{wob.display_iso(entry_t, display_tz)} @ {entry_p:.5f}" if entry_t is not None and entry_p is not None else "-"
+        entries.append(f"\"{pine_text(entry_txt)}\"")
+        sl_v, tp_v = res.get("sl_price"), res.get("tp_price")
+        sls.append(f"\"{sl_v:.5f}\"" if sl_v is not None else "\"-\"")
+        tps.append(f"\"{tp_v:.5f}\"" if tp_v is not None else "\"-\"")
+        result_txt = res.get("result") or res.get("stage") or "?"
+        results.append(f"\"{pine_text(result_txt)}\"")
         exit_t, exit_p = res.get("exit_time"), res.get("exit_price")
+        exit_txt = f"{wob.display_iso(exit_t, display_tz)} @ {exit_p:.5f}" if exit_t is not None and exit_p is not None else "-"
+        exits.append(f"\"{pine_text(exit_txt)}\"")
+
+        cs, ep = res.get("candidate_since"), res.get("entry_price")
+        blefts.append(pt(cs) if cs is not None and entry_t is not None else "na")
+        brights.append(pt(entry_t) if cs is not None and entry_t is not None else "na")
+        bys.append(pf(ep) if cs is not None and entry_t is not None else "na")
+
+        result = res.get("result")
         if result in ("SL", "TP") and entry_t is not None and exit_t is not None and exit_p is not None:
-            clefts.append(pine_time(entry_t))
-            crights.append(pine_time(exit_t))
-            cys.append(f"{exit_p:.5f}")
+            clefts.append(pt(entry_t)); crights.append(pt(exit_t)); cys.append(pf(exit_p))
             ccols.append("color.red" if result == "SL" else "color.green")
+        else:
+            clefts.append("na"); crights.append("na"); cys.append("na"); ccols.append("na")
 
     def arr(kind: str, values: List[str]) -> str:
         return f"array.from({', '.join(values)})" if values else f"array.new<{kind}>()"
 
     return [
-        f"var array<int> bsoBLeft = {arr('int', blefts)}",
-        f"var array<int> bsoBRight = {arr('int', brights)}",
-        f"var array<float> bsoBY = {arr('float', bys)}",
-        f"var array<int> bsoCLeft = {arr('int', clefts)}",
-        f"var array<int> bsoCRight = {arr('int', crights)}",
-        f"var array<float> bsoCY = {arr('float', cys)}",
-        f"var array<color> bsoCCol = {arr('color', ccols)}",
+        "bool inspectOne5mBSO = input.bool(false, \"Inspect one 5m BSO only\", group=\"5m BSO inspection\")",
+        f"int bso5FromLast = input.int(1, \"5m BSO from last\", minval=1, maxval={max(1, n)}, group=\"5m BSO inspection\", tooltip=\"1 = most recent 5m BSO attempt, 2 = the one before it, and so on.\")",
+        f"var table bso5Ledger = table.new(position.top_left, 9, {n + 1}, border_width=1)",
+        f"var array<string> bso5Id = {arr('string', ids)}",
+        f"var array<string> bso5Weekly = {arr('string', weeklys)}",
+        f"var array<string> bso5Side = {arr('string', sides)}",
+        f"var array<string> bso5Resting = {arr('string', restings)}",
+        f"var array<string> bso5Entry = {arr('string', entries)}",
+        f"var array<string> bso5Sl = {arr('string', sls)}",
+        f"var array<string> bso5Tp = {arr('string', tps)}",
+        f"var array<string> bso5Result = {arr('string', results)}",
+        f"var array<string> bso5Exit = {arr('string', exits)}",
         "if barstate.islast",
         "    if onFive",
-        "        for i = 0 to array.size(bsoBLeft) - 1",
-        "            line.new(array.get(bsoBLeft, i), array.get(bsoBY, i), array.get(bsoBRight, i), array.get(bsoBY, i), xloc=xloc.bar_time, extend=extend.none, color=color.blue, width=2)",
-        "        for i = 0 to array.size(bsoCLeft) - 1",
-        "            line.new(array.get(bsoCLeft, i), array.get(bsoCY, i), array.get(bsoCRight, i), array.get(bsoCY, i), xloc=xloc.bar_time, extend=extend.none, color=array.get(bsoCCol, i), width=2)",
+        f"        array<int> bso5BLeft = {arr('int', blefts)}",
+        f"        array<int> bso5BRight = {arr('int', brights)}",
+        f"        array<float> bso5BY = {arr('float', bys)}",
+        f"        array<int> bso5CLeft = {arr('int', clefts)}",
+        f"        array<int> bso5CRight = {arr('int', crights)}",
+        f"        array<float> bso5CY = {arr('float', cys)}",
+        f"        array<color> bso5CCol = {arr('color', ccols)}",
+        "        table.cell(bso5Ledger, 0, 0, \"Weekly OB\", text_color=color.white, bgcolor=color.new(color.purple,15))",
+        "        table.cell(bso5Ledger, 1, 0, \"4H OB\", text_color=color.white, bgcolor=color.new(color.purple,15))",
+        "        table.cell(bso5Ledger, 2, 0, \"Side\", text_color=color.white, bgcolor=color.new(color.purple,15))",
+        "        table.cell(bso5Ledger, 3, 0, \"Resting (RYD)\", text_color=color.white, bgcolor=color.new(color.purple,15))",
+        "        table.cell(bso5Ledger, 4, 0, \"Entry (RYD / px)\", text_color=color.white, bgcolor=color.new(color.purple,15))",
+        "        table.cell(bso5Ledger, 5, 0, \"SL\", text_color=color.white, bgcolor=color.new(color.purple,15))",
+        "        table.cell(bso5Ledger, 6, 0, \"TP\", text_color=color.white, bgcolor=color.new(color.purple,15))",
+        "        table.cell(bso5Ledger, 7, 0, \"Result\", text_color=color.white, bgcolor=color.new(color.purple,15))",
+        "        table.cell(bso5Ledger, 8, 0, \"Exit (RYD / px)\", text_color=color.white, bgcolor=color.new(color.purple,15))",
+        "        for i = 0 to array.size(bso5Id) - 1",
+        "            bRank = array.size(bso5Id) - i",
+        "            if not inspectOne5mBSO or bRank == bso5FromLast",
+        "                bRow = inspectOne5mBSO ? 1 : i + 1",
+        "                table.cell(bso5Ledger, 0, bRow, array.get(bso5Weekly, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(bso5Ledger, 1, bRow, array.get(bso5Id, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(bso5Ledger, 2, bRow, array.get(bso5Side, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(bso5Ledger, 3, bRow, array.get(bso5Resting, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(bso5Ledger, 4, bRow, array.get(bso5Entry, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(bso5Ledger, 5, bRow, array.get(bso5Sl, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(bso5Ledger, 6, bRow, array.get(bso5Tp, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(bso5Ledger, 7, bRow, array.get(bso5Result, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(bso5Ledger, 8, bRow, array.get(bso5Exit, i), text_color=color.black, bgcolor=na)",
+        "                if not na(array.get(bso5BLeft, i))",
+        "                    line.new(array.get(bso5BLeft, i), array.get(bso5BY, i), array.get(bso5BRight, i), array.get(bso5BY, i), xloc=xloc.bar_time, extend=extend.none, color=color.blue, width=2)",
+        "                if not na(array.get(bso5CLeft, i))",
+        "                    line.new(array.get(bso5CLeft, i), array.get(bso5CY, i), array.get(bso5CRight, i), array.get(bso5CY, i), xloc=xloc.bar_time, extend=extend.none, color=array.get(bso5CCol, i), width=2)",
     ]
 
 
@@ -418,10 +483,9 @@ def main() -> int:
     bso_results = []
     for z, tt, tp, et, ep, it, parent_id in focused_drawn:
         res = bso.run_bso(z, it, five_bar_starts, five_engine.events, minutes, mt, h4_bars, h4_bar_starts)
-        bso_results.append((z, it, res))
-    bso_extra_lines = build_bso_extra_lines(bso_results)
+        bso_results.append((z, it, parent_id, res))
+    bso_extra_lines = build_bso_extra_lines(bso_results, display_tz)
 
-    bso_id_to_parent = {z.id: parent_id for z, *_rest, parent_id in focused_drawn}
     with (base / "five_bso_ledger.csv").open("w", newline="", encoding="utf-8") as f:
         fields = ["h4_ob_id", "parent_weekly_id", "side", "h4_impact_riyadh", "stage", "resting_riyadh",
                   "candidate_since_riyadh", "entry_riyadh", "entry_price", "sl_price", "risk_price", "tp_price",
@@ -429,9 +493,9 @@ def main() -> int:
                   "invalidated_riyadh", "invalidation_reason"]
         wr = csv.DictWriter(f, fieldnames=fields)
         wr.writeheader()
-        for z, it, res in bso_results:
+        for z, it, parent_id, res in bso_results:
             wr.writerow(dict(
-                h4_ob_id=z.id, parent_weekly_id=bso_id_to_parent.get(z.id, ""), side="BUY" if z.bullish else "SELL",
+                h4_ob_id=z.id, parent_weekly_id=parent_id, side="BUY" if z.bullish else "SELL",
                 h4_impact_riyadh=wob.display_iso(it, display_tz), stage=res.get("stage"),
                 resting_riyadh=wob.display_iso(res.get("resting_at"), display_tz),
                 candidate_since_riyadh=wob.display_iso(res.get("candidate_since"), display_tz),
@@ -463,7 +527,7 @@ def main() -> int:
     focus_note = f", {len(focused_drawn)} shown (--focus-weekly-id {args.focus_weekly_id})" if args.focus_weekly_id else ""
     print(f"{len(h4_bars)} 4H bars, {len(h4_engine.zones)} H4 OBs computed, {len(drawn)} drawn (impacted + authorized){focus_note}.")
     bso_stages = {}
-    for _z, _it, res in bso_results:
+    for _z, _it, _parent_id, res in bso_results:
         bso_stages[res.get("stage")] = bso_stages.get(res.get("stage"), 0) + 1
     print(f"5m BSO on {len(bso_results)} drawn OBs: {bso_stages}")
     return 0
