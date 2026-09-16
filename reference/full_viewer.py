@@ -281,22 +281,32 @@ def build_bso_extra_lines(bso_results: List[tuple], display_tz: ZoneInfo) -> Lis
         comes first, win or loss" -- kept alongside the SL/TP lines above,
         not instead of them, per the user's explicit correction) TWO
         filled boxes, always both, both anchored at (entry time, entry
-        price):
-          - a GREEN box up to (excursion_end time, mfe_price) -- the best
-            price actually reached in this trade's favour (MFE).
-          - a RED box up to (excursion_end time, mae_price) -- the worst
-            price actually reached against this trade (MAE).
-        Corrected 2026-09-16 (user: "the box should always have the two
-        sides ... we want to see the red part ... intersecting with the
-        green until the SL") from an earlier single-colour version that
-        only showed the winning side (green for a TP, red for an SL,
-        entry-to-exit only). That collapsed MFE and MAE into invisible
-        detail and skipped OPEN/AMBIGUOUS trades entirely. Now both sides
-        always draw, for every entered attempt regardless of outcome
-        (`excursion_end_time` is the exit minute when resolved, or the
-        last minute of available data for an OPEN trade -- see
-        five_bso_engine.run_bso), so a trade that nearly stopped out
-        before winning shows its own near-miss, not just its final result.
+        price), spanning entry to `excursion_end_time` (the exit minute
+        when resolved, or the last minute of available data for an OPEN
+        trade -- see five_bso_engine.run_bso):
+          - a GREEN box from entry_price to tp_price -- the fixed 3R
+            reward frame this attempt was risking for.
+          - a RED box from entry_price to sl_price -- the fixed 1R risk
+            frame.
+        Twice corrected 2026-09-16. First (user: "the box should always
+        have the two sides ... we want to see the red part ...
+        intersecting with the green until the SL") from an earlier
+        single-colour version that only showed the winning side
+        (entry-to-exit only, colour picked by outcome) and skipped
+        OPEN/AMBIGUOUS trades. That version was then changed to use the
+        trade's actual MFE/MAE prices as the box edges -- which promptly
+        drew boxes that did NOT line up with the SL/TP price lines already
+        on the chart (MFE/MAE are usually short of the full SL/TP
+        distance) and, on a losing trade, drew a stunted green box that
+        stopped wherever price happened to turn back, not at the reward
+        target. Second correction (user: "the boxs does not happen to be
+        exactly on the entry, tp or sl lines" + "if the price hit SL
+        first, the green part should cover the 3rr range for
+        consistency"): the box now always uses the SAME sl_price/tp_price
+        values as the SL/TP table column and line, so its edges are
+        pixel-identical to those references on every attempt, win or
+        lose -- what actually happened (MFE/MAE) stays in the table
+        column below, not the box.
     An attempt that never reached an entry (H4_OB_BREACHED, NO_RESTING_SWING,
     etc) gets a table row (stage shown in the Result column) but no lines.
     OPEN/AMBIGUOUS results get the blue line but no SL/TP line or box,
@@ -359,12 +369,11 @@ def build_bso_extra_lines(bso_results: List[tuple], display_tz: ZoneInfo) -> Lis
             clefts.append("na"); crights.append("na"); cys.append("na"); ccols.append("na")
 
         end_t = res.get("excursion_end_time")
-        mfe_p, mae_p = res.get("mfe_price"), res.get("mae_price")
-        if entry_t is not None and end_t is not None and mfe_p is not None and mae_p is not None:
+        if entry_t is not None and end_t is not None and tp_v is not None and sl_v is not None:
             gleft.append(pt(entry_t)); gright.append(pt(end_t))
-            gtop.append(pf(max(entry_p, mfe_p))); gbottom.append(pf(min(entry_p, mfe_p)))
+            gtop.append(pf(max(entry_p, tp_v))); gbottom.append(pf(min(entry_p, tp_v)))
             rleft.append(pt(entry_t)); rright.append(pt(end_t))
-            rtop.append(pf(max(entry_p, mae_p))); rbottom.append(pf(min(entry_p, mae_p)))
+            rtop.append(pf(max(entry_p, sl_v))); rbottom.append(pf(min(entry_p, sl_v)))
         else:
             gleft.append("na"); gright.append("na"); gtop.append("na"); gbottom.append("na")
             rleft.append("na"); rright.append("na"); rtop.append("na"); rbottom.append("na")
