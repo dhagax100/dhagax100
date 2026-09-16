@@ -97,8 +97,9 @@ def build_h4_extra_lines(h4_engine, h4_bars, drawn: List[tuple], ob_cap: int, di
                           label_cap: int = 80) -> List[str]:
     """Self-contained H4 layer: data packed into Pine arrays (one bulk
     `array.from(...)` statement per field, not one statement per OB), then a
-    single small runtime `for` loop draws everything. `onH4` is reused from
-    the Weekly layer's own declaration earlier in the same script.
+    single small runtime `for` loop draws everything. `onH4`/`onFive` are
+    reused from the Weekly layer's own declaration earlier in the same
+    script.
 
     Earlier versions unrolled one box.new/label.new/table.cell per OB. At 70+
     drawn OBs that first blew a single if-block's statement limit (CE10205),
@@ -108,11 +109,16 @@ def build_h4_extra_lines(h4_engine, h4_bars, drawn: List[tuple], ob_cap: int, di
     of how many OBs get drawn -- the fix TradingView's own error message
     points at ("try wrapping code in functions").
 
-    Every drawn OB is guaranteed impacted (authorized requires it), so the
-    box's right edge is simply the H4 bar containing that exact impact
-    minute (h4_bars[z.stop].start) -- no per-bar "which timeframe am I on"
-    resolution is needed here, unlike the Weekly layer, because this layer
-    only ever renders on the 4H chart itself (onH4 gate)."""
+    Box right edge / impact line: resolved into the opening time of whichever
+    chart bar contains the exact 1m impact minute, using the same watcher
+    technique as the Weekly layer (`var int impact_x_<id> = na`, updated every
+    bar via `time <= stamp < time_close`). On the H4 chart this happens to
+    equal the H4 bar's own start, which is why an earlier version could get
+    away with the cruder `h4_bars[z.stop].start` shortcut -- but on the 5m
+    chart the exact impact is usually several 5m bars after the H4 bar opens,
+    so that shortcut drew the box/line at the wrong place there. Swing/MSS
+    labels and the table stay H4-only; only the OB boxes and impact lines
+    also render on 5m, per the user's explicit request."""
     shown = drawn[-ob_cap:]
     n = len(shown)
 
@@ -141,14 +147,31 @@ def build_h4_extra_lines(h4_engine, h4_bars, drawn: List[tuple], ob_cap: int, di
         colour = "color.blue" if m.up else "color.black"
         struct_lines.append(f"        label.new({pine_time(h4_bars[m.broken].start)}, {y}, \"✕\", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor={colour}, size=size.small)")
 
-    lefts, tops, bottoms, rights, bulls, labels, parents, sides, bots5, tops5, trigs, eligs, impacts = ([] for _ in range(13))
+    # Same cross-timeframe impact-resolution technique as the Weekly layer
+    # (write_ob_pine's impact_vars): a `var int` tracker per drawn OB, updated
+    # on every chart bar until the bar containing the exact 1m impact is
+    # reached, after which it stays fixed. Declared once here so it works
+    # whether this layer is on the H4 or the 5m chart.
+    impact_vars: Dict[int, str] = {}
+    impact_watchers: List[str] = []
+    for z, tt, tp, et, ep, it, parent_id in shown:
+        if it is not None:  # guaranteed: authorized => impacted => it is set
+            name = f"h4impact_x_{z.id}"
+            impact_vars[z.id] = name
+            stamp = pine_time(it)
+            impact_watchers += [f"var int {name} = na", f"if time <= {stamp} and {stamp} < time_close", f"    {name} := time"]
+
+    lefts, tops, bottoms, right_exprs, bulls, labels, parents, sides, bots5, tops5, trigs, eligs, impacts = ([] for _ in range(13))
     for z, tt, tp, et, ep, it, parent_id in shown:
         origin = h4_bars[z.candle]
-        right_time = h4_bars[z.stop].start  # guaranteed valid: authorized => impacted => z.stop set
+        fallback_right = h4_bars[z.stop].start  # guaranteed valid: authorized => impacted => z.stop set
         lefts.append(pine_time(origin.start))
         tops.append(f"{z.zt:.5f}")
         bottoms.append(f"{z.zb:.5f}")
-        rights.append(pine_time(right_time))
+        if z.id in impact_vars:
+            right_exprs.append(f"(na({impact_vars[z.id]}) ? {pine_time(fallback_right)} : {impact_vars[z.id]})")
+        else:
+            right_exprs.append(pine_time(fallback_right))
         bulls.append("true" if z.bullish else "false")
         label_text = f"#{z.id} {'BUY' if z.bullish else 'SELL'} (W{parent_id})"
         labels.append(f"\"{pine_text(label_text)}\"")
@@ -171,7 +194,6 @@ def build_h4_extra_lines(h4_engine, h4_bars, drawn: List[tuple], ob_cap: int, di
         f"var array<int> h4Left = {arr('int', lefts)}",
         f"var array<float> h4Top = {arr('float', tops)}",
         f"var array<float> h4Bottom = {arr('float', bottoms)}",
-        f"var array<int> h4Right = {arr('int', rights)}",
         f"var array<bool> h4Bull = {arr('bool', bulls)}",
         f"var array<string> h4Label = {arr('string', labels)}",
         f"var array<string> h4Id = {arr('string', ids)}",
@@ -182,8 +204,11 @@ def build_h4_extra_lines(h4_engine, h4_bars, drawn: List[tuple], ob_cap: int, di
         f"var array<string> h4Trig = {arr('string', trigs)}",
         f"var array<string> h4Elig = {arr('string', eligs)}",
         f"var array<string> h4Impact = {arr('string', impacts)}",
+        *impact_watchers,
         "if barstate.islast",
         "    if onH4 or onFive",
+        f"        array<int> h4Right = {arr('int', right_exprs)}",
+        *struct_lines,
         "        for i = 0 to array.size(h4Left) - 1",
         "            hRank = array.size(h4Left) - i",
         "            if not inspectOneH4OB or hRank == h4ObFromLast",
@@ -192,7 +217,6 @@ def build_h4_extra_lines(h4_engine, h4_bars, drawn: List[tuple], ob_cap: int, di
         "                label.new(array.get(h4Left, i), array.get(h4Top, i), array.get(h4Label, i), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_down, color=color.new(hCol,85), textcolor=hCol, size=size.tiny)",
         "                line.new(array.get(h4Right, i), array.get(h4Bottom, i), array.get(h4Right, i), array.get(h4Top, i), xloc=xloc.bar_time, extend=extend.both, color=color.new(color.blue,55), width=1)",
         "    if onH4",
-        *struct_lines,
         f"        table.cell(h4Ledger, 0, 0, \"4H OB\", text_color=color.white, bgcolor=color.new(color.blue,15))",
         f"        table.cell(h4Ledger, 1, 0, \"Parent W\", text_color=color.white, bgcolor=color.new(color.blue,15))",
         f"        table.cell(h4Ledger, 2, 0, \"Side\", text_color=color.white, bgcolor=color.new(color.blue,15))",
