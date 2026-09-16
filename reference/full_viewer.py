@@ -58,6 +58,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--pine-table", type=int, default=20, choices=range(1, 21))
     p.add_argument("--h4-anchor-hour", type=int, default=0, choices=range(4), help="UTC hour the 4H grid starts from. VERIFY against the real chart.")
     p.add_argument("--h4-pine-obs", type=int, default=200, choices=range(1, 451))
+    p.add_argument("--h4-pine-labels", type=int, default=80, choices=range(1, 161), help="max recent H4 swing-high/swing-low/MSS labels shown (each)")
     p.add_argument("--control-ledger", default=None)
     p.add_argument("--focus-weekly-id", type=int, default=0,
                     help="Only draw/table 4H OBs whose parent Weekly zone matches this ID "
@@ -85,7 +86,9 @@ def pine_text(s: str) -> str:
     return s.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def build_h4_extra_lines(h4_engine, h4_bars, drawn: List[tuple], ob_cap: int, display_tz: ZoneInfo) -> List[str]:
+def build_h4_extra_lines(h4_engine, h4_bars, drawn: List[tuple], ob_cap: int, display_tz: ZoneInfo,
+                          window_start: Optional[datetime] = None, window_end: Optional[datetime] = None,
+                          label_cap: int = 80) -> List[str]:
     """Self-contained H4 layer: data packed into Pine arrays (one bulk
     `array.from(...)` statement per field, not one statement per OB), then a
     single small runtime `for` loop draws everything. `onH4` is reused from
@@ -109,6 +112,28 @@ def build_h4_extra_lines(h4_engine, h4_bars, drawn: List[tuple], ob_cap: int, di
 
     def arr(kind: str, values: List[str]) -> str:
         return f"array.from({', '.join(values)})" if values else f"array.new<{kind}>()"
+
+    def in_window(t: datetime) -> bool:
+        if window_start is None:
+            return True
+        return window_start <= t < window_end
+
+    # H4 swing highs/lows and MSS, scoped to the same window as the focused
+    # Weekly zone (SPEC.md SS18's "H4 structure" -- this is genuinely computed
+    # H4 structure, not re-derived Weekly structure). Reuses `lowGap`, already
+    # declared once by the Weekly layer earlier in the same script.
+    sh = [e for e in h4_engine.events if e.kind == 0 and in_window(h4_bars[e.swing].start)][-label_cap:]
+    sl = [e for e in h4_engine.events if e.kind == 1 and in_window(h4_bars[e.swing].start)][-label_cap:]
+    ms = [m for m in h4_engine.msses if in_window(h4_bars[m.broken].start)][-label_cap:]
+    struct_lines: List[str] = []
+    for e in sh:
+        struct_lines.append(f"        label.new({pine_time(h4_bars[e.swing].start)}, {e.price:.5f}, \"▲\", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=color.blue, size=size.small)")
+    for e in sl:
+        struct_lines.append(f"        label.new({pine_time(h4_bars[e.swing].start)}, {e.price:.5f} - lowGap, \"▼\", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=color.black, size=size.small)")
+    for m in ms:
+        y = f"{m.price:.5f}" if m.up else f"{m.price:.5f} - lowGap"
+        colour = "color.blue" if m.up else "color.black"
+        struct_lines.append(f"        label.new({pine_time(h4_bars[m.broken].start)}, {y}, \"✕\", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor={colour}, size=size.small)")
 
     lefts, tops, bottoms, rights, bulls, labels, parents, sides, bots5, tops5, trigs, eligs, impacts = ([] for _ in range(13))
     for z, tt, tp, et, ep, it, parent_id in shown:
@@ -153,6 +178,7 @@ def build_h4_extra_lines(h4_engine, h4_bars, drawn: List[tuple], ob_cap: int, di
         f"var array<string> h4Impact = {arr('string', impacts)}",
         "if barstate.islast",
         "    if onH4",
+        *struct_lines,
         f"        table.cell(h4Ledger, 0, 0, \"4H OB\", text_color=color.white, bgcolor=color.new(color.blue,15))",
         f"        table.cell(h4Ledger, 1, 0, \"Parent W\", text_color=color.white, bgcolor=color.new(color.blue,15))",
         f"        table.cell(h4Ledger, 2, 0, \"Side\", text_color=color.white, bgcolor=color.new(color.blue,15))",
@@ -229,10 +255,18 @@ def main() -> int:
         pre_spent_ok = z.pre_spent_state in (0, 1, 4) if impacted else None
         ctrl, parent_id = control_and_parent_at(it) if impacted else ("", "")
         authorized = bool(impacted and pre_spent_ok and h4.permits(ctrl, z.bullish))
+        origin_bar = h4_bars[z.candle]
+        origin_dir = "UP" if origin_bar.c > origin_bar.o else "DOWN" if origin_bar.c < origin_bar.o else "FLAT"
         rows.append(dict(
             id=z.id, side="BUY" if z.bullish else "SELL", type=h4.status(z),
             bottom=f"{z.zb:.5f}", top=f"{z.zt:.5f}",
-            origin_utc=wob.iso(h4_bars[z.candle].start), origin_riyadh=wob.display_iso(h4_bars[z.candle].start, display_tz),
+            origin_utc=wob.iso(origin_bar.start), origin_riyadh=wob.display_iso(origin_bar.start, display_tz),
+            # Raw origin-candle OHLC + direction, for auditing "why was this
+            # candle picked as the OB" without re-running Python by hand --
+            # the origin body (bottom/top above) is min/max(open,close) of
+            # exactly this candle, per SPEC.md SS4.
+            origin_open=f"{origin_bar.o:.5f}", origin_high=f"{origin_bar.h:.5f}",
+            origin_low=f"{origin_bar.l:.5f}", origin_close=f"{origin_bar.c:.5f}", origin_direction=origin_dir,
             trigger_riyadh=wob.display_iso(tt, display_tz), trigger_price="" if tp is None else f"{tp:.5f}",
             eligible_riyadh=wob.display_iso(et, display_tz), eligible_price="" if ep is None else f"{ep:.5f}",
             impact_riyadh=wob.display_iso(it, display_tz),
@@ -243,6 +277,7 @@ def main() -> int:
 
     with (base / "h4_ob_ledger.csv").open("w", newline="", encoding="utf-8") as f:
         fields = ["id", "side", "type", "bottom", "top", "origin_utc", "origin_riyadh",
+                   "origin_open", "origin_high", "origin_low", "origin_close", "origin_direction",
                    "trigger_riyadh", "trigger_price", "eligible_riyadh", "eligible_price",
                    "impact_riyadh", "control_at_impact", "parent_weekly_id", "authorized"]
         wr = csv.DictWriter(f, fieldnames=fields)
@@ -250,9 +285,15 @@ def main() -> int:
         wr.writerows(rows)
 
     focused_drawn = drawn
+    window_start = window_end = None
     if args.focus_weekly_id:
         focused_drawn = [d for d in drawn if d[6] == str(args.focus_weekly_id)]
-    extra_lines = build_h4_extra_lines(h4_engine, h4_bars, focused_drawn, args.h4_pine_obs, display_tz)
+        matching_weeks = [idx for idx, pid in parent_by_week.items() if pid == str(args.focus_weekly_id)]
+        if matching_weeks:
+            window_start = weeks[min(matching_weeks)].start
+            window_end = weeks[max(matching_weeks)].end
+    extra_lines = build_h4_extra_lines(h4_engine, h4_bars, focused_drawn, args.h4_pine_obs, display_tz,
+                                       window_start, window_end, args.h4_pine_labels)
 
     wob.write_ob_pine(base, weekly_engine, args.pine_labels, args.pine_obs, args.pine_table,
                        args.box_body_minutes, display_tz, args.origin_first_price,
