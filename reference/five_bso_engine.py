@@ -234,12 +234,21 @@ def structural_invalid_at(z, it: datetime, h4_bars: List["wob.Week"], h4_bar_sta
           does not count.
       (b) 'mss_break' -- the specific 4H swing that supports/protects this
           OB gets broken: a confirmed MSS AGAINST the OB's own bias (a
-          bullish MSS for a SELL OB, a bearish MSS for a BUY OB). This
-          replaces an earlier, wrong stand-in ("any new 4H swing at all,
-          either direction") that the user corrected: "we do not have swing
-          point breach unless you confuse it [with] OB box breach... a
-          downtrend IFOB has a swing high above it that if broken will
-          change MSS to up -- that is it."
+          bullish MSS for a SELL OB, a bearish MSS for a BUY OB) whose
+          broken swing sits on the PROTECTING side of the OB's own zone --
+          above zt for a SELL OB, below zb for a BUY OB. This replaces an
+          earlier, wrong stand-in ("any new 4H swing at all, either
+          direction") that the user corrected: "we do not have swing point
+          breach unless you confuse it [with] OB box breach... a downtrend
+          IFOB has a swing high ABOVE it that if broken will change MSS to
+          up -- that is it." A real bug in the first version of this fix
+          (found via OB #186, 2026-09-16): it accepted the first opposing
+          MSS anywhere, including one breaking an unrelated swing far below
+          the OB's own zone -- structurally meaningless to this OB, since
+          price never even reached back up near it. Filtering to the
+          protecting side fixed it: #186's real supporting swing doesn't
+          break until 2026-05-27, five days later than the first (wrong)
+          answer.
     Returns (time, reason); (None, None) if the OB is never structurally
     invalidated in the available data."""
     bull = z.bullish
@@ -254,7 +263,9 @@ def structural_invalid_at(z, it: datetime, h4_bars: List["wob.Week"], h4_bar_sta
             break
 
     want_up = not bull
-    mss_times = [mss_confirm_time(m, h4_bars, minutes) for m in h4_msses if m.up == want_up]
+    protecting = z.zb if bull else z.zt
+    mss_times = [mss_confirm_time(m, h4_bars, minutes) for m in h4_msses
+                 if m.up == want_up and ((m.price < protecting) if bull else (m.price > protecting))]
     mss_times = [t for t in mss_times if t > it]
     mss_break_at = min(mss_times) if mss_times else None
 
