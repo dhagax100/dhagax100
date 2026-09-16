@@ -813,6 +813,7 @@ def write_ob_pine(base: Path, engine: WeeklyOBEngine, label_cap: int, ob_cap: in
         "var table ledger = table.new(position.top_right, 10, 21, border_width=1)",
         "bool onWeekly = timeframe.period == \"1W\"",
         "bool onH4 = timeframe.period == \"240\"",
+        "bool onFive = timeframe.period == \"5\"",
     ]
     # Resolve each static M1 impact into the opening time of whichever chart
     # candle contains it. This is deliberately evaluated on every chart bar,

@@ -13,6 +13,12 @@ impacted+authorized gating as h4_ob_engine.py: an H4 OB is drawn only if it
 was genuinely eligible before impact (never OOB) AND its direction matched
 the Weekly control permission active at its impact time.
 
+The H4 OB boxes + impact lines (not the swing/MSS labels or the table) also
+render on the 5m chart (`onFive`), reusing the exact same box/line data --
+no separate engine run, no separate array packing. Same boxes, same times,
+just an extra chart to draw on, matching how the Weekly layer already
+renders unchanged on the H4 chart.
+
 Each drawn H4 OB also carries `parent_weekly_id`, read from
 weekly_control_ledger.csv's `controlling_zone_id` column (SPEC.md SS17
 "Parent Weekly POI").
@@ -177,6 +183,14 @@ def build_h4_extra_lines(h4_engine, h4_bars, drawn: List[tuple], ob_cap: int, di
         f"var array<string> h4Elig = {arr('string', eligs)}",
         f"var array<string> h4Impact = {arr('string', impacts)}",
         "if barstate.islast",
+        "    if onH4 or onFive",
+        "        for i = 0 to array.size(h4Left) - 1",
+        "            hRank = array.size(h4Left) - i",
+        "            if not inspectOneH4OB or hRank == h4ObFromLast",
+        "                hCol = array.get(h4Bull, i) ? color.blue : color.black",
+        "                box.new(array.get(h4Left, i), array.get(h4Top, i), array.get(h4Right, i), array.get(h4Bottom, i), border_color=hCol, border_width=1, bgcolor=na, xloc=xloc.bar_time)",
+        "                label.new(array.get(h4Left, i), array.get(h4Top, i), array.get(h4Label, i), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_down, color=color.new(hCol,85), textcolor=hCol, size=size.tiny)",
+        "                line.new(array.get(h4Right, i), array.get(h4Bottom, i), array.get(h4Right, i), array.get(h4Top, i), xloc=xloc.bar_time, extend=extend.both, color=color.new(color.blue,55), width=1)",
         "    if onH4",
         *struct_lines,
         f"        table.cell(h4Ledger, 0, 0, \"4H OB\", text_color=color.white, bgcolor=color.new(color.blue,15))",
@@ -190,11 +204,7 @@ def build_h4_extra_lines(h4_engine, h4_bars, drawn: List[tuple], ob_cap: int, di
         "        for i = 0 to array.size(h4Left) - 1",
         "            hRank = array.size(h4Left) - i",
         "            if not inspectOneH4OB or hRank == h4ObFromLast",
-        "                hCol = array.get(h4Bull, i) ? color.blue : color.black",
         "                hRow = inspectOneH4OB ? 1 : i + 1",
-        "                box.new(array.get(h4Left, i), array.get(h4Top, i), array.get(h4Right, i), array.get(h4Bottom, i), border_color=hCol, border_width=1, bgcolor=na, xloc=xloc.bar_time)",
-        "                label.new(array.get(h4Left, i), array.get(h4Top, i), array.get(h4Label, i), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_down, color=color.new(hCol,85), textcolor=hCol, size=size.tiny)",
-        "                line.new(array.get(h4Right, i), array.get(h4Bottom, i), array.get(h4Right, i), array.get(h4Top, i), xloc=xloc.bar_time, extend=extend.both, color=color.new(color.red,30), width=1)",
         "                table.cell(h4Ledger, 0, hRow, array.get(h4Id, i), text_color=color.black, bgcolor=na)",
         "                table.cell(h4Ledger, 1, hRow, array.get(h4Parent, i), text_color=color.black, bgcolor=na)",
         "                table.cell(h4Ledger, 2, hRow, array.get(h4Side, i), text_color=color.black, bgcolor=na)",
