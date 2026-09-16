@@ -77,7 +77,72 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--focus-weekly-id", type=int, default=0,
                     help="Only draw/table 4H OBs whose parent Weekly zone matches this ID "
                          "(0 = show every authorized OB across the whole dataset).")
+    p.add_argument("--manual-gates", action="store_true",
+                    help="Use the hand-verified control timeline (see build_manual_gates()) instead of "
+                         "weekly_control_ledger.csv for authorization, for the window it covers. "
+                         "weekly_control_engine.py does not yet implement SS16's NONE state or the "
+                         "Weekly-close-body-inside-zone kill rule, so its control column is wrong for "
+                         "this stretch; this flag uses the sequence the user verified gate-by-gate "
+                         "against raw price instead (TRADING_SYSTEM_HANDOFF.md, 2026-09-16). Outside "
+                         "the covered window, falls back to the normal weekly_control_ledger.csv lookup.")
     return p.parse_args()
+
+
+def build_manual_gates() -> List[Tuple[datetime, datetime, str, str, str]]:
+    """Hand-verified control timeline from zone #3's impact through the
+    present, per TRADING_SYSTEM_HANDOFF.md's 2026-09-16 "user-verified
+    gate-by-gate control sequence" entry. Each row is
+    (start, end, control, sell_parent_id, buy_parent_id):
+
+      1. 2026-04-14 17:55 -> 2026-05-29 17:51  SELL_ONLY (zone 3)
+      2. 2026-05-29 17:51 -> 2026-06-05 16:51  NONE       (swing low confirms)
+      3. 2026-06-05 16:51 -> 2026-06-05 18:37  SELL_ONLY (that low breaks, sell resumes)
+      4. 2026-06-05 18:37 -> 2026-06-08 00:00  BOTH       (zone 5 impacted, zone 8 still alive)
+      5. 2026-06-08 00:00 -> 2026-06-15 00:29  SELL_ONLY (week closes body inside zone 5 -- buy
+                                                            dead immediately, no swing wait needed)
+      6. 2026-06-15 00:29 -> 2026-06-17 22:24  NONE       (fresh, unrelated swing low confirms)
+      7. 2026-06-17 22:24 -> 2026-07-14 15:30  SELL_ONLY (that low breaks, sell resumes)
+      8. 2026-07-14 15:30 -> 2026-08-04 00:00  NONE       (next swing low confirms -- current state)
+
+    Not implemented in weekly_control_engine.py itself: gate 5's rule (a
+    Weekly candle merely closing its body INSIDE an opposing zone, without a
+    clean reject, kills that zone immediately -- no confirmed-swing wait) is
+    new this session and not yet folded back into the automated engine.
+    During BOTH (gate 4), sell_parent=3 (the same ongoing SELL thesis) and
+    buy_parent=5 (zone 5 itself, the only live BUY POI in that window).
+    During every SELL_ONLY gate, the parent is zone 3 throughout -- no new
+    Weekly SELL zone ever took over; SPEC's own "keep selling until we come
+    across another OB" default applies (nothing invalidated zone 3 itself)."""
+    rtz = ZoneInfo("Asia/Riyadh")
+
+    def rt(y: int, mo: int, d: int, h: int, mi: int) -> datetime:
+        return datetime(y, mo, d, h, mi, tzinfo=rtz)
+
+    return [
+        (rt(2026, 4, 14, 17, 55), rt(2026, 5, 29, 17, 51), "SELL_ONLY", "3", ""),
+        (rt(2026, 5, 29, 17, 51), rt(2026, 6, 5, 16, 51), "NONE", "", ""),
+        (rt(2026, 6, 5, 16, 51), rt(2026, 6, 5, 18, 37), "SELL_ONLY", "3", ""),
+        (rt(2026, 6, 5, 18, 37), rt(2026, 6, 8, 0, 0), "BOTH", "3", "5"),
+        (rt(2026, 6, 8, 0, 0), rt(2026, 6, 15, 0, 29), "SELL_ONLY", "3", ""),
+        (rt(2026, 6, 15, 0, 29), rt(2026, 6, 17, 22, 24), "NONE", "", ""),
+        (rt(2026, 6, 17, 22, 24), rt(2026, 7, 14, 15, 30), "SELL_ONLY", "3", ""),
+        (rt(2026, 7, 14, 15, 30), rt(2026, 8, 4, 0, 0), "NONE", "", ""),
+    ]
+
+
+def manual_control_and_parent_at(gates: List[Tuple[datetime, datetime, str, str, str]],
+                                  t: datetime, bullish: bool) -> Optional[Tuple[str, str]]:
+    """Looks up (control, parent_id) for time `t` and a candidate direction
+    (`bullish`) in the manual gate table. Returns None if `t` falls outside
+    every gate (caller should fall back to the normal weekly-ledger lookup)."""
+    for start, end, control, sell_parent, buy_parent in gates:
+        if start <= t < end:
+            if control == "NONE":
+                return control, ""
+            if control == "BOTH":
+                return control, (buy_parent if bullish else sell_parent)
+            return control, (buy_parent if bullish else sell_parent)
+    return None
 
 
 def load_control_and_parent_by_week(path: Path) -> Tuple[Dict[int, str], Dict[int, str]]:
@@ -487,6 +552,8 @@ def main() -> int:
         idx = max(0, min(idx, len(week_starts) - 1))
         return control_by_week.get(idx, "NONE"), parent_by_week.get(idx, "")
 
+    manual_gates = build_manual_gates() if args.manual_gates else None
+
     rows = []
     drawn = []
     for z in h4_engine.zones:
@@ -495,7 +562,11 @@ def main() -> int:
         it = wob.impact_time(h4_engine, z, et)
         impacted = z.state == 3
         pre_spent_ok = z.pre_spent_state in (0, 1, 4) if impacted else None
-        ctrl, parent_id = control_and_parent_at(it) if impacted else ("", "")
+        ctrl_parent = manual_control_and_parent_at(manual_gates, it, z.bullish) if (manual_gates and impacted and it is not None) else None
+        if ctrl_parent is not None:
+            ctrl, parent_id = ctrl_parent
+        else:
+            ctrl, parent_id = control_and_parent_at(it) if impacted else ("", "")
         authorized = bool(impacted and pre_spent_ok and h4.permits(ctrl, z.bullish))
         origin_bar = h4_bars[z.candle]
         origin_dir = "UP" if origin_bar.c > origin_bar.o else "DOWN" if origin_bar.c < origin_bar.o else "FLAT"
@@ -539,7 +610,11 @@ def main() -> int:
 
     focused_drawn = drawn
     window_start = window_end = None
-    if args.focus_weekly_id:
+    if args.manual_gates:
+        window_start = manual_gates[0][0]
+        window_end = manual_gates[-1][1]
+        focused_drawn = [d for d in drawn if window_start <= d[5] < window_end]
+    elif args.focus_weekly_id:
         focused_drawn = [d for d in drawn if d[6] == str(args.focus_weekly_id)]
         matching_weeks = [idx for idx, pid in parent_by_week.items() if pid == str(args.focus_weekly_id)]
         if matching_weeks:
@@ -587,7 +662,8 @@ def main() -> int:
     print("  full_viewer.pine   (Weekly layer + 4H layer/table + 5m BSO entry lines)")
     print("  h4_ob_ledger.csv, five_bso_ledger.csv")
     print("  weekly_ob_ledger.csv, weekly_ob_swings.csv, weekly_ob_report.txt")
-    focus_note = f", {len(focused_drawn)} shown (--focus-weekly-id {args.focus_weekly_id})" if args.focus_weekly_id else ""
+    focus_note = f", {len(focused_drawn)} shown (--manual-gates)" if args.manual_gates else (
+        f", {len(focused_drawn)} shown (--focus-weekly-id {args.focus_weekly_id})" if args.focus_weekly_id else "")
     print(f"{len(h4_bars)} 4H bars, {len(h4_engine.zones)} H4 OBs computed, {len(drawn)} drawn (impacted + authorized){focus_note}.")
     bso_stages = {}
     for _z, _it, _parent_id, _invalidation_reason, res in bso_results:
