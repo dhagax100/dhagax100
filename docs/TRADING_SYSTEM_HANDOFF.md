@@ -818,3 +818,11 @@ Next: user regenerates and re-pastes the Pine (note the "5m BSO from last" numbe
 - Also moved the 5m BSO table from top-left to top-right per the user's request. Confirmed no collision with the Weekly ledger table (also top-right) since the two never render on the same chart timeframe (`onWeekly` vs `onFive`).
 - Not yet re-confirmed on the actual TradingView chart by the user.
 - Next: user regenerates and re-pastes the Pine, confirms OB #197 now shows only its original SL attempt with no fake re-entry, confirms the table now renders top-right, and continues the per-attempt chart verification.
+
+## Session update — 2026-09-16 (re-entry reporting rule: no row at all for a failed re-entry)
+
+- User saw the disclosed `SWING_STOP_REACHED` table row for OB #197's disallowed re-entry and said: "there should be no re-entry report not even in table if there is no second opportunity after SL." Overrides the earlier disclosure-not-drop instinct specifically for this case.
+- Implemented in `run_bso_chain()`: a re-entry (`attempt_no > 1`) that never actually reaches `ENTERED` -- for any reason (breached, swing-stop-reached, no resting swing, etc.) -- is no longer appended to the returned attempts list at all. It's still computed and used internally to decide the chain should stop there; it just produces no ledger row and no table row. The OB's original first attempt is always reported regardless of its own outcome (that's the OB's own result, not a re-entry, so it stays visible the same way OB #194's `H4_OB_BREACHED` always has).
+- Validated: zone #3's window went from 13 total rows to 11 -- OB #173's failed re-entry (was `H4_OB_BREACHED`) and OB #197's disallowed re-entry (was `SWING_STOP_REACHED`) both dropped entirely; OB #192's genuine winning re-entry (attempt 2, TP) and OB #194's original breach both correctly still show, since neither is a "failed re-entry."
+- Not yet re-confirmed on the actual TradingView chart by the user.
+- Next: user regenerates, confirms OB #197 and OB #173 show only their single original attempt with nothing else in the table, and continues the per-attempt chart walkthrough.
