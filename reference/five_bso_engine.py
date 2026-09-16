@@ -214,8 +214,10 @@ def run_bso(z, it: datetime, five_bar_starts: List[datetime], five_events: List[
     # resolves (OPEN).
     result, exit_time, exit_price = None, None, None
     mfe_price, mae_price = entry_price, entry_price
+    last_seen_time = entry_time
     for i in range(bisect_left(mt, entry_time) + 1, len(minutes)):
         m = minutes[i]
+        last_seen_time = m.t
         if bull:
             mfe_price = max(mfe_price, m.h)
             mae_price = min(mae_price, m.l)
@@ -235,6 +237,11 @@ def run_bso(z, it: datetime, five_bar_starts: List[datetime], five_events: List[
             break
     mfe = abs(mfe_price - entry_price)
     mae = abs(mae_price - entry_price)
+    # excursion_end_time: the right edge for drawing the MFE/MAE excursion
+    # box (see build_bso_extra_lines) -- exit_time when the trade resolved,
+    # or the last minute actually scanned when it's still OPEN, so an open
+    # trade's excursion box still has a real right edge instead of "na".
+    excursion_end_time = exit_time if exit_time is not None else last_seen_time
 
     return dict(stage="ENTERED", resting_at=resting.at, resting_price=resting.price,
                 candidate_price=entry_price, replacements=replacements,
@@ -242,7 +249,8 @@ def run_bso(z, it: datetime, five_bar_starts: List[datetime], five_events: List[
                 entry_time=entry_time, entry_price=entry_price,
                 sl_price=sl_price, risk=risk, tp_price=tp_price,
                 result=result or "OPEN", exit_time=exit_time, exit_price=exit_price,
-                mfe=mfe, mae=mae)
+                mfe=mfe, mae=mae, mfe_price=mfe_price, mae_price=mae_price,
+                excursion_end_time=excursion_end_time)
 
 
 def structural_invalid_at(z, it: datetime, h4_bars: List["wob.Week"], h4_bar_starts: List[datetime],
@@ -398,6 +406,74 @@ def run_bso_chain(z, it: datetime, five_bar_starts: List[datetime], five_events:
     return attempts
 
 
+LEDGER_FIELDS = [
+    "h4_ob_id", "attempt", "parent_weekly_id", "side", "h4_ob_bottom", "h4_ob_top",
+    "h4_impact_riyadh", "h4_impact_utc", "stage",
+    "resting_riyadh", "resting_utc",
+    "candidate_since_riyadh", "candidate_since_utc",
+    "entry_riyadh", "entry_utc", "entry_price", "entry_weekday_riyadh", "entry_hour_riyadh",
+    "sl_price", "risk_price", "tp_price", "candidate_replacements",
+    "result", "exit_riyadh", "exit_utc", "exit_price", "duration_minutes",
+    "mfe_pips", "mae_pips", "mfe_price", "mae_price", "mfe_r", "mae_r", "r_multiple_result",
+    "invalidated_riyadh", "invalidated_utc", "invalidation_reason",
+]
+
+
+def ledger_row(z, it: Optional[datetime], parent_id: str, invalidation_reason: Optional[str],
+                res: Dict, display_tz: ZoneInfo) -> Dict:
+    """One five_bso_ledger.csv row, shared verbatim by this script's own
+    main() and full_viewer.py so the two CSV writers can never drift apart.
+
+    Built as a self-sufficient trade database row (user, 2026-09-16: "make
+    sure the csv files ... have every single tiny detail we need to have a
+    database for theses trades") -- alongside the existing Riyadh-display
+    fields, every timestamp also gets a plain UTC ISO twin (machine-sortable/
+    parseable without a timezone table), MFE/MAE get their raw price levels
+    (not just pips) and their size relative to risk (mfe_r/mae_r, e.g. "how
+    many R was on the table at best/worst"), the entry gets its own weekday
+    and Riyadh hour (raw material for the entry-time-window optimization the
+    user flagged as a future step), and closed trades get their duration and
+    realized R-multiple (fixed by the 3R TP / 1R SL design: +3.00 for TP,
+    -1.00 for SL, blank for AMBIGUOUS/OPEN where no single R applies)."""
+    entry_t, exit_t = res.get("entry_time"), res.get("exit_time")
+    risk_v = res.get("risk")
+    mfe_v, mae_v = res.get("mfe"), res.get("mae")
+    result = res.get("result", "")
+    duration_minutes = "" if entry_t is None or exit_t is None else f"{(exit_t - entry_t).total_seconds() / 60:.0f}"
+    r_multiple_result = {"TP": "3.00", "SL": "-1.00"}.get(result, "")
+    return dict(
+        h4_ob_id=z.id, attempt=res.get("attempt"), parent_weekly_id=parent_id, side="BUY" if z.bullish else "SELL",
+        h4_ob_bottom=f"{z.zb:.5f}", h4_ob_top=f"{z.zt:.5f}",
+        h4_impact_riyadh=wob.display_iso(it, display_tz), h4_impact_utc=wob.iso(it),
+        stage=res.get("stage"),
+        resting_riyadh=wob.display_iso(res.get("resting_at"), display_tz), resting_utc=wob.iso(res.get("resting_at")),
+        candidate_since_riyadh=wob.display_iso(res.get("candidate_since"), display_tz),
+        candidate_since_utc=wob.iso(res.get("candidate_since")),
+        entry_riyadh=wob.display_iso(entry_t, display_tz), entry_utc=wob.iso(entry_t),
+        entry_price="" if res.get("entry_price") is None else f"{res['entry_price']:.5f}",
+        entry_weekday_riyadh="" if entry_t is None else entry_t.astimezone(display_tz).strftime("%A"),
+        entry_hour_riyadh="" if entry_t is None else entry_t.astimezone(display_tz).strftime("%H:%M"),
+        sl_price="" if res.get("sl_price") is None else f"{res['sl_price']:.5f}",
+        risk_price="" if risk_v is None else f"{risk_v:.5f}",
+        tp_price="" if res.get("tp_price") is None else f"{res['tp_price']:.5f}",
+        candidate_replacements=res.get("replacements", ""),
+        result=result,
+        exit_riyadh=wob.display_iso(exit_t, display_tz), exit_utc=wob.iso(exit_t),
+        exit_price="" if res.get("exit_price") is None else f"{res['exit_price']:.5f}",
+        duration_minutes=duration_minutes,
+        mfe_pips="" if mfe_v is None else f"{mfe_v / 0.0001:.1f}",
+        mae_pips="" if mae_v is None else f"{mae_v / 0.0001:.1f}",
+        mfe_price="" if res.get("mfe_price") is None else f"{res['mfe_price']:.5f}",
+        mae_price="" if res.get("mae_price") is None else f"{res['mae_price']:.5f}",
+        mfe_r="" if mfe_v is None or not risk_v else f"{mfe_v / risk_v:.2f}",
+        mae_r="" if mae_v is None or not risk_v else f"{mae_v / risk_v:.2f}",
+        r_multiple_result=r_multiple_result,
+        invalidated_riyadh=wob.display_iso(res.get("invalidated_at"), display_tz),
+        invalidated_utc=wob.iso(res.get("invalidated_at")),
+        invalidation_reason=invalidation_reason if res.get("invalidated_at") is not None else "",
+    )
+
+
 def main() -> int:
     args = parse_args()
     path = Path(args.csv_file).expanduser().resolve()
@@ -466,33 +542,10 @@ def main() -> int:
         invalidated_at, invalidation_reason = structural_invalid_at(z, it, h4_bars, h4_bar_starts, h4_engine.events, minutes, mt)
         attempts = run_bso_chain(z, it, five_bar_starts, five_engine.events, minutes, mt, invalidated_at)
         for res in attempts:
-            row = dict(
-                h4_ob_id=z.id, attempt=res.get("attempt"), parent_weekly_id=parent_id, side="BUY" if z.bullish else "SELL",
-                h4_impact_riyadh=wob.display_iso(it, display_tz), stage=res.get("stage"),
-                resting_riyadh=wob.display_iso(res.get("resting_at"), display_tz),
-                candidate_since_riyadh=wob.display_iso(res.get("candidate_since"), display_tz),
-                entry_riyadh=wob.display_iso(res.get("entry_time"), display_tz),
-                entry_price="" if res.get("entry_price") is None else f"{res['entry_price']:.5f}",
-                sl_price="" if res.get("sl_price") is None else f"{res['sl_price']:.5f}",
-                risk_price="" if res.get("risk") is None else f"{res['risk']:.5f}",
-                tp_price="" if res.get("tp_price") is None else f"{res['tp_price']:.5f}",
-                candidate_replacements=res.get("replacements", ""),
-                result=res.get("result", ""),
-                exit_riyadh=wob.display_iso(res.get("exit_time"), display_tz),
-                exit_price="" if res.get("exit_price") is None else f"{res['exit_price']:.5f}",
-                mfe_pips="" if res.get("mfe") is None else f"{res['mfe'] / 0.0001:.1f}",
-                mae_pips="" if res.get("mae") is None else f"{res['mae'] / 0.0001:.1f}",
-                invalidated_riyadh=wob.display_iso(res.get("invalidated_at"), display_tz),
-                invalidation_reason=invalidation_reason if res.get("invalidated_at") is not None else "",
-            )
-            rows.append(row)
+            rows.append(ledger_row(z, it, parent_id, invalidation_reason, res, display_tz))
 
-    fields = ["h4_ob_id", "attempt", "parent_weekly_id", "side", "h4_impact_riyadh", "stage", "resting_riyadh",
-              "candidate_since_riyadh", "entry_riyadh", "entry_price", "sl_price", "risk_price", "tp_price",
-              "candidate_replacements", "result", "exit_riyadh", "exit_price", "mfe_pips", "mae_pips",
-              "invalidated_riyadh", "invalidation_reason"]
     with (base / "five_bso_ledger.csv").open("w", newline="", encoding="utf-8") as f:
-        wr = csv.DictWriter(f, fieldnames=fields)
+        wr = csv.DictWriter(f, fieldnames=LEDGER_FIELDS)
         wr.writeheader()
         wr.writerows(rows)
 

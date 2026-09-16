@@ -279,11 +279,24 @@ def build_bso_extra_lines(bso_results: List[tuple], display_tz: ZoneInfo) -> Lis
         draw the order mark with the green on the profit side and red on
         the loss side starting from the entry and stopping on whichever
         comes first, win or loss" -- kept alongside the SL/TP lines above,
-        not instead of them, per the user's explicit correction) a filled
-        box ("the order mark") from (entry time, entry price) to (exit
-        time, exit price), GREEN if TP was hit first, RED if SL was hit
-        first -- shows the actual profit/loss zone visually, on top of the
-        SL/TP lines' exact levels.
+        not instead of them, per the user's explicit correction) TWO
+        filled boxes, always both, both anchored at (entry time, entry
+        price):
+          - a GREEN box up to (excursion_end time, mfe_price) -- the best
+            price actually reached in this trade's favour (MFE).
+          - a RED box up to (excursion_end time, mae_price) -- the worst
+            price actually reached against this trade (MAE).
+        Corrected 2026-09-16 (user: "the box should always have the two
+        sides ... we want to see the red part ... intersecting with the
+        green until the SL") from an earlier single-colour version that
+        only showed the winning side (green for a TP, red for an SL,
+        entry-to-exit only). That collapsed MFE and MAE into invisible
+        detail and skipped OPEN/AMBIGUOUS trades entirely. Now both sides
+        always draw, for every entered attempt regardless of outcome
+        (`excursion_end_time` is the exit minute when resolved, or the
+        last minute of available data for an OPEN trade -- see
+        five_bso_engine.run_bso), so a trade that nearly stopped out
+        before winning shows its own near-miss, not just its final result.
     An attempt that never reached an entry (H4_OB_BREACHED, NO_RESTING_SWING,
     etc) gets a table row (stage shown in the Result column) but no lines.
     OPEN/AMBIGUOUS results get the blue line but no SL/TP line or box,
@@ -307,7 +320,8 @@ def build_bso_extra_lines(bso_results: List[tuple], display_tz: ZoneInfo) -> Lis
     ids, weeklys, sides, restings, entries, sls, tps, results, exits, excursions = ([] for _ in range(10))
     blefts, brights, bys = [], [], []
     clefts, crights, cys, ccols = [], [], [], []
-    oleft, oright, otop, obottom, ocol = [], [], [], [], []
+    gleft, gright, gtop, gbottom = [], [], [], []
+    rleft, rright, rtop, rbottom = [], [], [], []
     for z, _it, parent_id, _invalidation_reason, res in bso_results:
         attempt_no = res.get("attempt")
         ids.append(f"\"#{z.id}\"" if attempt_no in (None, 1) else f"\"#{z.id} (re-entry {attempt_no})\"")
@@ -341,12 +355,19 @@ def build_bso_extra_lines(bso_results: List[tuple], display_tz: ZoneInfo) -> Lis
         if result in ("SL", "TP") and entry_t is not None and exit_t is not None and exit_p is not None:
             clefts.append(pt(entry_t)); crights.append(pt(exit_t)); cys.append(pf(exit_p))
             ccols.append("color.red" if result == "SL" else "color.green")
-            oleft.append(pt(entry_t)); oright.append(pt(exit_t))
-            otop.append(pf(max(entry_p, exit_p))); obottom.append(pf(min(entry_p, exit_p)))
-            ocol.append("color.red" if result == "SL" else "color.green")
         else:
             clefts.append("na"); crights.append("na"); cys.append("na"); ccols.append("na")
-            oleft.append("na"); oright.append("na"); otop.append("na"); obottom.append("na"); ocol.append("na")
+
+        end_t = res.get("excursion_end_time")
+        mfe_p, mae_p = res.get("mfe_price"), res.get("mae_price")
+        if entry_t is not None and end_t is not None and mfe_p is not None and mae_p is not None:
+            gleft.append(pt(entry_t)); gright.append(pt(end_t))
+            gtop.append(pf(max(entry_p, mfe_p))); gbottom.append(pf(min(entry_p, mfe_p)))
+            rleft.append(pt(entry_t)); rright.append(pt(end_t))
+            rtop.append(pf(max(entry_p, mae_p))); rbottom.append(pf(min(entry_p, mae_p)))
+        else:
+            gleft.append("na"); gright.append("na"); gtop.append("na"); gbottom.append("na")
+            rleft.append("na"); rright.append("na"); rtop.append("na"); rbottom.append("na")
 
     def arr(kind: str, values: List[str]) -> str:
         return f"array.from({', '.join(values)})" if values else f"array.new<{kind}>()"
@@ -374,11 +395,14 @@ def build_bso_extra_lines(bso_results: List[tuple], display_tz: ZoneInfo) -> Lis
         f"        array<int> bso5CRight = {arr('int', crights)}",
         f"        array<float> bso5CY = {arr('float', cys)}",
         f"        array<color> bso5CCol = {arr('color', ccols)}",
-        f"        array<int> bso5OLeft = {arr('int', oleft)}",
-        f"        array<int> bso5ORight = {arr('int', oright)}",
-        f"        array<float> bso5OTop = {arr('float', otop)}",
-        f"        array<float> bso5OBottom = {arr('float', obottom)}",
-        f"        array<color> bso5OCol = {arr('color', ocol)}",
+        f"        array<int> bso5GLeft = {arr('int', gleft)}",
+        f"        array<int> bso5GRight = {arr('int', gright)}",
+        f"        array<float> bso5GTop = {arr('float', gtop)}",
+        f"        array<float> bso5GBottom = {arr('float', gbottom)}",
+        f"        array<int> bso5RLeft = {arr('int', rleft)}",
+        f"        array<int> bso5RRight = {arr('int', rright)}",
+        f"        array<float> bso5RTop = {arr('float', rtop)}",
+        f"        array<float> bso5RBottom = {arr('float', rbottom)}",
         "        table.cell(bso5Ledger, 0, 0, \"Weekly OB\", text_color=color.white, bgcolor=color.new(color.purple,15))",
         "        table.cell(bso5Ledger, 1, 0, \"4H OB\", text_color=color.white, bgcolor=color.new(color.purple,15))",
         "        table.cell(bso5Ledger, 2, 0, \"Side\", text_color=color.white, bgcolor=color.new(color.purple,15))",
@@ -407,8 +431,10 @@ def build_bso_extra_lines(bso_results: List[tuple], display_tz: ZoneInfo) -> Lis
         "                    line.new(array.get(bso5BLeft, i), array.get(bso5BY, i), array.get(bso5BRight, i), array.get(bso5BY, i), xloc=xloc.bar_time, extend=extend.none, color=color.blue, width=2)",
         "                if not na(array.get(bso5CLeft, i))",
         "                    line.new(array.get(bso5CLeft, i), array.get(bso5CY, i), array.get(bso5CRight, i), array.get(bso5CY, i), xloc=xloc.bar_time, extend=extend.none, color=array.get(bso5CCol, i), width=2)",
-        "                if not na(array.get(bso5OLeft, i))",
-        "                    box.new(array.get(bso5OLeft, i), array.get(bso5OTop, i), array.get(bso5ORight, i), array.get(bso5OBottom, i), border_color=array.get(bso5OCol, i), bgcolor=color.new(array.get(bso5OCol, i), 80), xloc=xloc.bar_time)",
+        "                if not na(array.get(bso5GLeft, i))",
+        "                    box.new(array.get(bso5GLeft, i), array.get(bso5GTop, i), array.get(bso5GRight, i), array.get(bso5GBottom, i), border_color=color.green, bgcolor=color.new(color.green, 80), xloc=xloc.bar_time)",
+        "                if not na(array.get(bso5RLeft, i))",
+        "                    box.new(array.get(bso5RLeft, i), array.get(bso5RTop, i), array.get(bso5RRight, i), array.get(bso5RBottom, i), border_color=color.red, bgcolor=color.new(color.red, 80), xloc=xloc.bar_time)",
     ]
 
 
@@ -535,32 +561,10 @@ def main() -> int:
     bso_extra_lines = build_bso_extra_lines(bso_results, display_tz)
 
     with (base / "five_bso_ledger.csv").open("w", newline="", encoding="utf-8") as f:
-        fields = ["h4_ob_id", "attempt", "parent_weekly_id", "side", "h4_impact_riyadh", "stage", "resting_riyadh",
-                  "candidate_since_riyadh", "entry_riyadh", "entry_price", "sl_price", "risk_price", "tp_price",
-                  "candidate_replacements", "result", "exit_riyadh", "exit_price", "mfe_pips", "mae_pips",
-                  "invalidated_riyadh", "invalidation_reason"]
-        wr = csv.DictWriter(f, fieldnames=fields)
+        wr = csv.DictWriter(f, fieldnames=bso.LEDGER_FIELDS)
         wr.writeheader()
         for z, it, parent_id, invalidation_reason, res in bso_results:
-            wr.writerow(dict(
-                h4_ob_id=z.id, attempt=res.get("attempt"), parent_weekly_id=parent_id, side="BUY" if z.bullish else "SELL",
-                h4_impact_riyadh=wob.display_iso(it, display_tz), stage=res.get("stage"),
-                resting_riyadh=wob.display_iso(res.get("resting_at"), display_tz),
-                candidate_since_riyadh=wob.display_iso(res.get("candidate_since"), display_tz),
-                entry_riyadh=wob.display_iso(res.get("entry_time"), display_tz),
-                entry_price="" if res.get("entry_price") is None else f"{res['entry_price']:.5f}",
-                sl_price="" if res.get("sl_price") is None else f"{res['sl_price']:.5f}",
-                risk_price="" if res.get("risk") is None else f"{res['risk']:.5f}",
-                tp_price="" if res.get("tp_price") is None else f"{res['tp_price']:.5f}",
-                candidate_replacements=res.get("replacements", ""),
-                result=res.get("result", ""),
-                exit_riyadh=wob.display_iso(res.get("exit_time"), display_tz),
-                exit_price="" if res.get("exit_price") is None else f"{res['exit_price']:.5f}",
-                mfe_pips="" if res.get("mfe") is None else f"{res['mfe'] / 0.0001:.1f}",
-                mae_pips="" if res.get("mae") is None else f"{res['mae'] / 0.0001:.1f}",
-                invalidated_riyadh=wob.display_iso(res.get("invalidated_at"), display_tz),
-                invalidation_reason=invalidation_reason if res.get("invalidated_at") is not None else "",
-            ))
+            wr.writerow(bso.ledger_row(z, it, parent_id, invalidation_reason, res, display_tz))
 
     extra_lines = h4_extra_lines + bso_extra_lines
 
