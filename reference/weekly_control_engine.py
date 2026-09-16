@@ -50,6 +50,18 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--week-close-zone", default="America/New_York")
     p.add_argument("--week-close-hour", type=int, default=17, choices=range(24))
     p.add_argument("--display-tz", default="Asia/Riyadh")
+    p.add_argument("--reset-to-none-at-week", type=int, default=None,
+                    help="Force control to NONE (and clear any opposing/controlling zone) immediately "
+                         "before this week index is processed, then let the normal state machine run "
+                         "from there. Deliberate override for a period whose pre-history is not yet "
+                         "trusted -- see the 2026-09-16 handoff entry on zone #1/#2 (pre-zone-3): the "
+                         "user's own chart read (zone #1's supporting swing breached the same week it "
+                         "reacted; zone #2 rejected as an OB) says no real campaign existed before zone "
+                         "#3, but the locked OB engine's own state classification doesn't capture "
+                         "'reacted AND then immediately invalidated' as distinct from plain SPENT, so "
+                         "the control state machine can't yet derive that on its own. Not a fix for the "
+                         "underlying question -- an explicit, visible reset so verified work from a "
+                         "known-good point can continue without being distorted by an unresolved one.")
     return p.parse_args()
 
 
@@ -69,7 +81,7 @@ class ControlEvent:
 
 # EVENT KINDS
 # TREND_FLIP, CAMPAIGN_START, OPPOSING_ENCOUNTER, OPPOSING_GAINS_CONTROL,
-# OPPOSING_LOSES_CONTROL, RETURN_TO_PRO_TREND, NO_CONTROL
+# OPPOSING_LOSES_CONTROL, RETURN_TO_PRO_TREND, NO_CONTROL, RESET_TO_NONE
 
 
 def is_pro(z: "wob.Zone", trend: int) -> bool:
@@ -179,6 +191,12 @@ def run(args: argparse.Namespace) -> int:
         events.append(ControlEvent(k, at, kind, detail, zone_id, trend, control))
 
     for k in range(n):
+        if args.reset_to_none_at_week is not None and k == args.reset_to_none_at_week:
+            control = "NONE"
+            controlling_opp = None
+            controlling_zone_id = None
+            log(k, "RESET_TO_NONE", "Explicit --reset-to-none-at-week override", None)
+
         new_trend = TREND[trend_at[k]]
         if new_trend != trend:
             trend = new_trend
