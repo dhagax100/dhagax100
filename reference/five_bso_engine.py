@@ -106,10 +106,19 @@ def run_bso(z, it: datetime, five_bar_starts: List[datetime], five_events: List[
     """`invalidated_at` is precomputed once per OB by structural_invalid_at()
     -- see that function for what it means. Passing it in rather than
     recomputing it here means every attempt in a chain (see run_bso_chain)
-    shares one canonical answer to "is this OB still structurally alive"."""
+    shares one canonical answer to "is this OB still structurally alive".
+
+    The resting swing is NOT required to print strictly inside the H4 OB's
+    own price zone (a rule dropped 2026-09-16 per the user: "simply the
+    swing rest is not strict to inside OB box zone. it can be outside. we
+    only want to happen after impact and before breaching the supporting
+    zone or closing the 4h candle with body"). It's simply the first swing
+    of the needed kind confirmed after the OB's impact -- the "before
+    breaching" half of that rule is enforced by the caller (run_bso_chain),
+    which rejects any resting swing at/after invalidated_at."""
     bull = z.bullish
-    need_rest_kind = 1 if bull else 0   # bullish BSO needs a resting LOW inside the H4 POI
-    need_cand_kind = 0 if bull else 1   # bearish BSO needs a resting HIGH; candidate is the opposite kind
+    need_rest_kind = 1 if bull else 0   # bullish BSO needs a resting LOW; bearish needs a resting HIGH
+    need_cand_kind = 0 if bull else 1   # candidate is the opposite kind
 
     start5 = bisect_right(five_bar_starts, it) - 1
     if start5 < 0:
@@ -120,8 +129,6 @@ def run_bso(z, it: datetime, five_bar_starts: List[datetime], five_events: List[
     resting = None
     for ev in events_sorted:
         if ev.kind != need_rest_kind or ev.swing < start5:
-            continue
-        if not (z.zb <= ev.price <= z.zt):
             continue
         resting = ev
         break
