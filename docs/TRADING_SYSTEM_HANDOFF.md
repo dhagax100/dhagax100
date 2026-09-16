@@ -949,3 +949,35 @@ Next: user regenerates and re-pastes the Pine (note the "5m BSO from last" numbe
 - The actual MFE/MAE data is untouched and still lives in its own "MFE/MAE (pips)" table column -- this change only affects what the box draws, not what's computed or reported. The box now answers "what was this trade's risk/reward plan", the table column answers "what actually happened".
 - Validated: regenerated for zone #3's window, spot-checked the array values directly in the generated Pine (see above). Not yet re-chart-verified by the user.
 - Next: user regenerates, confirms the box now lines up exactly with the SL/TP lines on both a winner and a loser, then work begins on break-even (stage 2 of the agreed forward plan).
+
+## MILESTONE LOCKED — 2026-09-16 (`ict-trading-system` @ `ec79757`)
+
+User: "we lock everything we have achieved so far. then let us move forward." Everything below is chart-verified and locked as the correct baseline; do not silently re-derive or second-guess it without new evidence -- append a new dated correction the same way earlier locked items in this file were corrected, never edit history quietly.
+
+- **Weekly layer** (`weekly_ob_generator.py`, locked, unmodified all session): swing/MSS detection, OB lifecycle (trigger/eligible/impact/spent/OOB/rejected), origin-candle body resolution.
+- **Weekly direction-control state machine** (`weekly_control_engine.py`, SPEC.md SS9-16): trend flips, campaign start, opposing-encounter/BOTH, CONTROL_SWITCHED (old side exhausted -> new zone's direction), OPPOSING_GAINS/LOSES_CONTROL, RETURN_TO_PRO_TREND, NO_CONTROL. First pass, explicitly still marked unverified in its own docstring beyond zone #3's window -- verifying more legs is plan step 4, not yet started.
+- **H4 OB layer** (`h4_ob_engine.py`/shared in `full_viewer.py`): impacted+authorized gating against Weekly control permission.
+- **5m BSO entry engine** (`five_bso_engine.py`), fully walked and chart-verified OB-by-OB across zone #3's entire SELL_ONLY window:
+  - Resting-swing + candidate-swing entry race, candidate replacement.
+  - `structural_invalid_at()`: two independent invalidation causes, whichever fires first -- `h4_close` (a fully completed H4 candle body-closes at/beyond the near boundary; only from that candle's own confirmed close, never retroactive -- locked rule from OB #159) and `swing_break` (the specific 4H swing protecting the OB gets exceeded, at the exact 1-minute crossing, independent of formal MSS classification -- generalized fix from OB #190/#159).
+  - Structural SL (extreme of qualifying resting-kind swings), fixed 3R TP.
+  - Post-SL re-entry chaining (`run_bso_chain`), universal per-attempt ceiling check (OB #197 fix).
+  - MFE/MAE tracking, reported as pips, raw price, and R-multiples.
+  - `five_bso_ledger.csv`: 37-column self-sufficient trade database (UTC timestamp twins, zone levels, MFE/MAE in three forms, entry weekday/hour, duration, realized R).
+  - Pine visualization: blue candidate line, SL/TP exit-level line, and a fixed risk/reward box (green to TP, red to SL) -- all three chart-verified.
+- **Known, deliberately deferred, documented above in this file -- not re-litigated without new evidence:**
+  - ~3-pip feed discrepancy vs. the live FXCM TradingView chart (flagged, not fixed).
+  - Break-even (SPEC.md SS25): not implemented. Every trade's effective stop is still its original SL.
+  - The entry-time-window optimization idea (choosing "winning times only"): not started, only flagged.
+- **Not yet built at all:** live/real-time engine, EA/execution (plan steps 6-7). Everything so far is the historical Python-reference + static-Pine-viewer path only.
+
+Next up, per the previously agreed forward plan: the user is now asking about the Weekly control state machine's mechanics past zone #3's own window (see the session update immediately following this one).
+
+## Session update — 2026-09-16 (explained: what happens after SELL_ONLY stops, until new direction control)
+
+- User asked for a short, plain-words walkthrough: once we stop selling (zone #3's premise dies on a swing low confirming a bullish break), what happens next, up to the point a new direction control is established, and what's the next concrete stop.
+- Answered from `weekly_control_engine.py`'s actual logic (SPEC.md SS16), not from memory -- traced `weekly_control_ledger.csv`/`weekly_control_events.csv` for zone #3's real transition:
+  - Zone #3's SELL_ONLY campaign does not end the instant the swing low confirms. It ends only when BOTH (a) the old (sell) side has nothing alive left, AND (b) an opposite-direction (buy) Weekly zone actually gets IMPACTED by price -- that second event is `CONTROL_SWITCHED`, and it's what flips control, not the swing confirmation by itself. Until a buy zone is impacted, the ledger keeps showing SELL_ONLY / zone #3 (the locked "keep selling until we come across another OB" rule) -- there is no NONE gap in between here, because the code's case 2 only switches control when it finds the next opposing impact, whatever the interval.
+  - Concretely, in the real data: zone #3's SELL_ONLY control runs weeks 15-21 (2026-04-13 through 2026-05-25). At week 22 (2026-06-01), zone #5 (a BUY-direction Weekly OB) gets impacted -> `CONTROL_SWITCHED`, control becomes BUY_ONLY, `controlling_zone_id` becomes 5.
+  - **The next stop is therefore zone #5's impact, 2026-06-01** -- the first BUY_ONLY control window right after zone #3. That's the next OB-by-OB walkthrough leg (plan step 4: "verify at least one BUY_ONLY leg"), symmetric to how zone #3 was just verified.
+- No code changed; this was explanation grounded in the actual engine and real ledger output, not new logic.
