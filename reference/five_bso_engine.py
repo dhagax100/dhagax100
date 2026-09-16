@@ -9,22 +9,28 @@ not needed at 5m and is ignored) to find the resting swing and entry
 candidate, races entry against candidate replacement and against
 invalidation, then computes the structural SL and fixed 3R TP.
 
-Invalidation is NOT a raw 1m wick touching the H4 OB's far boundary -- an
-earlier version used that and killed setups where price wicked through the
-zone and was later respected. Two confirmed conditions instead, whichever
-comes first: (a) a fully completed H4 candle whose CLOSE breaches the far
-boundary, or (b) a confirmed 5m swing of the resting kind whose own price
-already exceeds the far boundary. Both require confirmation, not a raw tick.
+Invalidation is computed once per OB by `structural_invalid_at()` (SPEC.md
+SS17's parent-POI premise, per the user's explicit rule, 2026-09-16) --
+NOT a raw 1m wick touching the H4 OB's far boundary, and NOT "any new 4H
+swing forms" (two earlier, progressively-corrected approximations). The OB
+stays valid until whichever of these happens first:
+  (a) 'h4_close' -- a fully completed H4 candle closes its BODY at or
+      beyond the NEAR boundary (the side price approaches the zone from).
+      Per the user: every POI except FVG invalidates on a body close either
+      inside its zone or through it -- a bare wick doesn't count.
+  (b) 'mss_break' -- the specific 4H swing that supports/protects this OB
+      gets broken: a confirmed MSS against the OB's own bias (a bullish MSS
+      for a SELL OB, a bearish MSS for a BUY OB). Not just any new swing.
+Both require confirmation, never a raw tick or an unrelated swing.
 
 Post-SL re-entry (SS27, made universal per the user's explicit instruction,
 2026-09-16): `run_bso_chain()` re-arms and searches again after an SL, as
-long as the H4 OB isn't breached (the invalidation above) AND no new native
-4H swing (either kind) has been confirmed yet since the OB's own impact
-(`first_h4_swing_after`) -- that swing, once it exists, is a hard ceiling on
-further attempts. A chain stops on the first attempt that resolves to
-anything other than a plain SL (TP, OPEN, AMBIGUOUS, a breach, or any
-no-entry stage). Each H4 OB can now produce more than one row in the
-ledger, numbered by `attempt`.
+long as the OB's own structural premise (above) hasn't been invalidated --
+that invalidation time, once it exists, is a hard ceiling on further
+attempts. A chain stops on the first attempt that resolves to anything
+other than a plain SL (TP, OPEN, AMBIGUOUS, a breach, or any no-entry
+stage). Each H4 OB can now produce more than one row in the ledger,
+numbered by `attempt`.
 
 SCOPE OF THIS FIRST PASS -- explicitly NOT yet implemented:
   - Break-even (SPEC.md SS25): not computed. Every trade record's
@@ -46,7 +52,7 @@ import sys
 from bisect import bisect_left, bisect_right
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -96,7 +102,11 @@ def aggregate_5m(minutes: List["wob.Minute"]) -> List["wob.Week"]:
 
 def run_bso(z, it: datetime, five_bar_starts: List[datetime], five_events: List["wob.Event"],
             minutes: List["wob.Minute"], mt: List[datetime],
-            h4_bars: List["wob.Week"], h4_bar_starts: List[datetime]) -> Dict:
+            invalidated_at: Optional[datetime]) -> Dict:
+    """`invalidated_at` is precomputed once per OB by structural_invalid_at()
+    -- see that function for what it means. Passing it in rather than
+    recomputing it here means every attempt in a chain (see run_bso_chain)
+    shares one canonical answer to "is this OB still structurally alive"."""
     bull = z.bullish
     need_rest_kind = 1 if bull else 0   # bullish BSO needs a resting LOW inside the H4 POI
     need_cand_kind = 0 if bull else 1   # bearish BSO needs a resting HIGH; candidate is the opposite kind
@@ -129,37 +139,6 @@ def run_bso(z, it: datetime, five_bar_starts: List[datetime], five_events: List[
         [ev for ev in events_sorted if ev.kind == need_cand_kind and ev.at is not None and ev.at > resting.at],
         key=lambda e: e.at)
 
-    far_boundary = z.zb if bull else z.zt
-
-    # Invalidation: NOT a raw 1m wick touching the far boundary any more --
-    # that killed setups that wicked through and were later respected. Two
-    # confirmed conditions instead, whichever comes first:
-    #  (a) a fully COMPLETED H4 candle whose CLOSE breaches the far boundary
-    #      (a body close through the zone, not a wick);
-    #  (b) a CONFIRMED 5m swing of the resting kind whose own price already
-    #      exceeds the far boundary (a genuine structural break, faster to
-    #      arrive than waiting a full H4 candle, but still a confirmed swing
-    #      rather than raw 1m noise).
-    h4_close_invalid_at = None
-    h4_start_idx = bisect_left(h4_bar_starts, resting.at)
-    for hb in h4_bars[h4_start_idx:]:
-        breach = (hb.c < far_boundary) if bull else (hb.c > far_boundary)
-        if breach:
-            h4_close_invalid_at = hb.end
-            break
-
-    swing_exceed_at = None
-    for ev in events_sorted:
-        if ev.kind != need_rest_kind or ev.at is None or ev.at <= resting.at:
-            continue
-        exceeded = (ev.price < far_boundary) if bull else (ev.price > far_boundary)
-        if exceeded:
-            swing_exceed_at = ev.at
-            break
-
-    invalid_candidates = [t for t in (h4_close_invalid_at, swing_exceed_at) if t is not None]
-    invalidated_at = min(invalid_candidates) if invalid_candidates else None
-
     idx = bisect_left(mt, resting.at)
     entry_m = None
     stopped = False
@@ -185,8 +164,7 @@ def run_bso(z, it: datetime, five_bar_starts: List[datetime], five_events: List[
     if entry_m is None:
         return dict(stage="H4_OB_BREACHED" if stopped else "NO_ENTRY_IN_DATA",
                     resting_at=resting.at, candidate_price=current.price, replacements=replacements,
-                    invalidated_at=invalidated_at,
-                    invalidation_reason=("h4_close" if invalidated_at == h4_close_invalid_at else "swing_exceed") if stopped else None)
+                    invalidated_at=invalidated_at if stopped else None)
 
     entry_price = current.price
     entry_time = entry_m.t
@@ -229,39 +207,83 @@ def run_bso(z, it: datetime, five_bar_starts: List[datetime], five_events: List[
                 result=result or "OPEN", exit_time=exit_time, exit_price=exit_price)
 
 
-def first_h4_swing_after(h4_engine_events: List["wob.Event"], it: datetime) -> Optional[datetime]:
-    """The confirm time of the first native-4H swing (either kind -- high or
-    low) confirmed after the H4 OB's own impact. Re-entry per SPEC.md SS27,
-    made universal per the user's explicit instruction (2026-09-16): after
-    an SL, keep re-arming and re-entering on the same H4 OB as long as (a)
-    it isn't breached (existing far-boundary invalidation) and (b) no new 4H
-    swing point -- of either kind -- has been confirmed yet since impact.
-    The first such swing, once it exists, is a hard ceiling: no further
-    attempt may start after it, regardless of how many SLs came before."""
-    times = [e.at for e in h4_engine_events if e.at is not None and e.at > it]
-    return min(times) if times else None
+def mss_confirm_time(mss: "wob.MSS", h4_bars: List["wob.Week"], minutes: List["wob.Minute"]) -> datetime:
+    """Exact 1m confirmation time for a native-4H MSS event: scan the
+    confirming H4 bar's own minutes for the first strict cross of the
+    broken swing's price, the same way the locked engine itself resolves a
+    promoted trigger's exact minute (see set_promoted_ifob_trigger)."""
+    hb = h4_bars[mss.at]
+    for m in minutes[hb.first:hb.last]:
+        if (m.h > mss.price) if mss.up else (m.l < mss.price):
+            return m.t
+    return hb.start
+
+
+def structural_invalid_at(z, it: datetime, h4_bars: List["wob.Week"], h4_bar_starts: List[datetime],
+                           h4_msses: List["wob.MSS"], minutes: List["wob.Minute"]) -> Tuple[Optional[datetime], Optional[str]]:
+    """When does this H4 OB's own structural premise stop being valid, per
+    the user's explicit rule (2026-09-16, correcting an earlier, cruder
+    approximation): whichever of these happens first, computed once from the
+    OB's own impact time --
+      (a) 'h4_close' -- a fully completed H4 candle closes its BODY at or
+          beyond the NEAR boundary (the side price approaches the zone
+          from -- zb for a SELL OB approached from below, zt for a BUY OB
+          approached from above). Per the user: every POI except FVG
+          invalidates on a body close either inside its zone or through it
+          -- a bare wick, or a close that hasn't even reached the zone yet,
+          does not count.
+      (b) 'mss_break' -- the specific 4H swing that supports/protects this
+          OB gets broken: a confirmed MSS AGAINST the OB's own bias (a
+          bullish MSS for a SELL OB, a bearish MSS for a BUY OB). This
+          replaces an earlier, wrong stand-in ("any new 4H swing at all,
+          either direction") that the user corrected: "we do not have swing
+          point breach unless you confuse it [with] OB box breach... a
+          downtrend IFOB has a swing high above it that if broken will
+          change MSS to up -- that is it."
+    Returns (time, reason); (None, None) if the OB is never structurally
+    invalidated in the available data."""
+    bull = z.bullish
+    near_boundary = z.zt if bull else z.zb
+
+    h4_close_invalid_at = None
+    start_idx = bisect_left(h4_bar_starts, it)
+    for hb in h4_bars[start_idx:]:
+        breach = (hb.c <= near_boundary) if bull else (hb.c >= near_boundary)
+        if breach:
+            h4_close_invalid_at = hb.end
+            break
+
+    want_up = not bull
+    mss_times = [mss_confirm_time(m, h4_bars, minutes) for m in h4_msses if m.up == want_up]
+    mss_times = [t for t in mss_times if t > it]
+    mss_break_at = min(mss_times) if mss_times else None
+
+    if h4_close_invalid_at is not None and (mss_break_at is None or h4_close_invalid_at <= mss_break_at):
+        return h4_close_invalid_at, "h4_close"
+    if mss_break_at is not None:
+        return mss_break_at, "mss_break"
+    return None, None
 
 
 def run_bso_chain(z, it: datetime, five_bar_starts: List[datetime], five_events: List["wob.Event"],
                    minutes: List["wob.Minute"], mt: List[datetime],
-                   h4_bars: List["wob.Week"], h4_bar_starts: List[datetime],
-                   swing_stop_at: Optional[datetime]) -> List[Dict]:
+                   invalidated_at: Optional[datetime]) -> List[Dict]:
     """Chain of BSO attempts on the same H4 OB: after an SL, re-arm and
-    search again from the SL exit onward, as long as neither the far
-    boundary has been breached nor a new 4H swing has formed (see
-    first_h4_swing_after). Stops on the first attempt that is not a plain
-    SL (TP, OPEN, AMBIGUOUS, H4_OB_BREACHED, or any no-entry stage), or when
-    the next search would start at/after swing_stop_at.
+    search again from the SL exit onward, as long as the OB's own structural
+    premise (see structural_invalid_at) hasn't been invalidated. Stops on
+    the first attempt that is not a plain SL (TP, OPEN, AMBIGUOUS,
+    H4_OB_BREACHED, or any no-entry stage), or when the next search would
+    start at/after invalidated_at.
 
     Real bug fixed 2026-09-16 (user-caught, OB #197): the ceiling was only
     checked against the PREVIOUS attempt's exit time before launching the
     next search -- it never re-checked whether the NEW attempt's own
     resting swing landed at/after the ceiling once actually found. Since
     search_from only advances to the previous exit, a slow-forming resting
-    swing could (and did) print well past swing_stop_at and still get
+    swing could (and did) print well past the ceiling and still get
     accepted as a live trade. Now validated per-attempt: any attempt whose
-    resting swing is at/after the ceiling is converted to a disallowed,
-    non-tradeable stage instead of being accepted.
+    resting swing is at/after the ceiling is converted to H4_OB_BREACHED
+    instead of being accepted.
 
     This check applies to attempt 1 as well, not just re-entries -- a fix
     initially tried, then wrongly reverted the same day on an unverified
@@ -272,24 +294,25 @@ def run_bso_chain(z, it: datetime, five_bar_starts: List[datetime], five_events:
     impact. Checking the data for the earlier "reverted" OBs (#159, #181,
     #186) showed the exact same pattern -- 12 hours to 6 days of staleness
     -- confirming they were real defects, not false positives. The 6 OBs
-    that were never flagged all have their resting swing forming BEFORE any
-    subsequent 4H swing, so this check does not touch them.
+    that were never flagged all have their resting swing forming before any
+    subsequent structural invalidation, so this check does not touch them.
 
     Reporting rule (user, 2026-09-16): a RE-ENTRY (attempt_no > 1) that never
-    actually became a trade -- breached, swing-stop-reached, no resting
-    swing, whatever the reason -- is not a "second opportunity" and is not
-    reported at all: no table row, no ledger row, nothing. It is still used
-    internally to decide the chain should stop there, just never appended to
-    the returned list. The OB's original first attempt is always reported
-    regardless of its outcome (that's the OB's own result, not a re-entry)."""
+    actually became a trade -- breached, structurally invalidated, no
+    resting swing, whatever the reason -- is not a "second opportunity" and
+    is not reported at all: no table row, no ledger row, nothing. It is
+    still used internally to decide the chain should stop there, just never
+    appended to the returned list. The OB's original first attempt is
+    always reported regardless of its outcome (that's the OB's own result,
+    not a re-entry)."""
     attempts: List[Dict] = []
     search_from = it
     attempt_no = 1
     while True:
-        res = run_bso(z, search_from, five_bar_starts, five_events, minutes, mt, h4_bars, h4_bar_starts)
+        res = run_bso(z, search_from, five_bar_starts, five_events, minutes, mt, invalidated_at)
         resting_at = res.get("resting_at")
-        if swing_stop_at is not None and resting_at is not None and resting_at >= swing_stop_at:
-            res = dict(stage="SWING_STOP_REACHED", resting_at=resting_at)
+        if invalidated_at is not None and resting_at is not None and resting_at >= invalidated_at:
+            res = dict(stage="H4_OB_BREACHED", resting_at=resting_at, invalidated_at=invalidated_at)
         entered = res.get("stage") == "ENTERED"
         if attempt_no == 1 or entered:
             res["attempt"] = attempt_no
@@ -299,7 +322,7 @@ def run_bso_chain(z, it: datetime, five_bar_starts: List[datetime], five_events:
         exit_time = res.get("exit_time")
         if exit_time is None:
             break
-        if swing_stop_at is not None and exit_time >= swing_stop_at:
+        if invalidated_at is not None and exit_time >= invalidated_at:
             break
         search_from = exit_time
         attempt_no += 1
@@ -371,9 +394,8 @@ def main() -> int:
 
     rows = []
     for z, it, parent_id in targets:
-        swing_stop_at = first_h4_swing_after(h4_engine.events, it)
-        attempts = run_bso_chain(z, it, five_bar_starts, five_engine.events, minutes, mt,
-                                  h4_bars, h4_bar_starts, swing_stop_at)
+        invalidated_at, invalidation_reason = structural_invalid_at(z, it, h4_bars, h4_bar_starts, h4_engine.msses, minutes)
+        attempts = run_bso_chain(z, it, five_bar_starts, five_engine.events, minutes, mt, invalidated_at)
         for res in attempts:
             row = dict(
                 h4_ob_id=z.id, attempt=res.get("attempt"), parent_weekly_id=parent_id, side="BUY" if z.bullish else "SELL",
@@ -390,15 +412,14 @@ def main() -> int:
                 exit_riyadh=wob.display_iso(res.get("exit_time"), display_tz),
                 exit_price="" if res.get("exit_price") is None else f"{res['exit_price']:.5f}",
                 invalidated_riyadh=wob.display_iso(res.get("invalidated_at"), display_tz),
-                invalidation_reason=res.get("invalidation_reason", ""),
-                swing_stop_riyadh=wob.display_iso(swing_stop_at, display_tz),
+                invalidation_reason=invalidation_reason if res.get("invalidated_at") is not None else "",
             )
             rows.append(row)
 
     fields = ["h4_ob_id", "attempt", "parent_weekly_id", "side", "h4_impact_riyadh", "stage", "resting_riyadh",
               "candidate_since_riyadh", "entry_riyadh", "entry_price", "sl_price", "risk_price", "tp_price",
               "candidate_replacements", "result", "exit_riyadh", "exit_price",
-              "invalidated_riyadh", "invalidation_reason", "swing_stop_riyadh"]
+              "invalidated_riyadh", "invalidation_reason"]
     with (base / "five_bso_ledger.csv").open("w", newline="", encoding="utf-8") as f:
         wr = csv.DictWriter(f, fieldnames=fields)
         wr.writeheader()
