@@ -253,11 +253,13 @@ def build_bso_extra_lines(bso_results: List[tuple], display_tz: ZoneInfo) -> Lis
     """5m entry-machine visualization -- 5m chart only (`onFive`), nothing on
     H4/Weekly: this is 5m execution detail, not higher-timeframe structure.
 
-    One row per BSO attempt (`bso_results` = every drawn H4 OB in the
-    focused window, whether or not it reached an entry), with its own
-    `Inspect one 5m BSO only` / `5m BSO from last` toggle -- same pattern as
-    the H4 OB inspector -- so a single attempt's table row and lines can be
-    isolated the same way a single H4 OB already can.
+    One row per BSO attempt (`bso_results` is now flattened across each H4
+    OB's full re-entry chain, SPEC.md SS27 -- an OB that hit SL and re-armed
+    contributes more than one row, labelled "(re-entry N)" in the 4H OB
+    column), with its own `Inspect one 5m BSO only` / `5m BSO from last`
+    toggle -- same pattern as the H4 OB inspector -- so a single attempt's
+    table row and lines can be isolated the same way a single H4 OB already
+    can.
 
     For an attempt that reached ENTERED:
       - a BLUE horizontal line at the entry/candidate price, from the
@@ -292,8 +294,9 @@ def build_bso_extra_lines(bso_results: List[tuple], display_tz: ZoneInfo) -> Lis
     ids, weeklys, sides, restings, entries, sls, tps, results, exits = ([] for _ in range(9))
     blefts, brights, bys = [], [], []
     clefts, crights, cys, ccols = [], [], [], []
-    for z, _it, parent_id, res in bso_results:
-        ids.append(f"\"#{z.id}\"")
+    for z, _it, parent_id, _swing_stop_at, res in bso_results:
+        attempt_no = res.get("attempt")
+        ids.append(f"\"#{z.id}\"" if attempt_no in (None, 1) else f"\"#{z.id} (re-entry {attempt_no})\"")
         weeklys.append(f"\"{pine_text('#' + parent_id if parent_id else '-')}\"")
         sides.append(f"\"{'BUY' if z.bullish else 'SELL'}\"")
         restings.append(f"\"{pine_text(wob.display_iso(res.get('resting_at'), display_tz))}\"")
@@ -484,22 +487,29 @@ def main() -> int:
     five_bar_starts = [b.start for b in five_bars]
     five_engine = wob.WeeklyOBEngine(minutes, five_bars, origin_gap_window=None)
     five_engine.run()
+    # Re-entry chain per SPEC.md SS27 (made universal, 2026-09-16): after an
+    # SL, re-arm and search again as long as the H4 OB isn't breached AND no
+    # new native 4H swing (either kind) has confirmed since impact. Each H4
+    # OB can now yield more than one attempt.
     bso_results = []
     for z, tt, tp, et, ep, it, parent_id in focused_drawn:
-        res = bso.run_bso(z, it, five_bar_starts, five_engine.events, minutes, mt, h4_bars, h4_bar_starts)
-        bso_results.append((z, it, parent_id, res))
+        swing_stop_at = bso.first_h4_swing_after(h4_engine.events, it)
+        attempts = bso.run_bso_chain(z, it, five_bar_starts, five_engine.events, minutes, mt,
+                                      h4_bars, h4_bar_starts, swing_stop_at)
+        for res in attempts:
+            bso_results.append((z, it, parent_id, swing_stop_at, res))
     bso_extra_lines = build_bso_extra_lines(bso_results, display_tz)
 
     with (base / "five_bso_ledger.csv").open("w", newline="", encoding="utf-8") as f:
-        fields = ["h4_ob_id", "parent_weekly_id", "side", "h4_impact_riyadh", "stage", "resting_riyadh",
+        fields = ["h4_ob_id", "attempt", "parent_weekly_id", "side", "h4_impact_riyadh", "stage", "resting_riyadh",
                   "candidate_since_riyadh", "entry_riyadh", "entry_price", "sl_price", "risk_price", "tp_price",
                   "candidate_replacements", "result", "exit_riyadh", "exit_price",
-                  "invalidated_riyadh", "invalidation_reason"]
+                  "invalidated_riyadh", "invalidation_reason", "swing_stop_riyadh"]
         wr = csv.DictWriter(f, fieldnames=fields)
         wr.writeheader()
-        for z, it, parent_id, res in bso_results:
+        for z, it, parent_id, swing_stop_at, res in bso_results:
             wr.writerow(dict(
-                h4_ob_id=z.id, parent_weekly_id=parent_id, side="BUY" if z.bullish else "SELL",
+                h4_ob_id=z.id, attempt=res.get("attempt"), parent_weekly_id=parent_id, side="BUY" if z.bullish else "SELL",
                 h4_impact_riyadh=wob.display_iso(it, display_tz), stage=res.get("stage"),
                 resting_riyadh=wob.display_iso(res.get("resting_at"), display_tz),
                 candidate_since_riyadh=wob.display_iso(res.get("candidate_since"), display_tz),
@@ -514,6 +524,7 @@ def main() -> int:
                 exit_price="" if res.get("exit_price") is None else f"{res['exit_price']:.5f}",
                 invalidated_riyadh=wob.display_iso(res.get("invalidated_at"), display_tz),
                 invalidation_reason=res.get("invalidation_reason", ""),
+                swing_stop_riyadh=wob.display_iso(swing_stop_at, display_tz),
             ))
 
     extra_lines = h4_extra_lines + bso_extra_lines
@@ -531,7 +542,7 @@ def main() -> int:
     focus_note = f", {len(focused_drawn)} shown (--focus-weekly-id {args.focus_weekly_id})" if args.focus_weekly_id else ""
     print(f"{len(h4_bars)} 4H bars, {len(h4_engine.zones)} H4 OBs computed, {len(drawn)} drawn (impacted + authorized){focus_note}.")
     bso_stages = {}
-    for _z, _it, _parent_id, res in bso_results:
+    for _z, _it, _parent_id, _swing_stop_at, res in bso_results:
         bso_stages[res.get("stage")] = bso_stages.get(res.get("stage"), 0) + 1
     print(f"5m BSO on {len(bso_results)} drawn OBs: {bso_stages}")
     return 0

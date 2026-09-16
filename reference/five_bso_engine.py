@@ -16,12 +16,20 @@ comes first: (a) a fully completed H4 candle whose CLOSE breaches the far
 boundary, or (b) a confirmed 5m swing of the resting kind whose own price
 already exceeds the far boundary. Both require confirmation, not a raw tick.
 
+Post-SL re-entry (SS27, made universal per the user's explicit instruction,
+2026-09-16): `run_bso_chain()` re-arms and searches again after an SL, as
+long as the H4 OB isn't breached (the invalidation above) AND no new native
+4H swing (either kind) has been confirmed yet since the OB's own impact
+(`first_h4_swing_after`) -- that swing, once it exists, is a hard ceiling on
+further attempts. A chain stops on the first attempt that resolves to
+anything other than a plain SL (TP, OPEN, AMBIGUOUS, a breach, or any
+no-entry stage). Each H4 OB can now produce more than one row in the
+ledger, numbered by `attempt`.
+
 SCOPE OF THIS FIRST PASS -- explicitly NOT yet implemented:
   - Break-even (SPEC.md SS25): not computed. Every trade record's
     effective stop equals its original SL. Deferred until after MFE/MAE
     are recorded, per the user's explicit instruction.
-  - Post-SL re-entry (SS27): not computed. Each H4 OB gets at most one
-    BSO attempt.
   - MFE/MAE (SS34): not computed.
 These are follow-up stages, matching the build order's own stage split
 (SS36 stages 11-12 vs 13). Every record is clearly one BSO attempt, not a
@@ -221,6 +229,48 @@ def run_bso(z, it: datetime, five_bar_starts: List[datetime], five_events: List[
                 result=result or "OPEN", exit_time=exit_time, exit_price=exit_price)
 
 
+def first_h4_swing_after(h4_engine_events: List["wob.Event"], it: datetime) -> Optional[datetime]:
+    """The confirm time of the first native-4H swing (either kind -- high or
+    low) confirmed after the H4 OB's own impact. Re-entry per SPEC.md SS27,
+    made universal per the user's explicit instruction (2026-09-16): after
+    an SL, keep re-arming and re-entering on the same H4 OB as long as (a)
+    it isn't breached (existing far-boundary invalidation) and (b) no new 4H
+    swing point -- of either kind -- has been confirmed yet since impact.
+    The first such swing, once it exists, is a hard ceiling: no further
+    attempt may start after it, regardless of how many SLs came before."""
+    times = [e.at for e in h4_engine_events if e.at is not None and e.at > it]
+    return min(times) if times else None
+
+
+def run_bso_chain(z, it: datetime, five_bar_starts: List[datetime], five_events: List["wob.Event"],
+                   minutes: List["wob.Minute"], mt: List[datetime],
+                   h4_bars: List["wob.Week"], h4_bar_starts: List[datetime],
+                   swing_stop_at: Optional[datetime]) -> List[Dict]:
+    """Chain of BSO attempts on the same H4 OB: after an SL, re-arm and
+    search again from the SL exit onward, as long as neither the far
+    boundary has been breached nor a new 4H swing has formed (see
+    first_h4_swing_after). Stops on the first attempt that is not a plain
+    SL (TP, OPEN, AMBIGUOUS, H4_OB_BREACHED, or any no-entry stage), or when
+    the next search would start at/after swing_stop_at."""
+    attempts: List[Dict] = []
+    search_from = it
+    attempt_no = 1
+    while True:
+        res = run_bso(z, search_from, five_bar_starts, five_events, minutes, mt, h4_bars, h4_bar_starts)
+        res["attempt"] = attempt_no
+        attempts.append(res)
+        if res.get("stage") != "ENTERED" or res.get("result") != "SL":
+            break
+        exit_time = res.get("exit_time")
+        if exit_time is None:
+            break
+        if swing_stop_at is not None and exit_time >= swing_stop_at:
+            break
+        search_from = exit_time
+        attempt_no += 1
+    return attempts
+
+
 def main() -> int:
     args = parse_args()
     path = Path(args.csv_file).expanduser().resolve()
@@ -286,30 +336,34 @@ def main() -> int:
 
     rows = []
     for z, it, parent_id in targets:
-        res = run_bso(z, it, five_bar_starts, five_engine.events, minutes, mt, h4_bars, h4_bar_starts)
-        row = dict(
-            h4_ob_id=z.id, parent_weekly_id=parent_id, side="BUY" if z.bullish else "SELL",
-            h4_impact_riyadh=wob.display_iso(it, display_tz), stage=res.get("stage"),
-            resting_riyadh=wob.display_iso(res.get("resting_at"), display_tz),
-            candidate_since_riyadh=wob.display_iso(res.get("candidate_since"), display_tz),
-            entry_riyadh=wob.display_iso(res.get("entry_time"), display_tz),
-            entry_price="" if res.get("entry_price") is None else f"{res['entry_price']:.5f}",
-            sl_price="" if res.get("sl_price") is None else f"{res['sl_price']:.5f}",
-            risk_price="" if res.get("risk") is None else f"{res['risk']:.5f}",
-            tp_price="" if res.get("tp_price") is None else f"{res['tp_price']:.5f}",
-            candidate_replacements=res.get("replacements", ""),
-            result=res.get("result", ""),
-            exit_riyadh=wob.display_iso(res.get("exit_time"), display_tz),
-            exit_price="" if res.get("exit_price") is None else f"{res['exit_price']:.5f}",
-            invalidated_riyadh=wob.display_iso(res.get("invalidated_at"), display_tz),
-            invalidation_reason=res.get("invalidation_reason", ""),
-        )
-        rows.append(row)
+        swing_stop_at = first_h4_swing_after(h4_engine.events, it)
+        attempts = run_bso_chain(z, it, five_bar_starts, five_engine.events, minutes, mt,
+                                  h4_bars, h4_bar_starts, swing_stop_at)
+        for res in attempts:
+            row = dict(
+                h4_ob_id=z.id, attempt=res.get("attempt"), parent_weekly_id=parent_id, side="BUY" if z.bullish else "SELL",
+                h4_impact_riyadh=wob.display_iso(it, display_tz), stage=res.get("stage"),
+                resting_riyadh=wob.display_iso(res.get("resting_at"), display_tz),
+                candidate_since_riyadh=wob.display_iso(res.get("candidate_since"), display_tz),
+                entry_riyadh=wob.display_iso(res.get("entry_time"), display_tz),
+                entry_price="" if res.get("entry_price") is None else f"{res['entry_price']:.5f}",
+                sl_price="" if res.get("sl_price") is None else f"{res['sl_price']:.5f}",
+                risk_price="" if res.get("risk") is None else f"{res['risk']:.5f}",
+                tp_price="" if res.get("tp_price") is None else f"{res['tp_price']:.5f}",
+                candidate_replacements=res.get("replacements", ""),
+                result=res.get("result", ""),
+                exit_riyadh=wob.display_iso(res.get("exit_time"), display_tz),
+                exit_price="" if res.get("exit_price") is None else f"{res['exit_price']:.5f}",
+                invalidated_riyadh=wob.display_iso(res.get("invalidated_at"), display_tz),
+                invalidation_reason=res.get("invalidation_reason", ""),
+                swing_stop_riyadh=wob.display_iso(swing_stop_at, display_tz),
+            )
+            rows.append(row)
 
-    fields = ["h4_ob_id", "parent_weekly_id", "side", "h4_impact_riyadh", "stage", "resting_riyadh",
+    fields = ["h4_ob_id", "attempt", "parent_weekly_id", "side", "h4_impact_riyadh", "stage", "resting_riyadh",
               "candidate_since_riyadh", "entry_riyadh", "entry_price", "sl_price", "risk_price", "tp_price",
               "candidate_replacements", "result", "exit_riyadh", "exit_price",
-              "invalidated_riyadh", "invalidation_reason"]
+              "invalidated_riyadh", "invalidation_reason", "swing_stop_riyadh"]
     with (base / "five_bso_ledger.csv").open("w", newline="", encoding="utf-8") as f:
         wr = csv.DictWriter(f, fieldnames=fields)
         wr.writeheader()
