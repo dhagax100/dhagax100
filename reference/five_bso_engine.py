@@ -251,12 +251,28 @@ def run_bso_chain(z, it: datetime, five_bar_starts: List[datetime], five_events:
     boundary has been breached nor a new 4H swing has formed (see
     first_h4_swing_after). Stops on the first attempt that is not a plain
     SL (TP, OPEN, AMBIGUOUS, H4_OB_BREACHED, or any no-entry stage), or when
-    the next search would start at/after swing_stop_at."""
+    the next search would start at/after swing_stop_at.
+
+    Real bug fixed 2026-09-16 (user-caught, OB #197): the ceiling was only
+    checked against the PREVIOUS attempt's exit time before launching the
+    next search -- it never re-checked whether the NEW attempt's own
+    resting swing landed at/after the ceiling once actually found. Since
+    search_from only advances to the previous exit, a slow-forming resting
+    swing could (and did) print well past swing_stop_at and still get
+    accepted as a live trade. Now validated per-attempt (RE-ENTRIES ONLY --
+    attempt_no > 1; the OB's original first attempt is unconditional, exactly
+    as it was before re-entry existed, since a 4H swing forms constantly and
+    would otherwise veto entries that were already validated): any re-entry
+    whose resting swing is at/after the ceiling is converted to a
+    disallowed, non-tradeable stage instead of being accepted."""
     attempts: List[Dict] = []
     search_from = it
     attempt_no = 1
     while True:
         res = run_bso(z, search_from, five_bar_starts, five_events, minutes, mt, h4_bars, h4_bar_starts)
+        resting_at = res.get("resting_at")
+        if attempt_no > 1 and swing_stop_at is not None and resting_at is not None and resting_at >= swing_stop_at:
+            res = dict(stage="SWING_STOP_REACHED", resting_at=resting_at)
         res["attempt"] = attempt_no
         attempts.append(res)
         if res.get("stage") != "ENTERED" or res.get("result") != "SL":

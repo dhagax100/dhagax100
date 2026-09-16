@@ -330,7 +330,7 @@ def build_bso_extra_lines(bso_results: List[tuple], display_tz: ZoneInfo) -> Lis
     return [
         "bool inspectOne5mBSO = input.bool(false, \"Inspect one 5m BSO only\", group=\"5m BSO inspection\")",
         f"int bso5FromLast = input.int(1, \"5m BSO from last\", minval=1, maxval={max(1, n)}, group=\"5m BSO inspection\", tooltip=\"1 = most recent 5m BSO attempt, 2 = the one before it, and so on.\")",
-        f"var table bso5Ledger = table.new(position.top_left, 9, {n + 1}, border_width=1)",
+        f"var table bso5Ledger = table.new(position.top_right, 9, {n + 1}, border_width=1)",
         f"var array<string> bso5Id = {arr('string', ids)}",
         f"var array<string> bso5Weekly = {arr('string', weeklys)}",
         f"var array<string> bso5Side = {arr('string', sides)}",
