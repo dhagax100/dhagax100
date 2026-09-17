@@ -102,17 +102,61 @@ def build_manual_gates() -> List[Tuple[datetime, datetime, str, str, str]]:
                                                             dead immediately, no swing wait needed)
       6. 2026-06-15 00:29 -> 2026-06-17 22:24  NONE       (fresh, unrelated swing low confirms)
       7. 2026-06-17 22:24 -> 2026-07-14 15:30  SELL_ONLY (that low breaks, sell resumes)
-      8. 2026-07-14 15:30 -> 2026-08-04 00:00  NONE       (next swing low confirms -- current state)
+      8. 2026-07-14 15:30 -> 2026-07-23 15:43  NONE       (swing low confirms)
+      9. 2026-07-23 15:43 -> 2026-07-29 21:53  SELL_ONLY (swing HIGH confirms -- see rule
+                                                            revision below, not the old
+                                                            "swing low taken out" rule)
+     10. 2026-07-29 21:53 -> 2026-07-30 16:48  NONE       (new swing low confirms, no buy
+                                                            in control)
+     11. 2026-07-30 16:48 -> 2026-08-03 00:00  SELL_ONLY (zone 9, first reaction from a
+                                                            plain NONE; one entry only)
+     12. 2026-08-03 00:00 -> 2026-08-19 15:49  NONE       (zone 9's own containing week
+                                                            closes body INSIDE its box --
+                                                            dies; nothing tradable until
+                                                            zone 8 reacts)
+     13. 2026-08-19 15:49 -> 2026-08-24 00:00  SELL_ONLY (zone 8 reacts; one entry only)
+     14. 2026-08-24 00:00 -> 2026-09-11 22:05  NONE       (zone 8's own containing week
+                                                            closes with a full body breach
+                                                            through its own top -- dies;
+                                                            no tradable zone left anywhere;
+                                                            stays NONE through the last 1m
+                                                            bar in the CSV, 2026-09-11 22:05)
 
     Not implemented in weekly_control_engine.py itself: gate 5's rule (a
     Weekly candle merely closing its body INSIDE an opposing zone, without a
     clean reject, kills that zone immediately -- no confirmed-swing wait) is
-    new this session and not yet folded back into the automated engine.
+    new this session and not yet folded back into the automated engine. Same
+    rule reused for gates 12 and 14 above (zone 9 dies to a body-INSIDE
+    close, zone 8 dies to a full body-THROUGH close -- both variants of the
+    same underlying rule, checked directly against each zone's own
+    containing Weekly candle, not the automated engine's output).
+
+    Rule revision (this session, user-directed): the earlier assumption that
+    SELL resumes from NONE when "the swing low that caused NONE gets taken
+    out" is WRONG and is abandoned going forward. The real rule: SELL
+    resumes the moment a Weekly swing HIGH confirms. Verified against gates
+    2->3 and 6->7 above (both already chart-confirmed by the user before
+    this revision) -- gate 6->7 lands on the identical minute either way, no
+    conflict; gate 2->3 differs by 51 minutes under the new rule (16:00 vs.
+    16:51) but the user confirmed this makes no material difference (same
+    4H structures, same 5m entries either way), so those two timestamps are
+    kept exactly as originally verified, NOT retroactively recomputed. The
+    rule change only actually matters starting at gate 8 -- under the old
+    rule, gate 8's NONE would never resolve for the rest of the dataset.
+
+    New mechanism (this session): exiting a *plain* NONE with no live
+    campaign (gates 10->11, 12->13) is governed by whichever zone reacts
+    first, either side -- not the swing-high rule, which only applies when
+    resuming a campaign that already has a live supporting swing high (gate
+    8->9). Gates 11 and 13 each represent exactly ONE entry (from zones 9
+    and 8 respectively) before their own zone dies to the body-close rule.
+
     During BOTH (gate 4), sell_parent=3 (the same ongoing SELL thesis) and
     buy_parent=5 (zone 5 itself, the only live BUY POI in that window).
-    During every SELL_ONLY gate, the parent is zone 3 throughout -- no new
-    Weekly SELL zone ever took over; SPEC's own "keep selling until we come
-    across another OB" default applies (nothing invalidated zone 3 itself)."""
+    During every other SELL_ONLY gate, the parent is zone 3 throughout
+    UNTIL gate 11, where zone 9 (not zone 3) is the actual zone supplying
+    the entry, and gate 13, where it's zone 8 -- both distinct, later
+    Weekly zones in the same SELL lineage, not zone 3's own original box."""
     rtz = ZoneInfo("Asia/Riyadh")
 
     def rt(y: int, mo: int, d: int, h: int, mi: int) -> datetime:
@@ -126,7 +170,13 @@ def build_manual_gates() -> List[Tuple[datetime, datetime, str, str, str]]:
         (rt(2026, 6, 8, 0, 0), rt(2026, 6, 15, 0, 29), "SELL_ONLY", "3", ""),
         (rt(2026, 6, 15, 0, 29), rt(2026, 6, 17, 22, 24), "NONE", "", ""),
         (rt(2026, 6, 17, 22, 24), rt(2026, 7, 14, 15, 30), "SELL_ONLY", "3", ""),
-        (rt(2026, 7, 14, 15, 30), rt(2026, 8, 4, 0, 0), "NONE", "", ""),
+        (rt(2026, 7, 14, 15, 30), rt(2026, 7, 23, 15, 43), "NONE", "", ""),
+        (rt(2026, 7, 23, 15, 43), rt(2026, 7, 29, 21, 53), "SELL_ONLY", "3", ""),
+        (rt(2026, 7, 29, 21, 53), rt(2026, 7, 30, 16, 48), "NONE", "", ""),
+        (rt(2026, 7, 30, 16, 48), rt(2026, 8, 3, 0, 0), "SELL_ONLY", "9", ""),
+        (rt(2026, 8, 3, 0, 0), rt(2026, 8, 19, 15, 49), "NONE", "", ""),
+        (rt(2026, 8, 19, 15, 49), rt(2026, 8, 24, 0, 0), "SELL_ONLY", "8", ""),
+        (rt(2026, 8, 24, 0, 0), rt(2026, 9, 11, 22, 5), "NONE", "", ""),
     ]
 
 
