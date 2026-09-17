@@ -217,11 +217,11 @@ def build_h4_extra_lines(h4_engine, h4_bars, drawn: List[tuple], ob_cap: int, di
     # --manual-gates render, ~13 weeks) pushed the count well past 80 per
     # kind and blew CE10295 ("main body is too long") -- the exact failure
     # mode this file's own box/line code was already written to avoid.
-    # Colors changed from the Weekly layer's own locked convention
-    # (blue high / black low+down-MSS) for this H4-only layer, 2026-09-17,
-    # after the user reported swing lows/down-MSS invisible on the H4 chart
-    # -- kept even after finding the REAL bug below, since maroon is still a
-    # reasonable, more-visible choice on this denser timeframe.
+    # Colors briefly changed to maroon (from the Weekly layer's locked
+    # blue high / black low+down-MSS convention) as an unproven hypothesis
+    # fix on 2026-09-17, before the real bug below was found. That change
+    # had zero effect (proving it wasn't a contrast problem) and is
+    # reverted here -- this layer now matches the Weekly layer's convention.
     #
     # REAL BUG, found 2026-09-17 (user-caught -- changing color had zero
     # effect, which is what proved this wasn't a contrast problem): every
@@ -247,11 +247,11 @@ def build_h4_extra_lines(h4_engine, h4_bars, drawn: List[tuple], ob_cap: int, di
         struct_txt.append("\"▲\""); struct_col.append("color.blue"); struct_low.append("false")
     for e in sl:
         struct_x.append(pine_time(h4_bars[e.swing].start)); struct_y.append(f"{e.price:.5f}")
-        struct_txt.append("\"▼\""); struct_col.append("color.maroon"); struct_low.append("true")
+        struct_txt.append("\"▼\""); struct_col.append("color.black"); struct_low.append("true")
     for m in ms:
         struct_x.append(pine_time(h4_bars[m.broken].start))
         struct_y.append(f"{m.price:.5f}")
-        struct_txt.append("\"✕\""); struct_col.append("color.blue" if m.up else "color.maroon")
+        struct_txt.append("\"✕\""); struct_col.append("color.blue" if m.up else "color.black")
         struct_low.append("false" if m.up else "true")
 
     # Same cross-timeframe impact-resolution technique as the Weekly layer
