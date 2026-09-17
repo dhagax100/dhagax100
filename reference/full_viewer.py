@@ -218,30 +218,41 @@ def build_h4_extra_lines(h4_engine, h4_bars, drawn: List[tuple], ob_cap: int, di
     # kind and blew CE10295 ("main body is too long") -- the exact failure
     # mode this file's own box/line code was already written to avoid.
     # Colors changed from the Weekly layer's own locked convention
-    # (blue high / BLACK low+down-MSS) for this H4-only layer specifically,
-    # 2026-09-17: the user reported swing lows and down-MSS invisible on the
-    # H4 chart. Verified exhaustively that this isn't a data or packing bug
-    # (raw events present, correctly packed into these very arrays, correct
-    # alignment, correct Unicode codepoints, well under Pine's label caps) --
-    # could not get a definitive root cause without a real Pine compiler.
-    # Strongest remaining explanation: on the much denser H4 timeframe,
-    # swing lows/down-MSS sit at local bottoms, very often on or beside a
-    # BLACK bearish candle -- black text there is genuinely hard to see,
-    # unlike on the sparser Weekly chart this convention was locked for.
-    # Switched low/down-MSS to maroon, which cannot blend with either the
-    # blue (up) or black (down) candle colors used throughout this project.
-    # This does NOT touch weekly_ob_generator.py's own locked convention.
-    struct_x, struct_y, struct_txt, struct_col = [], [], [], []
+    # (blue high / black low+down-MSS) for this H4-only layer, 2026-09-17,
+    # after the user reported swing lows/down-MSS invisible on the H4 chart
+    # -- kept even after finding the REAL bug below, since maroon is still a
+    # reasonable, more-visible choice on this denser timeframe.
+    #
+    # REAL BUG, found 2026-09-17 (user-caught -- changing color had zero
+    # effect, which is what proved this wasn't a contrast problem): every
+    # var array declared here is `var`, so Pine evaluates its array.from(...)
+    # exactly ONCE, on the chart's very first historical bar. `lowGap` is
+    # `ta.atr(14) * 0.08` -- still `na` at bar 0, since ATR(14) needs 14 bars
+    # of history that don't exist yet. Every entry that baked "price -
+    # lowGap" directly into the array literal (every swing low and
+    # down-MSS) therefore got PERMANENTLY set to `na` the instant that line
+    # first ran, and never recalculated on later bars even once lowGap
+    # became valid -- label.new() given `na` for its price silently draws
+    # nothing. Swing highs and up-MSS never used lowGap, so they're plain
+    # literals, unaffected. Same reason h4Right (which depends on
+    # impact_x_<id>) is deliberately NOT a `var` array and is instead
+    # recomputed fresh inside "if barstate.islast" -- this needed the same
+    # treatment. Fixed by storing only the RAW price (a safe literal) in the
+    # `var` array, plus a bool flag for which entries need the offset, and
+    # applying "- lowGap" at DRAW TIME instead, when lowGap's current value
+    # is actually valid.
+    struct_x, struct_y, struct_txt, struct_col, struct_low = [], [], [], [], []
     for e in sh:
         struct_x.append(pine_time(h4_bars[e.swing].start)); struct_y.append(f"{e.price:.5f}")
-        struct_txt.append("\"▲\""); struct_col.append("color.blue")
+        struct_txt.append("\"▲\""); struct_col.append("color.blue"); struct_low.append("false")
     for e in sl:
-        struct_x.append(pine_time(h4_bars[e.swing].start)); struct_y.append(f"{e.price:.5f} - lowGap")
-        struct_txt.append("\"▼\""); struct_col.append("color.maroon")
+        struct_x.append(pine_time(h4_bars[e.swing].start)); struct_y.append(f"{e.price:.5f}")
+        struct_txt.append("\"▼\""); struct_col.append("color.maroon"); struct_low.append("true")
     for m in ms:
         struct_x.append(pine_time(h4_bars[m.broken].start))
-        struct_y.append(f"{m.price:.5f}" if m.up else f"{m.price:.5f} - lowGap")
+        struct_y.append(f"{m.price:.5f}")
         struct_txt.append("\"✕\""); struct_col.append("color.blue" if m.up else "color.maroon")
+        struct_low.append("false" if m.up else "true")
 
     # Same cross-timeframe impact-resolution technique as the Weekly layer
     # (write_ob_pine's impact_vars): a `var int` tracker per drawn OB, updated
@@ -304,6 +315,7 @@ def build_h4_extra_lines(h4_engine, h4_bars, drawn: List[tuple], ob_cap: int, di
         f"var array<float> h4StructY = {arr('float', struct_y)}",
         f"var array<string> h4StructTxt = {arr('string', struct_txt)}",
         f"var array<color> h4StructCol = {arr('color', struct_col)}",
+        f"var array<bool> h4StructLow = {arr('bool', struct_low)}",
         *impact_watchers,
         "if barstate.islast",
         "    if onH4 or onFive",
@@ -317,7 +329,8 @@ def build_h4_extra_lines(h4_engine, h4_bars, drawn: List[tuple], ob_cap: int, di
         "                line.new(array.get(h4Right, i), array.get(h4Bottom, i), array.get(h4Right, i), array.get(h4Top, i), xloc=xloc.bar_time, extend=extend.both, color=color.new(color.blue,55), width=1)",
         "    if onH4",
         "        for i = 0 to array.size(h4StructX) - 1",
-        "            label.new(array.get(h4StructX, i), array.get(h4StructY, i), array.get(h4StructTxt, i), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=array.get(h4StructCol, i), size=size.small)",
+        "            structYY = array.get(h4StructLow, i) ? array.get(h4StructY, i) - lowGap : array.get(h4StructY, i)",
+        "            label.new(array.get(h4StructX, i), structYY, array.get(h4StructTxt, i), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=array.get(h4StructCol, i), size=size.small)",
         f"        table.cell(h4Ledger, 0, 0, \"4H OB\", text_color=color.white, bgcolor=color.new(color.blue,15))",
         f"        table.cell(h4Ledger, 1, 0, \"Parent W\", text_color=color.white, bgcolor=color.new(color.blue,15))",
         f"        table.cell(h4Ledger, 2, 0, \"Side\", text_color=color.white, bgcolor=color.new(color.blue,15))",

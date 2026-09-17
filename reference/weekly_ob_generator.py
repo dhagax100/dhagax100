@@ -838,17 +838,33 @@ def write_ob_pine(base: Path, engine: WeeklyOBEngine, label_cap: int, ob_cap: in
     # Swing-high/swing-low/MSS labels -- packed. Exact locked visual
     # convention preserved: blue ▲ high, black ▼ low, ✕ MSS (blue up / black
     # down).
-    struct_x, struct_y, struct_txt, struct_col = [], [], [], []
+    #
+    # REAL BUG fixed 2026-09-17 (found on the H4 layer first, same
+    # construction here -- user-caught: swing lows/down-MSS invisible on the
+    # H4 chart, and changing their color had zero effect, which is what
+    # proved it wasn't a contrast problem). These arrays are `var`, so Pine
+    # evaluates array.from(...) exactly ONCE, on the chart's very first
+    # historical bar -- where `lowGap` (`ta.atr(14) * 0.08`) is still `na`,
+    # since ATR(14) needs 14 bars of history that don't exist yet. Baking
+    # "price - lowGap" directly into the literal permanently set every
+    # swing-low/down-MSS entry to `na` the instant that line first ran, and
+    # it never recalculated even once lowGap became valid -- label.new()
+    # given `na` for its price silently draws nothing. Fixed by storing only
+    # the raw price (a safe literal) plus a bool flag for which entries need
+    # the offset, applying "- lowGap" at DRAW TIME instead, when lowGap's
+    # current value is actually valid.
+    struct_x, struct_y, struct_txt, struct_col, struct_low = [], [], [], [], []
     for e in sh:
         struct_x.append(pine_time(engine.w[e.swing].start)); struct_y.append(f"{e.price:.5f}")
-        struct_txt.append("\"▲\""); struct_col.append("color.blue")
+        struct_txt.append("\"▲\""); struct_col.append("color.blue"); struct_low.append("false")
     for e in sl:
-        struct_x.append(pine_time(engine.w[e.swing].start)); struct_y.append(f"{e.price:.5f} - lowGap")
-        struct_txt.append("\"▼\""); struct_col.append("color.black")
+        struct_x.append(pine_time(engine.w[e.swing].start)); struct_y.append(f"{e.price:.5f}")
+        struct_txt.append("\"▼\""); struct_col.append("color.black"); struct_low.append("true")
     for m in ms:
         struct_x.append(pine_time(engine.w[m.broken].start))
-        struct_y.append(f"{m.price:.5f}" if m.up else f"{m.price:.5f} - lowGap")
+        struct_y.append(f"{m.price:.5f}")
         struct_txt.append("\"✕\""); struct_col.append("color.blue" if m.up else "color.black")
+        struct_low.append("false" if m.up else "true")
 
     # Resolve each static M1 impact into the opening time of whichever chart
     # candle contains it. This is deliberately evaluated on every chart bar,
@@ -950,6 +966,7 @@ def write_ob_pine(base: Path, engine: WeeklyOBEngine, label_cap: int, ob_cap: in
         f"var array<float> structY = {arr('float', struct_y)}",
         f"var array<string> structTxt = {arr('string', struct_txt)}",
         f"var array<color> structCol = {arr('color', struct_col)}",
+        f"var array<bool> structLow = {arr('bool', struct_low)}",
         f"var array<int> obLeft = {arr('int', ob_left)}",
         f"var array<float> obTop = {arr('float', ob_top)}",
         f"var array<float> obBottom = {arr('float', ob_bottom)}",
@@ -985,7 +1002,8 @@ def write_ob_pine(base: Path, engine: WeeklyOBEngine, label_cap: int, ob_cap: in
         "if barstate.islast",
         "    if onWeekly",
         "        for i = 0 to array.size(structX) - 1",
-        "            label.new(array.get(structX, i), array.get(structY, i), array.get(structTxt, i), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=array.get(structCol, i), size=size.small)",
+        "            structYY = array.get(structLow, i) ? array.get(structY, i) - lowGap : array.get(structY, i)",
+        "            label.new(array.get(structX, i), structYY, array.get(structTxt, i), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=array.get(structCol, i), size=size.small)",
         "    if onWeekly or onH4",
         f"        array<int> obRight = {arr('int', ob_right_expr)}",
         "        for i = 0 to array.size(obLeft) - 1",
