@@ -342,7 +342,15 @@ class WeeklyOBEngine:
         if preg != 1 or armed_h < 0: return
         if any(self.w[v].h >= self.w[armed_h].h for v in range(armed_h + 1, new_low + 1)): return
         best = self.best(min(armed_h - 1, new_low), max(armed_h - 1, new_low), False)
-        if best >= 0 and self.w[best].l > price:
+        # Real bug fixed 2026-09-17 (user-caught: one physical OB box armed
+        # twice under two zone IDs, traded separately by both). Every other
+        # zone-creation path (try_bull_aifob, try_bear_aifob, add_ifob) guards
+        # with `not self.claimed(best, bull)` before calling add_zone -- this
+        # AOB path never did, so the same origin candle could get a second
+        # zone stamped on it once conditions re-armed. Since this class is
+        # reused verbatim for the H4 layer (five_bso_engine.py), the same gap
+        # produced duplicate H4 OBs on the same box.
+        if best >= 0 and self.w[best].l > price and not self.claimed(best, False):
             z = self.zones[self.add_zone(best, False, k, 1)]
             if k > 0 and self.w[k - 1].h > z.zt: z.rejected = True
             elif k > 0: z.eligible = k; z.eligible_kind = 1; z.eligible_time = self.event_time(1, k); z.eligible_price = self.w[k - 1].h; z.eligible_swing_price = price
@@ -351,7 +359,7 @@ class WeeklyOBEngine:
         if preg != 2 or armed_l < 0: return
         if any(self.w[v].l <= self.w[armed_l].l for v in range(armed_l + 1, new_high + 1)): return
         best = self.best(min(armed_l - 1, new_high), max(armed_l - 1, new_high), True)
-        if best >= 0 and self.w[best].h < price:
+        if best >= 0 and self.w[best].h < price and not self.claimed(best, True):
             z = self.zones[self.add_zone(best, True, k, 1)]
             if k > 0 and self.w[k - 1].l < z.zb: z.rejected = True
             elif k > 0: z.eligible = k; z.eligible_kind = 0; z.eligible_time = self.event_time(0, k); z.eligible_price = self.w[k - 1].l; z.eligible_swing_price = price
