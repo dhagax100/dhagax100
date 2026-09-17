@@ -869,13 +869,12 @@ def write_ob_pine(base: Path, engine: WeeklyOBEngine, label_cap: int, ob_cap: in
         struct_x.append(pine_time(engine.w[e.swing].start)); struct_y.append(f"{e.price:.5f}")
         struct_txt.append("\"▼\""); struct_col.append("color.black"); struct_low.append("true")
     for m in ms:
-        # Real bug fixed 2026-09-17 (same fix as the H4 layer, confirmed
-        # against the live chart there): `m.broken` is the OLD swing candle
-        # whose level got exceeded; `m.at` is the candle that actually broke
-        # it (see MSS dataclass -- `at` is the confirm bar passed into
-        # consume_break). The X mark's Y stays at `m.price` (the broken
-        # level); only its X (which candle) moves to the real breaking bar.
-        struct_x.append(pine_time(engine.w[m.at].start))
+        # REVERTED 2026-09-17 (see full_viewer.py's H4 layer for the same
+        # revert). This is the ORIGINAL, unmodified convention -- verified
+        # against write_ob_pine in the very first commit (c2bcde7), which
+        # already used `engine.w[m.broken].start`. An earlier same-session
+        # change to `m.at` was a mistake; reverted.
+        struct_x.append(pine_time(engine.w[m.broken].start))
         struct_y.append(f"{m.price:.5f}")
         struct_txt.append("\"✕\""); struct_col.append("color.blue" if m.up else "color.black")
         struct_low.append("false" if m.up else "true")
