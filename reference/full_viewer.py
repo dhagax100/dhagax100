@@ -217,17 +217,31 @@ def build_h4_extra_lines(h4_engine, h4_bars, drawn: List[tuple], ob_cap: int, di
     # --manual-gates render, ~13 weeks) pushed the count well past 80 per
     # kind and blew CE10295 ("main body is too long") -- the exact failure
     # mode this file's own box/line code was already written to avoid.
+    # Colors changed from the Weekly layer's own locked convention
+    # (blue high / BLACK low+down-MSS) for this H4-only layer specifically,
+    # 2026-09-17: the user reported swing lows and down-MSS invisible on the
+    # H4 chart. Verified exhaustively that this isn't a data or packing bug
+    # (raw events present, correctly packed into these very arrays, correct
+    # alignment, correct Unicode codepoints, well under Pine's label caps) --
+    # could not get a definitive root cause without a real Pine compiler.
+    # Strongest remaining explanation: on the much denser H4 timeframe,
+    # swing lows/down-MSS sit at local bottoms, very often on or beside a
+    # BLACK bearish candle -- black text there is genuinely hard to see,
+    # unlike on the sparser Weekly chart this convention was locked for.
+    # Switched low/down-MSS to maroon, which cannot blend with either the
+    # blue (up) or black (down) candle colors used throughout this project.
+    # This does NOT touch weekly_ob_generator.py's own locked convention.
     struct_x, struct_y, struct_txt, struct_col = [], [], [], []
     for e in sh:
         struct_x.append(pine_time(h4_bars[e.swing].start)); struct_y.append(f"{e.price:.5f}")
         struct_txt.append("\"▲\""); struct_col.append("color.blue")
     for e in sl:
         struct_x.append(pine_time(h4_bars[e.swing].start)); struct_y.append(f"{e.price:.5f} - lowGap")
-        struct_txt.append("\"▼\""); struct_col.append("color.black")
+        struct_txt.append("\"▼\""); struct_col.append("color.maroon")
     for m in ms:
         struct_x.append(pine_time(h4_bars[m.broken].start))
         struct_y.append(f"{m.price:.5f}" if m.up else f"{m.price:.5f} - lowGap")
-        struct_txt.append("\"✕\""); struct_col.append("color.blue" if m.up else "color.black")
+        struct_txt.append("\"✕\""); struct_col.append("color.blue" if m.up else "color.maroon")
 
     # Same cross-timeframe impact-resolution technique as the Weekly layer
     # (write_ob_pine's impact_vars): a `var int` tracker per drawn OB, updated
