@@ -1146,3 +1146,47 @@ Next up, per the previously agreed forward plan: the user is now asking about th
 - **Target case confirmed**: zone with origin 2026-06-10 16:00 now exists (SELL IFOB, bottom 1.15481, top 1.15535, matching that candle's own body exactly) and is authorized.
 - **Impact on existing numbers**: H4 OBs computed 355 -> 359 (+4 across the full dataset); `--manual-gates` window 19 -> 21 shown, 23 -> 25 5m BSO rows. Weekly-level output (`weekly_ob_swings.csv`) still only has 4 MSS events total (unaffected -- the Weekly layer evidently never hit this exact same-bar-origin scenario in this dataset), so the original Weekly-level report from earlier in this session is unchanged.
 - Not yet confirmed on the real chart by the user.
+
+## Session update — 2026-09-17 (control gates extended to the edge of the dataset; SELL-resume rule revised)
+
+**Full verified control-gate chain, zone 3's original impact through the edge of the CSV (2026-09-11 22:05, last 1m bar).** All times Riyadh.
+
+| Control | From | Trigger |
+|---|---|---|
+| SELL only (zone 3) | 04-14 17:55 | zone 3 impacted |
+| NONE | 05-29 17:51 | swing low confirmed |
+| SELL only (zone 3) | 06-05 16:51 | that swing low taken out (old rule -- kept as-is, chart-verified, not revisited) |
+| BOTH (3/5) | 06-05 18:37 | opposing zone 5 impacted |
+| SELL only (zone 3) | 06-08 00:00 | buy side (zone 5) exhausted |
+| NONE | 06-15 00:29 | swing low confirmed |
+| SELL only (zone 3) | 06-17 22:24 | that swing low taken out (old rule -- kept as-is; new rule happens to land on the identical minute here, so no conflict) |
+| NONE | 07-14 15:30 | swing low confirmed |
+| SELL only (zone 3) | **07-23 15:43** | **swing high confirmed (NEW rule, see below)** |
+| NONE | 07-29 21:53 | new swing low confirmed, no buying zone in control |
+| SELL only (zone 9) | 07-30 16:48 | first zone reaction from a plain NONE (zone 9 impacted; no opposing zone ever reacted first) |
+| NONE | **08-24 00:00** | last tradable SELL zone died (see below) |
+| -- | 08-24 00:00 through 09-11 22:05 (end of data) | stays at NONE, no further control gate |
+
+**Rule revision, user-directed:** the earlier "SELL resumes when the swing low that caused NONE gets taken out" rule is WRONG and is abandoned. Replaced with: **SELL resumes the moment a Weekly swing HIGH confirms** (not when the swing low gets broken). Verified against the two already-chart-confirmed transitions before applying it:
+- 05-29 NONE -> 06-05 16:51: old rule gives 16:51 (matches chart); new rule gives 16:00 (51 min off). User confirmed this doesn't change anything material (no different 4H structures or 5m entries resulted either way) -- so the already-verified 16:51 timestamp is kept as-is, not retroactively changed.
+- 06-15 NONE -> 06-17 22:24: old and new rules land on the exact same minute -- no conflict either way.
+- 07-14 NONE onward: this is where the rule change actually matters. Old rule ("swing low taken out", i.e. price back below 1.13242) **never fires again in the rest of the dataset** -- under the old rule we'd have stayed at NONE for good. New rule (swing high 1.14822 confirms) fires at **2026-07-23 15:43**, verified directly against the user's own chart screenshot of that exact candle.
+
+**New standing rules for SELL_ONLY / BOTH, user-directed, all three checked in parallel and whichever fires first wins:**
+1. Opposing BUY zone gets impacted -> BOTH.
+2. A NEW swing low confirms, with no buying zone in control -> NONE. (If a buying zone IS already in control i.e. we're in BOTH, that same swing-low confirmation instead hands FULL control to BUY, not NONE.)
+3. The swing high currently supporting this SELL leg gets taken out, with no buying zone in control -> NONE. (Same BOTH exception: if a buying zone is in control when this happens, BUY keeps control instead.)
+
+**New mechanism established for exiting a plain NONE with no active campaign**: the first zone (either side) to get a real impact while nobody controls takes over -- same mechanism that originally gave zone #1 its BUY control at the very start of the dataset. This is distinct from rule 3's "swing high confirmed" resumption, which only applies when resuming a campaign that already has a live supporting swing high in play. Applied here: zone #9 (origin 2026-06-08, SELL) is the first zone to react from the 07-29 21:53 NONE, at 07-30 16:48 -- no swing high confirms anywhere near that time (the next one is out in late August), so the first-reaction mechanism, not rule 3, is what actually governs this specific transition.
+
+**Zone-death mechanics newly applied at the WEEKLY-zone level (previously only demonstrated at H4-OB level this session)**: the same "Weekly candle body closing inside vs. through an opposing zone" rule applies to these Weekly zones' own tradability, independent of the control gate itself:
+- **Zone #9 dies 2026-08-03 00:00** -- its own containing week (07-27 to 08-03) closes at 1.15441, INSIDE its box (zb 1.15072 / zt 1.15693), no clean wick-reject. Kills its thesis; the 07-30 16:48 entry (already triggered before this close) stands, but no further new entries off zone #9 after this point. Selling effectively goes idle (no tradable zone), even though the control gate itself hadn't changed yet.
+- **Zone #8 (origin 2026-06-08 lineage... actually separate zone, same SELL side) reacts 2026-08-19 15:49** -- selling resumes (a valid zone touched).
+- **Zone #8 dies 2026-08-24 00:00** -- its own containing week (08-17 to 08-24, the SAME week it got impacted in) closes at 1.16718, a FULL BODY BREACH above its own zt (1.16522) -- not just inside, all the way through. Kills it outright.
+- With no tradable SELL zone left standing anywhere, **control drops to NONE at 2026-08-24 00:00** -- this new "ran out of tradable zones" mechanism is what actually ends this SELL leg, earlier and cleaner than the swing-low-confirmation mechanism (which would have given 09-09 09:15 instead, a full two weeks later). User-directed: this zone-death mechanism supersedes the swing-low mechanism when it fires first.
+
+**Data ends 2026-09-11 22:05 Riyadh (last 1-minute bar in the CSV).** Per the user: no further control gate exists after 08-24 00:00 -- price stays at NONE through the end of available data. Recorded as the final state, not further investigated (nothing left to check -- no data past this point).
+
+None of this chain beyond zone 3's original 04-14 window has been independently chart-verified end-to-end the way the manual-gates table was earlier -- the newer entries (07-23 onward) were derived live in this session, checked against the user's own chart screenshots at each step (07-23 15:43 and 06-05 16:51 both directly confirmed), but not yet turned into a `--manual-gates`-style hardcoded table or run through 4H/5m entry-by-entry verification the way the 04-14 to 08-04 window was.
+
+**What changed from the previous session's plan**: the previous session ended with the `--manual-gates` window fixed at 04-14 to 08-04 (NONE, open-ended) as the extent of verified work, plus four systemic bug fixes (swing-low na-bug, OB re-arm, MSS placement -- later corrected back after a wrong mid-session "fix" -- and the same-bar-origin IFOB guard). This session extended the verified control-gate chain all the way to the edge of the dataset (09-11 22:05), revised the SELL-resume-from-NONE rule from "swing low taken out" to "swing high confirmed", established a new "first zone reaction from a plain NONE" mechanism, and applied the Weekly-close body-inside/through zone-death rule directly to the control-gate level for the first time (previously only used at H4-OB level). The `--manual-gates` table in `full_viewer.py` has NOT yet been updated to reflect any of this session's new gates (07-23 onward) -- it still stops at 08-04 NONE. That's the next concrete task for whoever continues this: encode gates 07-23 onward into `build_manual_gates()` and re-render/verify them against the chart the same way 04-14 to 08-04 was.
