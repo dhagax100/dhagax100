@@ -209,7 +209,7 @@ def build_h4_extra_lines(h4_engine, h4_bars, drawn: List[tuple], ob_cap: int, di
     # declared once by the Weekly layer earlier in the same script.
     sh = [e for e in h4_engine.events if e.kind == 0 and in_window(h4_bars[e.swing].start)][-label_cap:]
     sl = [e for e in h4_engine.events if e.kind == 1 and in_window(h4_bars[e.swing].start)][-label_cap:]
-    ms = [m for m in h4_engine.msses if in_window(h4_bars[m.broken].start)][-label_cap:]
+    ms = [m for m in h4_engine.msses if in_window(h4_bars[m.at].start)][-label_cap:]
     # Packed into arrays + one small draw loop, same technique as the OB
     # boxes/lines below -- NOT one label.new per event. An earlier version
     # unrolled these one statement per swing/MSS (fine at zone #3's original
@@ -249,7 +249,16 @@ def build_h4_extra_lines(h4_engine, h4_bars, drawn: List[tuple], ob_cap: int, di
         struct_x.append(pine_time(h4_bars[e.swing].start)); struct_y.append(f"{e.price:.5f}")
         struct_txt.append("\"▼\""); struct_col.append("color.black"); struct_low.append("true")
     for m in ms:
-        struct_x.append(pine_time(h4_bars[m.broken].start))
+        # Real bug fixed 2026-09-17 (user-caught, confirmed against the live
+        # chart on two concrete MSS events at bar 820/826): this used to key
+        # off `m.broken` (the OLD swing candle whose level got broken), so
+        # the X mark showed up sitting on/near the swing label that formed
+        # it, not on the candle that actually caused the break. `m.at` is
+        # the breaking candle (see MSS dataclass: `at: int` is the confirm
+        # bar passed into consume_break, `broken` is the swing bar being
+        # exceeded) -- the X's Y stays at `m.price` (the broken level), only
+        # its X (which candle) moves to where the break really happened.
+        struct_x.append(pine_time(h4_bars[m.at].start))
         struct_y.append(f"{m.price:.5f}")
         struct_txt.append("\"✕\""); struct_col.append("color.blue" if m.up else "color.black")
         struct_low.append("false" if m.up else "true")
