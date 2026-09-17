@@ -108,6 +108,18 @@ class Zone:
     created_state: int = -1
     promotion_from_state: int = -1
     promotion_time: Optional[datetime] = None
+    # Same-bar-origin guard (added 2026-09-17, user-directed): set only when
+    # an IFOB's origin candle is the same bar that triggered its own hunt
+    # (add_ifob no longer excludes the trigger candle from being its own
+    # origin -- see add_ifob's own comment). Holds the week/H4-bar index of
+    # the swing this zone depends on for protection. Checked exactly once,
+    # on the very next bar after creation (never earlier -- this is a
+    # one-bar-deferred, causal check, not a lookahead: it only fires once
+    # that next bar has actually been processed, using only data that
+    # exists by then). If that next bar breaches the swing, the zone is
+    # rejected immediately, same as any other zone whose support fails
+    # before it ever gets eligible. Reset to -1 once checked either way.
+    same_bar_origin_guard: int = -1
 
 
 def parse_args() -> argparse.Namespace:
@@ -377,11 +389,23 @@ class WeeklyOBEngine:
     def add_ifob(self, bull: bool, k: int, swing: int, last_opposite: int) -> None:
         lo, hi = min(last_opposite, k, swing), max(last_opposite, k, swing)
         if self.aifob_in_range(lo, hi, bull): return
-        locked_best = self.best(lo, hi, bull, skip=k)
-        best = self.best_ifob_origin(lo, hi, bull, skip=k)
+        # Real gap fixed 2026-09-17 (user-directed): this used to always pass
+        # skip=k, permanently barring the MSS candle itself from ever being
+        # its own IFOB origin -- even in a clean one-candle-leg case where it
+        # is legitimately the best (and often only) candidate. The original
+        # reason for skip=k, per the user: protect against picking a candle
+        # whose own supporting swing gets immediately violated. That's now
+        # handled properly by `same_bar_origin_guard` below -- a one-bar-
+        # deferred, causal check performed when the NEXT bar is actually
+        # processed (see finish_events_and_lifecycle), not a lookahead here.
+        # So k competes on equal footing with every other candle in range.
+        locked_best = self.best(lo, hi, bull)
+        best = self.best_ifob_origin(lo, hi, bull)
         if best >= 0 and not self.claimed(best, bull):
             idx = self.add_zone(best, bull, k, 0)
             z = self.zones[idx]
+            if best == k:
+                z.same_bar_origin_guard = last_opposite
             # Preserve all established direct-IFOB bodies.  Only when an
             # opening gap makes the real tradable-session candidate differ
             # from the old pre-open-based candidate do we replace its body.
@@ -465,6 +489,22 @@ class WeeklyOBEngine:
                 if self.pend_bull_aifob < 0: self.pend_bull_aifob = self.try_bull_aifob(preg, self.have_h, armed_h, self.last_l, ev.swing, k)
 
     def finish_events_and_lifecycle(self, k: int, before: int, total: int, consumed_h: bool, consumed_l: bool) -> None:
+        # Same-bar-origin guard (added 2026-09-17, user-directed): resolved
+        # exactly once, on the bar immediately after a zone whose origin
+        # candle was its own MSS/trigger candle (see add_ifob). Causal, not
+        # a lookahead -- this only runs once bar k has actually arrived in
+        # normal forward processing order; it never peeks at a bar before
+        # that bar has itself been reached. If this next bar breaches the
+        # swing the zone depends on for protection, reject it immediately,
+        # exactly like any other zone whose support fails before it ever
+        # gets eligible.
+        for zidx in self.active[:]:
+            z = self.zones[zidx]
+            if z.same_bar_origin_guard >= 0 and z.candle + 1 == k:
+                swing_idx = z.same_bar_origin_guard
+                breached = (self.w[k].l < self.w[swing_idx].l) if z.bullish else (self.w[k].h > self.w[swing_idx].h)
+                if breached: z.rejected = True
+                z.same_bar_origin_guard = -1
         while self.ei < total and self.events[self.ei].confirm == k:
             ev = self.events[self.ei]
             if ev.kind == 0:
