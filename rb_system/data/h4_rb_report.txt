@@ -1,0 +1,9 @@
+4H RB ENGINE -- UNGATED (no weekly-control analog; see module docstring)
+
+4H bars: 1133 (grid anchor: 01:00 UTC, matches h4_ob_engine.py's chart-verified anchor)
+Swing events: 499 (highs 249, lows 250)
+MSS events: 150
+RB zones: 393
+  ARB: 148
+  IRB: 127
+  ORB: 118

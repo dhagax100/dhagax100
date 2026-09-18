@@ -251,6 +251,74 @@ evidence against the raw dataset. No bugs found in either check.
   guessing, per the pine file's own flagged comment
   ("flag if RB shouldn't follow that convention").
 
+## 5b. H4 RB cascade (this session, continuation, 2026-09-18)
+
+Built `rb_system/reference/h4_rb_engine.py`, reusing `WeeklyRBEngine` on a
+native 4-hour bar grid, the same way `h4_ob_engine.py` reuses
+`WeeklyOBEngine` (H4 anchor hour `01:00 UTC`, chart-verified 2026-09-16 for
+OB and reused as-is here since it's a pure calendar-grid fact, not an
+OB-specific rule).
+
+**Resolved ambiguity: no RB analog to `weekly_control_engine.py`'s
+permission gating.** `h4_ob_engine.py` only draws an H4 OB whose direction
+matches the Weekly `BUY_ONLY`/`SELL_ONLY`/`BOTH` control state from
+`weekly_control_engine.py` (SPEC.md SS9-16). That state machine is built
+entirely on OB-specific zone-lifecycle facts (the `rejected`-vs-OOB
+distinction, the AOB/IFOB/AIFOB state family, a Weekly-close body-death rule
+discovered specifically for OB). Grepped `RB_Indicator_v1.pine` in full for
+"control"/"permit"/"BUY_ONLY"/"SELL_ONLY"/"BOTH"/"weekly" -- **zero
+matches**. The RB pine script is a standalone, timeframe-agnostic
+calculation with no cross-timeframe permission layer at all. Conclusion:
+there is no RB spec to gate H4 RB zones against, and building one would be
+inventing a rule that exists in neither the OB reference code nor the RB
+pine spec. `h4_rb_engine.py` therefore writes every computed H4 RB zone to
+`h4_rb_ledger.csv` UNGATED (own IRB/ARB/ORB/SPENT lifecycle only, no
+authorized/drawn split). Flagged here per the task's "stop rather than
+guess" instruction, even though the answer was "no gating needed" rather
+than a blocker.
+
+Verification:
+- **Swing/MSS byte-parity at H4 resolution**: ran `WeeklyOBEngine` and
+  `WeeklyRBEngine` on the identical H4 bar grid (`h4_rb_engine.aggregate_h4`,
+  anchor hour 1, same EURUSD CSV) -- 499 swing events and 150 MSS events,
+  **byte-identical** between the two engines (kind, confirm, swing, price
+  all match). Confirms the H4 reuse preserves swing/MSS parity the same way
+  the Weekly reuse did in §3b.
+- **Hand-traced 3 H4 RB records against raw bar/M1 data**:
+  - Record `id=1` (IRB SELL, bar idx 1, `2026-01-02 09:00 UTC`). Raw H4 bar
+    1: O=1.17434, H=1.17467, L=1.17128, C=1.17207 (swing-high pivot). Per
+    spec: `zb=max(O,C)=1.17434`, `zt=H=1.17467` -- **matches ledger exactly**
+    (`bottom=1.17434, top=1.17467`). Impact: ledger records
+    `impact_time_utc=2026-01-02 17:54:00`. Scanned raw M1 rows directly for
+    `2026-01-02 17:00-18:10 UTC` -- the first minute where `H>=zb(1.17434)
+    and L<=zt(1.17467)` is **17:54:00** (`H=1.17460, L=1.17403`), the minute
+    immediately before (17:53:00, H=1.17405) does not qualify. **Matches
+    the ledger's impact timestamp exactly**, confirming H4 impact detection
+    against real M1 data, not just self-consistency with the derived CSV.
+  - Record `id=3` (ARB SELL, bar idx 3). Raw H4 bar 3: O=1.17283, H=1.17542,
+    L=1.17149, C=1.17186. `zb=max(O,C)=1.17283`, `zt=H=1.17542` -- matches
+    ledger exactly (`bottom=1.17283, top=1.17542`).
+  - Record `id=4` (IRB SELL, bar idx 5). Raw H4 bar 5: O=1.17186, H=1.17257,
+    L=1.17186, C=1.17208. `zb=max(O,C)=1.17208`, `zt=H=1.17257` -- matches
+    ledger exactly. **Observation (not a bug)**: this record's ledger row
+    shows `status=ORB` alongside a real `stop_bar_idx=11` and
+    `impact_time_utc` set -- i.e. it was stranded to ORB first, then later
+    actually impacted (price wicked back through the now-invalidated zone).
+    This is a legitimate consequence of STEP3's own ordering (the impact
+    check runs for any `state != 3`, including state 2/ORB; only the
+    stranding check is restricted to state 0/1) -- both branches were
+    independently verified already (impact in record 1 above, stranding in
+    the Weekly §3d trace of record `id=3`), so this is the same two
+    mechanisms firing in sequence on one zone, not new/unverified logic.
+    Not observed in the Weekly ledger (all 3 Weekly ORB rows there happened
+    to have `stop=-1`), but nothing in the code restricts it to H4 -- it
+    simply needs enough bars for both events to occur on the same zone,
+    which is more likely at H4 resolution than Weekly.
+
+Files added: `rb_system/reference/h4_rb_engine.py`,
+`rb_system/data/h4_rb_swings.csv`, `h4_rb_ledger.csv`, `h4_rb_report.txt`
+(1133 H4 bars, 499 swings, 150 MSS, 393 RB zones).
+
 ## 6. Files
 
 - `rb_system/reference/weekly_rb_generator.py` — Weekly RB engine (this
