@@ -1,0 +1,6 @@
+Weeks processed: 37
+Swing events: 20 (highs 10, lows 10)
+MSS events: 4
+RB zones: 13
+  ARB: 6
+  ORB: 7
