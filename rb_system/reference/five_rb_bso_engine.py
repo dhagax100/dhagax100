@@ -22,21 +22,16 @@ OB-specific glue, not because control-gating itself doesn't apply to RB
 script's own `main()` is written fresh but now applies the SAME control
 gate OB's `main()` does.
 
-SUPERSEDED (2026-09-18, later this same day, per explicit user decision):
-`h4_rb_engine.py`'s original finding that RB's pine spec has no control
-concept of its own is still true and is not being overridden. What changed
-is the user's choice: rather than run RB's 5m BSO stage on every impacted,
-never-stranded H4 RB zone unconditionally (this script's earlier
-behavior), it now also requires that the SAME Weekly control permission
-that gates OB's 5m BSO (`weekly_control_engine.py`, unmodified, run on OB
-zones) permits that zone's direction at its impact time -- i.e. it reads
-the `authorized` column `h4_rb_engine.py` now writes into `h4_rb_ledger.csv`
-(computed there via the same `load_control_by_week`/`permits`/`control_at`
-interface `h4_ob_engine.py` uses), and targets only rows where
-`authorized == True`. See `RB_TRADING_SYSTEM_HANDOFF.md` SS8 for the
-decision and verification evidence.
+CORRECTED (2026-09-18, later still): this script now requires that RB's
+OWN Weekly control permission (`weekly_control_engine_rb.py`, run on RB's
+own zone/event timeline, NOT OB's) permits that zone's direction at its
+impact time -- it recomputes the gate independently via
+`h4_rb_engine.load_control_by_week`/`permits`/`control_at`, now pointed at
+`weekly_control_ledger_rb.csv`. See `weekly_control_engine_rb.py`'s
+docstring and `RB_TRADING_SYSTEM_HANDOFF.md` for why RB needed its own
+control ledger rather than reading OB's.
 
-Run order: weekly_control_engine.py -> h4_rb_engine.py -> this script.
+Run order: weekly_control_engine_rb.py -> h4_rb_engine.py -> this script.
 Requires the same CSV/args (plus h4_rb_engine.py's --control-ledger/
 --week-close-zone/--week-close-hour if they differ from the defaults).
 """
@@ -70,7 +65,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--h4-anchor-hour", type=int, default=1, choices=range(4))
     p.add_argument("--week-close-zone", default="America/New_York", help="must match the run that produced --control-ledger")
     p.add_argument("--week-close-hour", type=int, default=17, choices=range(24), help="must match the run that produced --control-ledger")
-    p.add_argument("--control-ledger", default=None, help="path to weekly_control_ledger.csv; default: alongside input CSV")
+    p.add_argument("--control-ledger", default=None, help="path to weekly_control_ledger_rb.csv (RB-native control); default: alongside input CSV")
     p.add_argument("--out-dir", default=None)
     return p.parse_args()
 
@@ -87,9 +82,9 @@ def main() -> int:
     mt = [m.t for m in minutes]
 
     base = csv_path.resolve().parent
-    control_path = Path(args.control_ledger) if args.control_ledger else base / "weekly_control_ledger.csv"
+    control_path = Path(args.control_ledger) if args.control_ledger else base / "weekly_control_ledger_rb.csv"
     if not control_path.exists():
-        print("weekly_control_ledger.csv not found. Run weekly_control_engine.py first (same CSV, same "
+        print("weekly_control_ledger_rb.csv not found. Run weekly_control_engine_rb.py first (same CSV, same "
               "--week-close-zone/--week-close-hour), or pass --control-ledger.", file=sys.stderr)
         return 2
     control_by_week = h4rb.load_control_by_week(control_path)

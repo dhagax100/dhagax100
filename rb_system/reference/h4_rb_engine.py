@@ -7,30 +7,30 @@ bars instead of Weekly bars -- the same "same engine in terms of
 trigger/eligibility/impact, just fed a different bar grid" reuse pattern
 h4_ob_engine.py uses for `WeeklyOBEngine`.
 
-SUPERSEDED (2026-09-18, later this same day, per explicit user decision):
-the paragraph below records the earlier finding that RB has no control-rule
-of its OWN to derive from the pine spec -- that finding still stands and is
-kept for the record. But the user separately decided RB should not run
-ungated either: instead of inventing an RB-native control rule (which would
-require guessing), RB's H4 engine now OBEYS the SAME Weekly control
-permission that already gates OB's H4/5m, consumed as an external gate via
-the exact same interface `h4_ob_engine.py` uses (`weekly_control_ledger.py`'s
-`weekly_control_ledger.csv`, `load_control_by_week`, `permits(control,
-bullish)`, `control_at(t)` via bisect on week_starts) -- see
-`RB_TRADING_SYSTEM_HANDOFF.md` SS8 for the decision and verification. This
-file's ledger now has an `authorized` column exactly like `h4_ob_ledger.csv`
-does, and the Pine viewer / 5m BSO stage should read it the same way OB's
-downstream stages read OB's `authorized` column.
+CORRECTED AGAIN (2026-09-18, later still, per the user's explicit
+correction): the §8-era wiring below this comment (still described in the
+next paragraph for the record) gated RB against OB's OWN
+`weekly_control_ledger.csv` -- i.e. literally OB's zone-impact timeline.
+That is wrong: the STATE-MACHINE RULE (a zone impact while control==NONE
+flips control to that zone's side; swing-pause; BOTH-escalation; etc) is
+shared/analogous logic, but WHICH zone reaches impact and WHEN is specific
+to each system's own construction -- IRB/ARB/ORB fire and impact on a
+completely different schedule than IFOB/AOB/OOB. This engine now consumes
+`weekly_control_ledger_rb.csv`, produced by
+`weekly_control_engine_rb.py` (a rule-for-rule port of
+`weekly_control_engine.py` re-run on RB's OWN zone/event timeline -- see
+that module's docstring and `RB_TRADING_SYSTEM_HANDOFF.md` for the
+substitution reasoning). The `load_control_by_week`/`permits`/`control_at`
+interface shape is UNCHANGED (same CSV column names, same bisect logic) --
+only which file it points at changed, so nothing downstream needed to be
+restructured.
 
-ORIGINAL FINDING, still true, kept for context: `RB_Indicator_v1.pine`
-(grep'd in full) never mentions "control", "permit", "BUY_ONLY"/"SELL_ONLY"/
-"BOTH", or a weekly-gating concept anywhere -- RB's own pine spec is a
-standalone, timeframe-agnostic script with no cross-timeframe permission
-layer of its own. That is still true. What changed is the user's choice of
-what to do about it: rather than run ungated, RB borrows OB's existing
-Weekly control signal as-is (unmodified `weekly_control_engine.py`, driven
-on OB zones, exactly as before) and treats it as an external permission
-gate on RB opportunities too.
+SUPERSEDED FINDING, kept for context: RB has no control-rule of its own in
+`RB_Indicator_v1.pine` (grep'd in full -- no mention of "control", "permit",
+"BUY_ONLY"/"SELL_ONLY"/"BOTH", or weekly-gating anywhere). That is still
+true, and is why a genuinely RB-native STATE MACHINE had to be ported
+(not read verbatim from the pine spec, which has none) -- but it is ported
+onto RB's OWN zone facts, not OB's zone facts, per the correction above.
 
 No third-party Python packages required. Python 3.9+.
 """
@@ -82,7 +82,7 @@ def parse_args() -> argparse.Namespace:
                          "2026-09-16 (1 => 01/05/09/13/17/21 UTC).")
     p.add_argument("--week-close-zone", default="America/New_York", help="must match the run that produced --control-ledger")
     p.add_argument("--week-close-hour", type=int, default=17, choices=range(24), help="must match the run that produced --control-ledger")
-    p.add_argument("--control-ledger", default=None, help="path to weekly_control_ledger.csv; default: alongside input CSV")
+    p.add_argument("--control-ledger", default=None, help="path to weekly_control_ledger_rb.csv (RB-native control); default: alongside input CSV")
     p.add_argument("--out-dir", default=None, help="output directory, default: alongside this script's ../data")
     return p.parse_args()
 
@@ -121,9 +121,9 @@ def main() -> int:
         print("WARNING:", w, file=sys.stderr)
 
     base = csv_path.resolve().parent
-    control_path = Path(args.control_ledger) if args.control_ledger else base / "weekly_control_ledger.csv"
+    control_path = Path(args.control_ledger) if args.control_ledger else base / "weekly_control_ledger_rb.csv"
     if not control_path.exists():
-        print("weekly_control_ledger.csv not found. Run weekly_control_engine.py first (same CSV, same "
+        print("weekly_control_ledger_rb.csv not found. Run weekly_control_engine_rb.py first (same CSV, same "
               "--week-close-zone/--week-close-hour), or pass --control-ledger.", file=sys.stderr)
         return 2
     control_by_week = load_control_by_week(control_path)
@@ -199,8 +199,8 @@ def main() -> int:
     for z in engine.rbs:
         counts[wrb.status(z)] = counts.get(wrb.status(z), 0) + 1
     with (out_dir / "h4_rb_report.txt").open("w", encoding="utf-8") as f:
-        f.write("4H RB ENGINE -- gated by the same Weekly control permission that gates OB's H4/5m "
-                "(weekly_control_engine.py, unmodified, run on OB zones; see RB_TRADING_SYSTEM_HANDOFF.md SS8)\n\n")
+        f.write("4H RB ENGINE -- gated by RB's OWN Weekly control permission "
+                "(weekly_control_engine_rb.py, run on RB's own zone/event timeline; see RB_TRADING_SYSTEM_HANDOFF.md)\n\n")
         f.write(f"4H bars: {len(h4_bars)} (grid anchor: {args.h4_anchor_hour:02d}:00 UTC, matches h4_ob_engine.py's chart-verified anchor)\n")
         f.write(f"Swing events: {len(engine.events)} (highs {len(engine.sw_highs)}, lows {len(engine.sw_lows)})\n")
         f.write(f"MSS events: {len(engine.msses)}\n")

@@ -1,4 +1,4 @@
-4H RB ENGINE -- gated by the same Weekly control permission that gates OB's H4/5m (weekly_control_engine.py, unmodified, run on OB zones; see RB_TRADING_SYSTEM_HANDOFF.md SS8)
+4H RB ENGINE -- gated by RB's OWN Weekly control permission (weekly_control_engine_rb.py, run on RB's own zone/event timeline; see RB_TRADING_SYSTEM_HANDOFF.md)
 
 4H bars: 1133 (grid anchor: 01:00 UTC, matches h4_ob_engine.py's chart-verified anchor)
 Swing events: 499 (highs 249, lows 250)
@@ -7,5 +7,5 @@ RB zones: 393
   ARB: 148
   IRB: 127
   ORB: 118
-Authorized (impacted + pre-eligible, not ORB-before-impact + control-permits direction at impact): 44
+Authorized (impacted + pre-eligible, not ORB-before-impact + control-permits direction at impact): 76
 Every row is kept for audit even when not authorized; 'authorized' is False for: never impacted, was stranded (ORB) before impact, or impacted while the Weekly control state did not permit that direction.
