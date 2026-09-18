@@ -102,7 +102,8 @@ def is_orb(z) -> bool:
 
 def build_rb_block(prefix: str, engine, bars, shown, table_zones, display_tz: ZoneInfo,
                     draw_flag_expr: str, hide_orb: bool, right_edge, with_table: bool,
-                    table_flag_expr: str = None) -> List[str]:
+                    table_flag_expr: str = None, inspect_flag_expr: str = None,
+                    from_last_expr: str = None, draw_impact_line: bool = False) -> List[str]:
     if table_flag_expr is None:
         table_flag_expr = draw_flag_expr
     """One RB layer's worth of packed arrays + a single runtime draw loop,
@@ -149,9 +150,20 @@ def build_rb_block(prefix: str, engine, bars, shown, table_zones, display_tz: Zo
         f"        array<int> {prefix}Right = {arr('int', right_exprs)}",
         f"        for i = 0 to array.size({prefix}Left) - 1",
         f"            rCol = array.get({prefix}Col, i)",
-        f"            box.new(array.get({prefix}Left, i), array.get({prefix}Top, i), array.get({prefix}Right, i), array.get({prefix}Bottom, i), border_color=rCol, border_width=1, border_style=line.style_dashed, bgcolor=na, xloc=xloc.bar_time)",
-        f"            label.new(array.get({prefix}Left, i), array.get({prefix}Top, i), array.get({prefix}Label, i), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_down, color=color.new(rCol,85), textcolor=rCol, size=size.tiny)",
     ]
+    # rank 1 = most recently created zone (shown is ordered oldest..newest by
+    # id, same convention full_viewer.py's OB inspection already uses:
+    # hRank = array.size(h4Left) - i).
+    if inspect_flag_expr is not None:
+        lines.append(f"            {prefix}Rank = array.size({prefix}Left) - i")
+        lines.append(f"            if not {inspect_flag_expr} or {prefix}Rank == {from_last_expr}")
+        indent = "                "
+    else:
+        indent = "            "
+    lines.append(f"{indent}box.new(array.get({prefix}Left, i), array.get({prefix}Top, i), array.get({prefix}Right, i), array.get({prefix}Bottom, i), border_color=rCol, border_width=1, border_style=line.style_dashed, bgcolor=na, xloc=xloc.bar_time)")
+    lines.append(f"{indent}label.new(array.get({prefix}Left, i), array.get({prefix}Top, i), array.get({prefix}Label, i), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_down, color=color.new(rCol,85), textcolor=rCol, size=size.tiny)")
+    if draw_impact_line:
+        lines.append(f"{indent}line.new(array.get({prefix}Right, i), array.get({prefix}Bottom, i), array.get({prefix}Right, i), array.get({prefix}Top, i), xloc=xloc.bar_time, extend=extend.both, color=color.new(color.red,40), width=1)")
 
     if with_table:
         t_id, t_type, t_side, t_bottom, t_top, t_origin, t_trigger, t_eligible, t_impact, t_bg = ([] for _ in range(10))
@@ -186,18 +198,25 @@ def build_rb_block(prefix: str, engine, bars, shown, table_zones, display_tz: Zo
         lines.append(f"    if {table_flag_expr}")
         for col, h in enumerate(header):
             lines.append(f"        table.cell({prefix}Ledger, {col}, 0, \"{h}\", text_color=color.white, bgcolor=color.new(color.green,15))")
+        lines.append(f"        for i = 0 to array.size({prefix}TId) - 1")
+        lines.append("            row = i + 1")
+        if inspect_flag_expr is not None:
+            # table_zones is newest-first, so row 1 (i=0) is rank 1 -- same
+            # rank convention as the box/label loop above.
+            lines.append(f"            if not {inspect_flag_expr} or row == {from_last_expr}")
+            tindent = "                "
+        else:
+            tindent = "            "
         lines += [
-            f"        for i = 0 to array.size({prefix}TId) - 1",
-            f"            row = i + 1",
-            f"            table.cell({prefix}Ledger, 0, row, array.get({prefix}TId, i), text_color=color.black, bgcolor=array.get({prefix}TBg, i))",
-            f"            table.cell({prefix}Ledger, 1, row, array.get({prefix}TType, i), text_color=color.black, bgcolor=na)",
-            f"            table.cell({prefix}Ledger, 2, row, array.get({prefix}TSide, i), text_color=color.black, bgcolor=na)",
-            f"            table.cell({prefix}Ledger, 3, row, array.get({prefix}TBottom, i), text_color=color.black, bgcolor=na)",
-            f"            table.cell({prefix}Ledger, 4, row, array.get({prefix}TTop, i), text_color=color.black, bgcolor=na)",
-            f"            table.cell({prefix}Ledger, 5, row, array.get({prefix}TOrigin, i), text_color=color.black, bgcolor=na)",
-            f"            table.cell({prefix}Ledger, 6, row, array.get({prefix}TTrigger, i), text_color=color.black, bgcolor=na)",
-            f"            table.cell({prefix}Ledger, 7, row, array.get({prefix}TEligible, i), text_color=color.black, bgcolor=na)",
-            f"            table.cell({prefix}Ledger, 8, row, array.get({prefix}TImpact, i), text_color=color.black, bgcolor=na)",
+            f"{tindent}table.cell({prefix}Ledger, 0, row, array.get({prefix}TId, i), text_color=color.black, bgcolor=array.get({prefix}TBg, i))",
+            f"{tindent}table.cell({prefix}Ledger, 1, row, array.get({prefix}TType, i), text_color=color.black, bgcolor=na)",
+            f"{tindent}table.cell({prefix}Ledger, 2, row, array.get({prefix}TSide, i), text_color=color.black, bgcolor=na)",
+            f"{tindent}table.cell({prefix}Ledger, 3, row, array.get({prefix}TBottom, i), text_color=color.black, bgcolor=na)",
+            f"{tindent}table.cell({prefix}Ledger, 4, row, array.get({prefix}TTop, i), text_color=color.black, bgcolor=na)",
+            f"{tindent}table.cell({prefix}Ledger, 5, row, array.get({prefix}TOrigin, i), text_color=color.black, bgcolor=na)",
+            f"{tindent}table.cell({prefix}Ledger, 6, row, array.get({prefix}TTrigger, i), text_color=color.black, bgcolor=na)",
+            f"{tindent}table.cell({prefix}Ledger, 7, row, array.get({prefix}TEligible, i), text_color=color.black, bgcolor=na)",
+            f"{tindent}table.cell({prefix}Ledger, 8, row, array.get({prefix}TImpact, i), text_color=color.black, bgcolor=na)",
         ]
     return lines
 

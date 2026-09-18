@@ -69,13 +69,22 @@ def main() -> int:
         "// RB_Indicator_v1.pine's addRBFromSwing/tryBullARB/tryBearARB/STEP2/STEP3.",
         "// Drawing convention (from that pine file's header): dashed hollow boxes;",
         "// IRB blue(bull)/black(bear) by raw wick; ARB green, fixed; ORB red, fixed.",
-        "// No H4/5m layer here -- this file is Weekly swings/MSS/RB only, so ORB is",
-        "// NOT hidden (that hiding rule only applies once an H4/5m chart exists).",
+        "// No native H4 engine here -- this file is Weekly swings/MSS/RB only. The",
+        "// SAME Weekly RB boxes are also shown on the 4H chart (zones+impact lines",
+        "// only, no swing/MSS labels or table) purely for closer-resolution viewing",
+        "// of the same Weekly zone; every other timeframe draws nothing.",
         "float lowGap = ta.atr(14) * 0.08",
+        "bool onWeekly = timeframe.period == \"1W\"",
+        "bool onH4 = timeframe.period == \"240\"",
+        "inspectOneRB = input.bool(false, \"Inspect one RB only\")",
+        "rbFromLast = input.int(1, \"RB from last\", minval=1)",
     ]
-    lines += build_struct_block("w", weekly_engine, weeks, args.label_cap, "true")
+    lines += build_struct_block("w", weekly_engine, weeks, args.label_cap, "onWeekly")
     lines += build_rb_block("w", weekly_engine, weeks, weekly_shown, weekly_table, display_tz,
-                             draw_flag_expr="true", hide_orb=False, right_edge=right_edge, with_table=True)
+                             draw_flag_expr="onWeekly or onH4", hide_orb=False, right_edge=right_edge,
+                             with_table=True, table_flag_expr="onWeekly",
+                             inspect_flag_expr="inspectOneRB", from_last_expr="rbFromLast",
+                             draw_impact_line=True)
 
     out_dir = Path(args.out_dir) if args.out_dir else Path(__file__).resolve().parent.parent / "data"
     out_dir.mkdir(parents=True, exist_ok=True)

@@ -7,16 +7,22 @@ indicator("FXCM RB - Weekly Reference (Swings/MSS/RB only)", overlay=true, max_l
 // RB_Indicator_v1.pine's addRBFromSwing/tryBullARB/tryBearARB/STEP2/STEP3.
 // Drawing convention (from that pine file's header): dashed hollow boxes;
 // IRB blue(bull)/black(bear) by raw wick; ARB green, fixed; ORB red, fixed.
-// No H4/5m layer here -- this file is Weekly swings/MSS/RB only, so ORB is
-// NOT hidden (that hiding rule only applies once an H4/5m chart exists).
+// No native H4 engine here -- this file is Weekly swings/MSS/RB only. The
+// SAME Weekly RB boxes are also shown on the 4H chart (zones+impact lines
+// only, no swing/MSS labels or table) purely for closer-resolution viewing
+// of the same Weekly zone; every other timeframe draws nothing.
 float lowGap = ta.atr(14) * 0.08
+bool onWeekly = timeframe.period == "1W"
+bool onH4 = timeframe.period == "240"
+inspectOneRB = input.bool(false, "Inspect one RB only")
+rbFromLast = input.int(1, "RB from last", minval=1)
 var array<int> wStructX = array.from(timestamp("GMT+0", 2025, 12, 28, 22, 0), timestamp("GMT+0", 2026, 1, 25, 22, 0), timestamp("GMT+0", 2026, 2, 8, 22, 0), timestamp("GMT+0", 2026, 3, 22, 21, 0), timestamp("GMT+0", 2026, 4, 12, 21, 0), timestamp("GMT+0", 2026, 5, 3, 21, 0), timestamp("GMT+0", 2026, 5, 24, 21, 0), timestamp("GMT+0", 2026, 6, 14, 21, 0), timestamp("GMT+0", 2026, 7, 12, 21, 0), timestamp("GMT+0", 2026, 8, 16, 21, 0), timestamp("GMT+0", 2026, 1, 11, 22, 0), timestamp("GMT+0", 2026, 2, 1, 22, 0), timestamp("GMT+0", 2026, 3, 8, 21, 0), timestamp("GMT+0", 2026, 3, 29, 21, 0), timestamp("GMT+0", 2026, 4, 26, 21, 0), timestamp("GMT+0", 2026, 5, 17, 21, 0), timestamp("GMT+0", 2026, 6, 7, 21, 0), timestamp("GMT+0", 2026, 6, 21, 21, 0), timestamp("GMT+0", 2026, 7, 26, 21, 0), timestamp("GMT+0", 2026, 8, 30, 21, 0), timestamp("GMT+0", 2026, 2, 1, 22, 0), timestamp("GMT+0", 2026, 3, 22, 21, 0), timestamp("GMT+0", 2026, 4, 26, 21, 0), timestamp("GMT+0", 2026, 7, 12, 21, 0))
 var array<float> wStructY = array.from(1.17542, 1.20825, 1.19283, 1.16394, 1.18488, 1.17963, 1.16854, 1.16217, 1.14822, 1.17112, 1.15692, 1.17652, 1.14089, 1.14427, 1.16547, 1.15759, 1.14994, 1.13242, 1.13529, 1.15659, 1.17652, 1.16394, 1.16547, 1.14822)
 var array<string> wStructTxt = array.from("▲", "▲", "▲", "▲", "▲", "▲", "▲", "▲", "▲", "▲", "▼", "▼", "▼", "▼", "▼", "▼", "▼", "▼", "▼", "▼", "✕", "✕", "✕", "✕")
 var array<color> wStructCol = array.from(color.blue, color.blue, color.blue, color.blue, color.blue, color.blue, color.blue, color.blue, color.blue, color.blue, color.black, color.black, color.black, color.black, color.black, color.black, color.black, color.black, color.black, color.black, color.black, color.blue, color.black, color.blue)
 var array<bool> wStructLow = array.from(false, false, false, false, false, false, false, false, false, false, true, true, true, true, true, true, true, true, true, true, true, false, true, false)
 if barstate.islast
-    if true
+    if onWeekly
         for i = 0 to array.size(wStructX) - 1
             sYY = array.get(wStructLow, i) ? array.get(wStructY, i) - lowGap : array.get(wStructY, i)
             label.new(array.get(wStructX, i), sYY, array.get(wStructTxt, i), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=array.get(wStructCol, i), size=size.small)
@@ -53,12 +59,15 @@ var int wimpact_x_11 = na
 if time <= timestamp("GMT+0", 2026, 7, 23, 14, 24) and timestamp("GMT+0", 2026, 7, 23, 14, 24) < time_close
     wimpact_x_11 := time
 if barstate.islast
-    if true
+    if onWeekly or onH4
         array<int> wRight = array.from((na(wimpact_x_1) ? timestamp("GMT+0", 2026, 3, 3, 16, 25) : wimpact_x_1), (na(wimpact_x_2) ? timestamp("GMT+0", 2026, 2, 9, 11, 1) : wimpact_x_2), timestamp("GMT+0", 2027, 9, 11, 21, 5), (na(wimpact_x_4) ? timestamp("GMT+0", 2026, 6, 23, 9, 43) : wimpact_x_4), (na(wimpact_x_5) ? timestamp("GMT+0", 2026, 6, 8, 11, 12) : wimpact_x_5), (na(wimpact_x_6) ? timestamp("GMT+0", 2026, 5, 6, 10, 51) : wimpact_x_6), timestamp("GMT+0", 2027, 9, 11, 21, 5), (na(wimpact_x_8) ? timestamp("GMT+0", 2026, 6, 3, 14, 33) : wimpact_x_8), (na(wimpact_x_9) ? timestamp("GMT+0", 2026, 8, 19, 15, 31) : wimpact_x_9), (na(wimpact_x_10) ? timestamp("GMT+0", 2026, 8, 7, 14, 30) : wimpact_x_10), (na(wimpact_x_11) ? timestamp("GMT+0", 2026, 7, 23, 14, 24) : wimpact_x_11), timestamp("GMT+0", 2027, 9, 11, 21, 5), timestamp("GMT+0", 2027, 9, 11, 21, 5))
         for i = 0 to array.size(wLeft) - 1
             rCol = array.get(wCol, i)
-            box.new(array.get(wLeft, i), array.get(wTop, i), array.get(wRight, i), array.get(wBottom, i), border_color=rCol, border_width=1, border_style=line.style_dashed, bgcolor=na, xloc=xloc.bar_time)
-            label.new(array.get(wLeft, i), array.get(wTop, i), array.get(wLabel, i), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_down, color=color.new(rCol,85), textcolor=rCol, size=size.tiny)
+            wRank = array.size(wLeft) - i
+            if not inspectOneRB or wRank == rbFromLast
+                box.new(array.get(wLeft, i), array.get(wTop, i), array.get(wRight, i), array.get(wBottom, i), border_color=rCol, border_width=1, border_style=line.style_dashed, bgcolor=na, xloc=xloc.bar_time)
+                label.new(array.get(wLeft, i), array.get(wTop, i), array.get(wLabel, i), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_down, color=color.new(rCol,85), textcolor=rCol, size=size.tiny)
+                line.new(array.get(wRight, i), array.get(wBottom, i), array.get(wRight, i), array.get(wTop, i), xloc=xloc.bar_time, extend=extend.both, color=color.new(color.red,40), width=1)
 var table wLedger = table.new(position.top_right, 9, 14, border_width=1)
 var array<string> wTId = array.from("#13", "#12", "#11", "#10", "#9", "#8", "#7", "#6", "#5", "#4", "#3", "#2", "#1")
 var array<string> wTType = array.from("ARB", "ORB", "ARB", "ORB", "ORB", "ARB", "ORB", "ARB", "ORB", "ARB", "ORB", "ARB", "ORB")
@@ -71,7 +80,7 @@ var array<string> wTEligible = array.from("2026-09-07 00:00:00", "2026-08-31 02:
 var array<string> wTImpact = array.from("", "", "2026-07-23 17:24:00", "2026-08-07 17:30:00", "2026-08-19 18:31:00", "2026-06-03 17:33:00", "", "2026-05-06 13:51:00", "2026-06-08 14:12:00", "2026-06-23 12:43:00", "", "2026-02-09 14:01:00", "2026-03-03 19:25:00")
 var array<color> wTBg = array.from(color.new(color.green, 80), color.new(color.red, 80), color.new(color.green, 80), color.new(color.red, 80), color.new(color.red, 80), color.new(color.green, 80), color.new(color.red, 80), color.new(color.green, 80), color.new(color.red, 80), color.new(color.green, 80), color.new(color.red, 80), color.new(color.green, 80), color.new(color.red, 80))
 if barstate.islast
-    if true
+    if onWeekly
         table.cell(wLedger, 0, 0, "RB", text_color=color.white, bgcolor=color.new(color.green,15))
         table.cell(wLedger, 1, 0, "Type", text_color=color.white, bgcolor=color.new(color.green,15))
         table.cell(wLedger, 2, 0, "Side", text_color=color.white, bgcolor=color.new(color.green,15))
@@ -83,12 +92,13 @@ if barstate.islast
         table.cell(wLedger, 8, 0, "Impact (RYD)", text_color=color.white, bgcolor=color.new(color.green,15))
         for i = 0 to array.size(wTId) - 1
             row = i + 1
-            table.cell(wLedger, 0, row, array.get(wTId, i), text_color=color.black, bgcolor=array.get(wTBg, i))
-            table.cell(wLedger, 1, row, array.get(wTType, i), text_color=color.black, bgcolor=na)
-            table.cell(wLedger, 2, row, array.get(wTSide, i), text_color=color.black, bgcolor=na)
-            table.cell(wLedger, 3, row, array.get(wTBottom, i), text_color=color.black, bgcolor=na)
-            table.cell(wLedger, 4, row, array.get(wTTop, i), text_color=color.black, bgcolor=na)
-            table.cell(wLedger, 5, row, array.get(wTOrigin, i), text_color=color.black, bgcolor=na)
-            table.cell(wLedger, 6, row, array.get(wTTrigger, i), text_color=color.black, bgcolor=na)
-            table.cell(wLedger, 7, row, array.get(wTEligible, i), text_color=color.black, bgcolor=na)
-            table.cell(wLedger, 8, row, array.get(wTImpact, i), text_color=color.black, bgcolor=na)
+            if not inspectOneRB or row == rbFromLast
+                table.cell(wLedger, 0, row, array.get(wTId, i), text_color=color.black, bgcolor=array.get(wTBg, i))
+                table.cell(wLedger, 1, row, array.get(wTType, i), text_color=color.black, bgcolor=na)
+                table.cell(wLedger, 2, row, array.get(wTSide, i), text_color=color.black, bgcolor=na)
+                table.cell(wLedger, 3, row, array.get(wTBottom, i), text_color=color.black, bgcolor=na)
+                table.cell(wLedger, 4, row, array.get(wTTop, i), text_color=color.black, bgcolor=na)
+                table.cell(wLedger, 5, row, array.get(wTOrigin, i), text_color=color.black, bgcolor=na)
+                table.cell(wLedger, 6, row, array.get(wTTrigger, i), text_color=color.black, bgcolor=na)
+                table.cell(wLedger, 7, row, array.get(wTEligible, i), text_color=color.black, bgcolor=na)
+                table.cell(wLedger, 8, row, array.get(wTImpact, i), text_color=color.black, bgcolor=na)
