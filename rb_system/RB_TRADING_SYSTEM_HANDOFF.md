@@ -605,7 +605,217 @@ ledger rows with matching timestamps/control state.
   question the task asked ("does X need an RB variant or is it reusable
   as-is") was answered by reading the actual code, with the reasoning
   recorded in §5b/§5c/§5d, not assumed either way.
-- **Control wiring (§8, this session, continuation 2): RB's H4/5m engines
+## 9. CORRECTION: RB now runs its own control state machine, not OB's (2026-09-18, new session)
+
+**The user correctly identified §8's wiring as wrong.** §8 gated RB's H4/5m
+opportunities against OB's OWN `weekly_control_ledger.csv` -- i.e. literally
+OB's zone-impact timeline (`weekly_control_engine.py` driven on OB's
+IFOB/AOB/OOB zones). The STATE-MACHINE RULE ("a zone impacts while
+control==NONE -> control flips to BUY_ONLY/SELL_ONLY based on that zone's
+side", plus pause/resume/BOTH/zone-death) is shared/analogous logic between
+OB and RB, but WHICH zone reaches impact and WHEN is specific to each
+system's own construction -- IRB/ARB/ORB fire and impact on a completely
+different schedule than IFOB/AOB/OOB. So the control state machine had to
+be RE-RUN on RB's OWN zone timeline, not read off OB's precomputed ledger.
+
+### 9a. New module: `weekly_control_engine_rb.py`
+
+A rule-for-rule port of `weekly_control_engine.py`, driven on
+`weekly_rb_generator.WeeklyRBEngine`'s own IRB/ARB/ORB/SPENT zones and
+impact events instead of OB's. Full reasoning is in the new module's own
+docstring (kept in sync with this section); summarized here:
+
+**Substitution decisions (every one recorded, per the task's own
+requirement):**
+
+1. **`rejected` flag -- no RB analog, none invented.** `RbZone` (in
+   `weekly_rb_generator.py`) has no `rejected` field at all -- checked its
+   full dataclass field list directly. RB_Indicator_v1.pine has no
+   pre-eligibility-breach mechanism the way OB does. Substitution:
+   `rejected` is hardwired absent everywhere OB's `is_alive_state`/
+   `is_spent_state` take it as a parameter; `newly_rejected_ids` is never
+   populated (stays permanently empty).
+2. **`is_alive_state(state, rejected)`** -- OB: `state in (0,1,4) and not
+   rejected` (IFOB/AOB/AIFOB). RB has no AIFOB-equivalent 3rd alive type
+   (RB zones are created once as IRB(0) or ARB(1), never promoted to a
+   third type). Substitution: `is_alive_state(state) := state in (0, 1)`.
+3. **`is_spent_state(state, rejected)`** -- OB: `state==3 and not rejected`.
+   RB: `state==3` (trivial, since `rejected` is always False for RB).
+4. **`body_close_dead()` -- NO RB ANALOG EXISTS, and this was verified
+   structurally, not guessed.** Traced exactly how OB's `body_close_dead`
+   is used in `weekly_control_engine.py`: it fires ONLY inside the
+   single-side ZONE_DEATH block (`if control in (BUY_ONLY,SELL_ONLY) and
+   controlling_zone_id is not None: ... if body_close_dead(...): control =
+   NONE`), letting an ALREADY-SPENT zone's thesis die a SECOND time (via a
+   later Weekly candle's body closing at/through its near boundary) even
+   though the OB engine's own `state` field never changes once SPENT.
+   RB_Indicator_v1.pine's header is explicit and unambiguous: "Lifecycle:
+   wick IMPACT + STRANDING only. No close-through rule." This is not "RB
+   doesn't implement one yet" (a judgment call available to make either
+   way) -- it is RB's own authoritative spec stating in so many words that
+   this mechanism does not exist for RB at any layer. There is no RB fact
+   (impact, stranding, SPENT) to substitute with, because once an RB zone
+   is SPENT, RB's own STEP3 lifecycle never revisits it again -- there is
+   structurally nothing left for a close-through check to detect. DECISION:
+   `body_close_dead` is NOT ported; the single-side ZONE_DEATH transition
+   is simply absent from `weekly_control_engine_rb.py`. Single-side RB
+   control only ever changes via swing-pause/resume or opposing-impact
+   escalation to BOTH -- the mechanisms RB's own zone facts DO support.
+   This was the one point flagged by the task's "stop rather than guess"
+   instruction -- resolved as a documented substitution (not a blocking
+   question back to the user) because the pine spec is explicit, not
+   silent, on this exact point.
+5. **`newly_oob_ids`** (used for the BOTH-side `controlling_opp` zone
+   breaching) -- RB's stranding-to-ORB (`state==2`) is the direct, literal
+   analog of OB's stranding-to-OOB (`state==2`): both fire on "a fresh
+   opposing swing forms beyond the zone while it was never impacted."
+   Pointed unchanged at RB's own state transition.
+
+Everything else (trend from `engine.regime`; pro/opposing by direction vs
+current CONTROL direction; the same-week trigger-ordering machinery;
+CAMPAIGN_START/CAMPAIGN_START_COUNTERTREND/OPPOSING_ENCOUNTER/
+CONTROL_SWITCHED/OPPOSING_GAINS_CONTROL/OPPOSING_LOSES_CONTROL/
+RETURN_TO_PRO_TREND/NO_CONTROL/SWING_PAUSE/SWING_PAUSE_BOTH/SWING_RESUME)
+is copied rule-for-rule, operating on RB zone fields
+(`z.bullish`/`z.state`/`z.stop`/`z.impact_time`/`z.id`).
+
+**Verification (hand-traced against real data, evidence cited):**
+
+- **First control transition**: `weekly_control_events_rb.csv` row 2:
+  `CAMPAIGN_START_COUNTERTREND, "RB zone 2 impacted (direction=SELL,
+  trend=BULLISH)", zone_id=2, at 2026-02-09 11:01:00 UTC / 2026-02-09
+  14:01:00 Riyadh`. `weekly_control_ledger_rb.csv` confirms `control=NONE`
+  for every week before week 6 and `control=SELL_ONLY` from week 6 onward.
+  This is EXACTLY the expected transition: RB #2 (ARB, SELL, origin
+  1.18649-1.20825, `weekly_rb_ledger.csv` row `id=2`) has
+  `impact_time_utc=2026-02-09 11:01:00` in that same ledger -- confirming
+  NONE->SELL_ONLY fires at exactly RB #2's own impact instant, not before
+  or after.
+- **A further transition, traced to raw data, not just the derived CSVs**:
+  the very next event, `SWING_PAUSE` at `2026-02-09 14:07:00 UTC / 17:07:00
+  Riyadh` ("Swing low confirms, no opposing control -> NONE"). Instrumented
+  a scratch run of `WeeklyRBEngine` directly and printed every swing event
+  confirmed in week 6: `Event(confirm=6, kind=1, swing=5, price=1.17652,
+  at=datetime(2026,2,9,14,7,tzinfo=UTC))` -- the swing event's own `at`
+  field (computed from real M1 rows by `event_time()`, not derived from the
+  weekly CSVs) matches the SWING_PAUSE log entry's timestamp exactly. Since
+  control was SELL_ONLY at that point and `kind_ == "swing_low"` (which
+  `pauses_sell`), the pause fires correctly, dropping control to NONE for
+  the rest of week 6 (confirmed resumed at week 7's `SWING_RESUME`,
+  `2026-02-17 17:28:00 UTC`, per the events CSV).
+
+Outputs: `rb_system/data/weekly_control_ledger_rb.csv`,
+`weekly_control_events_rb.csv`, `weekly_control_report_rb.txt` (37 weeks
+processed, 27 control-relevant events).
+
+### 9b. Rewired the gate: `h4_rb_engine.py` / `five_rb_bso_engine.py`
+
+Both scripts' `--control-ledger` default changed from
+`weekly_control_ledger.csv` (OB's) to `weekly_control_ledger_rb.csv` (RB's
+own, from 9a). The `load_control_by_week`/`permits`/`control_at` interface
+SHAPE is unchanged (same CSV columns, same bisect-on-week-starts logic) --
+only the file pointed at changed, so nothing downstream needed restructuring.
+
+**Result of rerunning the full pipeline**: H4 RB zones authorized went from
+**44** (old, wrong OB-ledger gate) to **76** (new, RB-native gate) out of
+393 total H4 RB zones / 273 impacted-never-stranded candidates. This
+matches the task's own expectation ("note how the authorized counts change
+now that control opens up earlier"): RB's own control ledger reaches its
+first SELL_ONLY state at 2026-02-09 14:01 Riyadh (week 6), materially
+earlier in the dataset than OB's control timeline does, because RB's own
+IRB/ARB zones reach impact on a different (and, in this dataset, earlier)
+schedule than OB's IFOB/AOB zones -- exactly the effect the correction was
+expected to produce. 5m BSO stage: 61 `ENTERED`, 40 `H4_OB_BREACHED` across
+the 76 authorized targets (up from the old 44-target run).
+
+### 9c. Gate-by-gate summary CSV: `rb_system/data/rb_control_gates.csv`
+
+New script `rb_system/reference/build_control_gates.py` reads
+`weekly_control_ledger_rb.csv`/`weekly_control_events_rb.csv` and collapses
+them into one row per maximal control-constant time segment ("gate"),
+joined against `h4_rb_ledger.csv` (authorized zones by impact time) and
+`five_rb_bso_ledger.csv` (ENTERED rows by entry time, with SL/TP
+breakdown). 13 gates total; sums cross-check exactly against the engines'
+own printed totals (76 authorized, 61 entries, 48 SL / 13 TP). Full table
+(all times Riyadh) is in the final chat report to the user, not repeated
+here to avoid drifting out of sync with the CSV -- see that CSV as the
+single source of truth going forward.
+
+**One granularity caveat worth flagging (not a bug, inherited from OB's own
+design):** `h4_rb_engine.py`'s `control_at(t)` looks up control at
+WEEK-level granularity (one label per week, taken from
+`weekly_control_ledger_rb.csv`'s per-week snapshot -- itself the
+end-of-week-processing control state), while a "gate" in the CSV above is
+bounded by the EXACT event timestamp. This can occasionally show an
+authorized H4 zone whose impact falls, by real clock time, inside a gate
+row currently reading NONE/a different side -- because that zone's own
+WEEK still carries the coarser week-level control label from
+`h4_rb_engine.py`'s bisect. This exact same coarse-week `control_at` design
+already exists unchanged in `h4_ob_engine.py` for OB; it was not introduced
+or altered by this session's work, just newly visible once gates are
+diffed at sub-week resolution. Flagging for visibility, not fixing, since
+changing it would be a scope change to `h4_ob_engine.py`'s own established
+interface, not something this RB-correction pass was asked to touch.
+
+### 9d. Pine viewer extended: H4/5m inspection toggles + 5m BSO visualization
+
+`full_viewer_rb.py` extended (not a new file, per the task's "your call"
+on scope) with:
+- Weekly: `inspectOneRB`/`rbFromLast` (group="Weekly RB inspection") --
+  ported from `weekly_rb_viewer.py`, which already had this pair; it simply
+  hadn't been carried into the combined file yet.
+- H4: `inspectOneH4RB`/`h4RbFromLast` (group="H4 RB inspection") -- naming
+  mirrors `full_viewer.py`'s OB H4 inspector (`inspectOneH4OB`/
+  `h4ObFromLast`, group="H4 OB inspection") exactly, per the task's explicit
+  instruction to mirror that convention.
+- 5m: a full BSO entry/SL/TP-line + fixed-R green/red box + ledger-table
+  layer (new function `build_bso_extra_lines_rb`, adapted from
+  `full_viewer.py`'s `build_bso_extra_lines`, ~lines 440-580 there), with
+  its own `inspectOne5mBSO`/`bso5FromLast` toggle (group="5m BSO
+  inspection") -- same naming convention again. The one deliberate
+  trim from the OB version: no "Weekly OB" parent-lineage column, because
+  RB's own 5m targeting (§5c/9b) has no parent-Weekly-zone concept at all
+  (`five_rb_bso_engine.py`'s own targets never carry a `parent_weekly_id`)
+  -- shown as a real design difference, not padded with a permanent "-"
+  placeholder column.
+- The H4/5m layers' `control_at`/`permits` gate inside `full_viewer_rb.py`
+  now also reads `weekly_control_ledger_rb.csv` (matching 9b's rewiring),
+  not OB's ledger.
+
+**Pine syntax check performed on the regenerated file (not just
+"should compile" -- read end-to-end and automated-checked):** ran an
+indentation-nesting scan over every line of the regenerated
+`full_viewer_rb.pine` (644 lines) confirming every `if barstate.islast`
+block is immediately followed by its own indented `if <timeframe/toggle
+flag>` line (the exact class of bug found and fixed in an earlier session
+-- a run of top-level `var array<...>` declarations silently ending the
+previous block, leaving a later `if` un-nested) -- zero anomalies found
+across all 3 layers (Weekly, H4, and the new 5m BSO block). Also manually
+read the transition points between each top-level `var` run and its
+following `if barstate.islast` block (weekly struct labels -> weekly boxes
+-> weekly table -> H4 boxes -> H4 table -> 5m BSO table+lines) to confirm
+each one reopens `if barstate.islast` / `if <flag>` correctly, matching the
+already-proven pattern from `full_viewer.py`'s own H4 OB layer and this
+project's own earlier CE10205/CE10295 TradingView-statement-limit fix.
+Still NOT pasted into TradingView itself (no TradingView access in this
+environment) -- this is a careful read-through + automated structural scan,
+not a live compile confirmation; flagging that distinction explicitly per
+this project's own discipline about not overclaiming verification.
+
+Files added/changed this session: `rb_system/reference/
+weekly_control_engine_rb.py` (new), `rb_system/reference/
+build_control_gates.py` (new), `rb_system/reference/h4_rb_engine.py`
+(rewired), `rb_system/reference/five_rb_bso_engine.py` (rewired),
+`rb_system/reference/full_viewer_rb.py` (extended). Data outputs:
+`weekly_control_ledger_rb.csv`, `weekly_control_events_rb.csv`,
+`weekly_control_report_rb.txt`, `rb_control_gates.csv`, regenerated
+`h4_rb_ledger.csv`/`h4_rb_report.txt`/`h4_rb_swings.csv`/
+`five_rb_bso_ledger.csv`/`full_viewer_rb.pine`.
+
+## 8. SUPERSEDED (2026-09-18, earlier this session -- see SS9 above for the
+correction) -- kept for the record, not for continued use.
+
+**Control wiring (§8, this session, continuation 2): RB's H4/5m engines
   now obey OB's existing Weekly control permission as an external gate.**
   `h4_rb_engine.py` and `five_rb_bso_engine.py` both require
   `weekly_control_ledger.csv` (from `weekly_control_engine.py`, run
