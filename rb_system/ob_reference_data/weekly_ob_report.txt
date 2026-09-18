@@ -1,0 +1,20 @@
+WEEKLY OB REFERENCE RUN
+input=../data/EURUSD_m1_BidAndAsk.csv
+price_side=bid
+input_timezone=UTC
+display_timezone=Asia/Riyadh (display only; internal calculation remains UTC)
+weekly_aggregation=Sunday 17:00 America/New_York
+display_body=first/last observed 60-minute candle bodies assembled from the explicit source window offset 0m; first origin price=close; missing minutes are neither filled nor used as a blocker
+event_facts=trigger and eligibility facts are captured at their lifecycle transition; ledger reports stored or fallback provenance
+minute_coverage=2026-01-02 06:31:00 to 2026-09-11 19:05:00
+minutes=261,352; weeks=37; swing_highs=10; swing_lows=10; mss_up=2; mss_down=2; gaps_outside_weekend=437
+
+OB LIFECYCLE COUNTS
+IFOB=0
+AOB=0
+AIFOB=1
+OOB=7
+SPENT=0
+REJECTED=5
+
+Colors: IFOB BUY=blue; IFOB SELL=black; AOB=green; AIFOB=orange; OOB=red; SPENT keeps its preceding color; REJECTED is ledger-only.

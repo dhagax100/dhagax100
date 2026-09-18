@@ -1,0 +1,116 @@
+//@version=6
+indicator("FXCM Weekly OB - Python Reference", overlay=true, max_labels_count=500, max_boxes_count=500, max_lines_count=500)
+// GENERATED FROM 1-MINUTE FXCM BID DATA. OB decisions use locked Weekly swing/MSS; displayed body uses observed first/last 60m candles; first source is close; body source offset is 0m.
+// Attach to EURUSD, FXCM. Weekly chart: swings/MSS/OB boxes/table. 4H chart:
+// only the Weekly OB boxes + impact lines are carried over (no table, no
+// swing/MSS labels). Every other timeframe draws nothing -- a plain chart.
+float lowGap = ta.atr(14) * 0.08
+bool showOriginAudit = input.bool(true, "Show OB origin-candle audit labels")
+bool inspectOneOB = input.bool(false, "Inspect one OB only", group="OB inspection")
+int obFromLast = input.int(1, "OB from last", minval=1, maxval=13, group="OB inspection", tooltip="1 = latest OB, 2 = the OB before it, and so on.")
+var table ledger = table.new(position.top_right, 10, 21, border_width=1)
+bool onWeekly = timeframe.period == "1W"
+bool onH4 = timeframe.period == "240"
+bool onFive = timeframe.period == "5"
+var array<int> structX = array.from(timestamp("GMT+0", 2025, 12, 28, 22, 0), timestamp("GMT+0", 2026, 1, 25, 22, 0), timestamp("GMT+0", 2026, 2, 8, 22, 0), timestamp("GMT+0", 2026, 3, 22, 21, 0), timestamp("GMT+0", 2026, 4, 12, 21, 0), timestamp("GMT+0", 2026, 5, 3, 21, 0), timestamp("GMT+0", 2026, 5, 24, 21, 0), timestamp("GMT+0", 2026, 6, 14, 21, 0), timestamp("GMT+0", 2026, 7, 12, 21, 0), timestamp("GMT+0", 2026, 8, 16, 21, 0), timestamp("GMT+0", 2026, 1, 11, 22, 0), timestamp("GMT+0", 2026, 2, 1, 22, 0), timestamp("GMT+0", 2026, 3, 8, 21, 0), timestamp("GMT+0", 2026, 3, 29, 21, 0), timestamp("GMT+0", 2026, 4, 26, 21, 0), timestamp("GMT+0", 2026, 5, 17, 21, 0), timestamp("GMT+0", 2026, 6, 7, 21, 0), timestamp("GMT+0", 2026, 6, 21, 21, 0), timestamp("GMT+0", 2026, 7, 26, 21, 0), timestamp("GMT+0", 2026, 8, 30, 21, 0), timestamp("GMT+0", 2026, 2, 1, 22, 0), timestamp("GMT+0", 2026, 3, 22, 21, 0), timestamp("GMT+0", 2026, 4, 26, 21, 0), timestamp("GMT+0", 2026, 7, 12, 21, 0))
+var array<float> structY = array.from(1.17542, 1.20825, 1.19283, 1.16394, 1.18488, 1.17963, 1.16854, 1.16217, 1.14822, 1.17112, 1.15692, 1.17652, 1.14089, 1.14427, 1.16547, 1.15759, 1.14994, 1.13242, 1.13529, 1.15659, 1.17652, 1.16394, 1.16547, 1.14822)
+var array<string> structTxt = array.from("▲", "▲", "▲", "▲", "▲", "▲", "▲", "▲", "▲", "▲", "▼", "▼", "▼", "▼", "▼", "▼", "▼", "▼", "▼", "▼", "✕", "✕", "✕", "✕")
+var array<color> structCol = array.from(color.blue, color.blue, color.blue, color.blue, color.blue, color.blue, color.blue, color.blue, color.blue, color.blue, color.black, color.black, color.black, color.black, color.black, color.black, color.black, color.black, color.black, color.black, color.black, color.blue, color.black, color.blue)
+var array<bool> structLow = array.from(false, false, false, false, false, false, false, false, false, false, true, true, true, true, true, true, true, true, true, true, true, false, true, false)
+var array<int> obLeft = array.from(timestamp("GMT+0", 2026, 1, 11, 22, 0), timestamp("GMT+0", 2026, 2, 8, 22, 0), timestamp("GMT+0", 2026, 3, 22, 21, 0), timestamp("GMT+0", 2026, 5, 3, 21, 0), timestamp("GMT+0", 2026, 5, 24, 21, 0), timestamp("GMT+0", 2026, 6, 7, 21, 0), timestamp("GMT+0", 2026, 7, 19, 21, 0), timestamp("GMT+0", 2026, 8, 9, 21, 0))
+var array<float> obTop = array.from(1.16294, 1.18664, 1.15350, 1.17841, 1.16576, 1.15662, 1.14251, 1.15667)
+var array<float> obBottom = array.from(1.15947, 1.18090, 1.15075, 1.17427, 1.16364, 1.15082, 1.13689, 1.15626)
+var array<color> obCol = array.from(color.red, color.red, color.red, color.red, color.red, color.red, color.red, color.orange)
+var array<int> obRank = array.from(13, 11, 9, 7, 6, 5, 2, 1)
+var array<string> obAudit = array.from("#1 OOB BUY", "#3 OOB SELL", "#5 OOB BUY", "#7 OOB SELL", "#8 OOB SELL", "#9 OOB SELL", "#12 OOB BUY", "#13 AIFOB BUY")
+var array<float> obOriginH = array.from(1.16981, 1.19283, 1.16394, 1.17963, 1.16854, 1.15893, 1.14492, 1.15851)
+var array<bool> obHasLine = array.from(true, true, true, false, true, true, false, false)
+var array<string> tId = array.from("#13", "#12", "#11", "#10", "#9", "#8", "#7", "#6", "#5", "#4", "#3", "#2", "#1")
+var array<string> tType = array.from("AIFOB", "OOB", "AIFOB", "AOB", "OOB", "OOB", "OOB", "AIFOB", "OOB", "AIFOB", "OOB", "AIFOB", "OOB")
+var array<string> tSide = array.from("BUY", "BUY", "SELL", "BUY", "SELL", "SELL", "SELL", "BUY", "BUY", "SELL", "SELL", "BUY", "BUY")
+var array<string> tBottom = array.from("1.15626", "1.13689", "1.13806", "1.13820", "1.15082", "1.16364", "1.17427", "1.17168", "1.15075", "1.14188", "1.18090", "1.18138", "1.15947")
+var array<string> tTop = array.from("1.15667", "1.14251", "1.14326", "1.14603", "1.15662", "1.16576", "1.17841", "1.17371", "1.15350", "1.15701", "1.18664", "1.18480", "1.16294")
+var array<string> tOrigin = array.from("2026-08-10 00:00:00", "2026-07-20 00:00:00", "2026-06-29 00:00:00", "2026-06-22 00:00:00", "2026-06-08 00:00:00", "2026-05-25 00:00:00", "2026-05-04 00:00:00", "2026-04-20 00:00:00", "2026-03-23 00:00:00", "2026-03-16 00:00:00", "2026-02-09 01:00:00", "2026-02-02 01:00:00", "2026-01-12 01:00:00")
+var array<string> tTrigger = array.from("2026-09-09 09:15:00 @ 1.15659", "2026-07-30 13:43:00 @ 1.14822", "2026-07-23 15:43:00 @ 1.14822", "2026-07-23 15:43:00 @ 1.14822", "2026-06-17 22:24:00 @ 1.14994", "2026-06-05 16:51:00 @ 1.15759", "2026-05-15 03:38:00 @ 1.16547", "2026-05-06 13:45:00 @ 1.16547", "2026-04-08 01:36:00 @ 1.16394", "2026-03-30 12:17:00 @ 1.16394", "2026-02-19 16:01:00 @ 1.17652", "2026-02-09 15:07:00 @ 1.17652", "2026-01-20 16:34:00 @ 1.17542")
+var array<string> tEligible = array.from("", "2026-08-31 00:04:00 @ 1.15773", "", "", "2026-07-14 15:30:00 @ 1.14605", "2026-06-15 00:29:00 @ 1.15893", "2026-05-29 17:51:00 @ 1.16614", "", "2026-04-29 21:37:00 @ 1.16688", "", "2026-03-23 14:06:00 @ 1.16159", "", "2026-02-02 16:03:00 @ 1.18346")
+var array<string> tImpact = array.from("", "", "", "", "2026-07-30 16:48:00", "2026-08-19 15:49:00", "", "", "2026-06-05 18:37:00", "", "2026-04-14 17:55:00", "", "2026-03-03 11:12:00")
+var array<string> tStatus = array.from("AIFOB", "OOB", "REJECTED", "REJECTED", "OOB", "OOB", "OOB", "REJECTED", "OOB", "REJECTED", "OOB", "REJECTED", "OOB")
+var array<color> tBg = array.from(color.new(color.orange, 80), color.new(color.red, 80), color.new(color.orange, 80), color.new(color.green, 80), color.new(color.red, 80), color.new(color.red, 80), color.new(color.red, 80), color.new(color.orange, 80), color.new(color.red, 80), color.new(color.orange, 80), color.new(color.red, 80), color.new(color.orange, 80), color.new(color.red, 80))
+var array<string> iId = array.from("#13", "#12", "#11", "#10", "#9", "#8", "#7", "#6", "#5", "#4", "#3", "#2", "#1")
+var array<string> iType = array.from("AIFOB", "OOB", "AIFOB", "AOB", "OOB", "OOB", "OOB", "AIFOB", "OOB", "AIFOB", "OOB", "AIFOB", "OOB")
+var array<string> iSide = array.from("BUY", "BUY", "SELL", "BUY", "SELL", "SELL", "SELL", "BUY", "BUY", "SELL", "SELL", "BUY", "BUY")
+var array<string> iBottom = array.from("1.15626", "1.13689", "1.13806", "1.13820", "1.15082", "1.16364", "1.17427", "1.17168", "1.15075", "1.14188", "1.18090", "1.18138", "1.15947")
+var array<string> iTop = array.from("1.15667", "1.14251", "1.14326", "1.14603", "1.15662", "1.16576", "1.17841", "1.17371", "1.15350", "1.15701", "1.18664", "1.18480", "1.16294")
+var array<string> iOrigin = array.from("2026-08-10 00:00:00", "2026-07-20 00:00:00", "2026-06-29 00:00:00", "2026-06-22 00:00:00", "2026-06-08 00:00:00", "2026-05-25 00:00:00", "2026-05-04 00:00:00", "2026-04-20 00:00:00", "2026-03-23 00:00:00", "2026-03-16 00:00:00", "2026-02-09 01:00:00", "2026-02-02 01:00:00", "2026-01-12 01:00:00")
+var array<string> iTrigger = array.from("2026-09-09 09:15:00 @ 1.15659", "2026-07-30 13:43:00 @ 1.14822", "2026-07-23 15:43:00 @ 1.14822", "2026-07-23 15:43:00 @ 1.14822", "2026-06-17 22:24:00 @ 1.14994", "2026-06-05 16:51:00 @ 1.15759", "2026-05-15 03:38:00 @ 1.16547", "2026-05-06 13:45:00 @ 1.16547", "2026-04-08 01:36:00 @ 1.16394", "2026-03-30 12:17:00 @ 1.16394", "2026-02-19 16:01:00 @ 1.17652", "2026-02-09 15:07:00 @ 1.17652", "2026-01-20 16:34:00 @ 1.17542")
+var array<string> iEligible = array.from("", "2026-08-31 00:04:00 @ 1.15773", "", "", "2026-07-14 15:30:00 @ 1.14605", "2026-06-15 00:29:00 @ 1.15893", "2026-05-29 17:51:00 @ 1.16614", "", "2026-04-29 21:37:00 @ 1.16688", "", "2026-03-23 14:06:00 @ 1.16159", "", "2026-02-02 16:03:00 @ 1.18346")
+var array<string> iImpact = array.from("", "", "", "", "2026-07-30 16:48:00", "2026-08-19 15:49:00", "", "", "2026-06-05 18:37:00", "", "2026-04-14 17:55:00", "", "2026-03-03 11:12:00")
+var array<string> iStatus = array.from("AIFOB", "OOB", "REJECTED", "REJECTED", "OOB", "OOB", "OOB", "REJECTED", "OOB", "REJECTED", "OOB", "REJECTED", "OOB")
+var array<color> iBg = array.from(color.new(color.orange, 80), color.new(color.red, 80), color.new(color.orange, 80), color.new(color.green, 80), color.new(color.red, 80), color.new(color.red, 80), color.new(color.red, 80), color.new(color.orange, 80), color.new(color.red, 80), color.new(color.orange, 80), color.new(color.red, 80), color.new(color.orange, 80), color.new(color.red, 80))
+var array<int> iRank = array.from(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13)
+var int impact_x_1 = na
+if time <= timestamp("GMT+0", 2026, 3, 3, 8, 12) and timestamp("GMT+0", 2026, 3, 3, 8, 12) < time_close
+    impact_x_1 := time
+var int impact_x_3 = na
+if time <= timestamp("GMT+0", 2026, 4, 14, 14, 55) and timestamp("GMT+0", 2026, 4, 14, 14, 55) < time_close
+    impact_x_3 := time
+var int impact_x_5 = na
+if time <= timestamp("GMT+0", 2026, 6, 5, 15, 37) and timestamp("GMT+0", 2026, 6, 5, 15, 37) < time_close
+    impact_x_5 := time
+var int impact_x_8 = na
+if time <= timestamp("GMT+0", 2026, 8, 19, 12, 49) and timestamp("GMT+0", 2026, 8, 19, 12, 49) < time_close
+    impact_x_8 := time
+var int impact_x_9 = na
+if time <= timestamp("GMT+0", 2026, 7, 30, 13, 48) and timestamp("GMT+0", 2026, 7, 30, 13, 48) < time_close
+    impact_x_9 := time
+if barstate.islast
+    if onWeekly
+        for i = 0 to array.size(structX) - 1
+            structYY = array.get(structLow, i) ? array.get(structY, i) - lowGap : array.get(structY, i)
+            label.new(array.get(structX, i), structYY, array.get(structTxt, i), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=array.get(structCol, i), size=size.small)
+    if onWeekly or onH4
+        array<int> obRight = array.from((na(impact_x_1) ? timestamp("GMT+0", 2026, 3, 3, 8, 12) : impact_x_1), (na(impact_x_3) ? timestamp("GMT+0", 2026, 4, 14, 14, 55) : impact_x_3), (na(impact_x_5) ? timestamp("GMT+0", 2026, 6, 5, 15, 37) : impact_x_5), timestamp("GMT+0", 2027, 9, 11, 19, 5), (na(impact_x_8) ? timestamp("GMT+0", 2026, 8, 19, 12, 49) : impact_x_8), (na(impact_x_9) ? timestamp("GMT+0", 2026, 7, 30, 13, 48) : impact_x_9), timestamp("GMT+0", 2027, 9, 11, 19, 5), timestamp("GMT+0", 2027, 9, 11, 19, 5))
+        for i = 0 to array.size(obLeft) - 1
+            if not inspectOneOB or obFromLast == array.get(obRank, i)
+                obColI = array.get(obCol, i)
+                box.new(array.get(obLeft, i), array.get(obTop, i), array.get(obRight, i), array.get(obBottom, i), border_color=obColI, border_width=1, bgcolor=na, xloc=xloc.bar_time)
+                if showOriginAudit
+                    label.new(array.get(obLeft, i), array.get(obOriginH, i), array.get(obAudit, i), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_down, color=color.new(obColI, 85), textcolor=obColI, size=size.tiny)
+                if array.get(obHasLine, i)
+                    line.new(array.get(obRight, i), array.get(obBottom, i), array.get(obRight, i), array.get(obTop, i), xloc=xloc.bar_time, extend=extend.both, color=color.new(color.red, 30), width=1)
+    if onWeekly
+        table.clear(ledger, 0, 0, 9, 20)
+        table.cell(ledger, 0, 0, "W OB", text_color=color.white, bgcolor=color.new(color.green, 15))
+        table.cell(ledger, 1, 0, "Type", text_color=color.white, bgcolor=color.new(color.green, 15))
+        table.cell(ledger, 2, 0, "Side", text_color=color.white, bgcolor=color.new(color.green, 15))
+        table.cell(ledger, 3, 0, "Bottom", text_color=color.white, bgcolor=color.new(color.green, 15))
+        table.cell(ledger, 4, 0, "Top", text_color=color.white, bgcolor=color.new(color.green, 15))
+        table.cell(ledger, 5, 0, "Origin (RYD)", text_color=color.white, bgcolor=color.new(color.green, 15))
+        table.cell(ledger, 6, 0, "Trigger (RYD / swing)", text_color=color.white, bgcolor=color.new(color.green, 15))
+        table.cell(ledger, 7, 0, "Eligible (RYD / px)", text_color=color.white, bgcolor=color.new(color.green, 15))
+        table.cell(ledger, 8, 0, "Impact (RYD)", text_color=color.white, bgcolor=color.new(color.green, 15))
+        table.cell(ledger, 9, 0, "Status", text_color=color.white, bgcolor=color.new(color.green, 15))
+        if not inspectOneOB
+            for i = 0 to array.size(tId) - 1
+                table.cell(ledger, 0, i + 1, array.get(tId, i), text_color=color.black, bgcolor=na)
+                table.cell(ledger, 1, i + 1, array.get(tType, i), text_color=color.black, bgcolor=na)
+                table.cell(ledger, 2, i + 1, array.get(tSide, i), text_color=color.black, bgcolor=na)
+                table.cell(ledger, 3, i + 1, array.get(tBottom, i), text_color=color.black, bgcolor=na)
+                table.cell(ledger, 4, i + 1, array.get(tTop, i), text_color=color.black, bgcolor=na)
+                table.cell(ledger, 5, i + 1, array.get(tOrigin, i), text_color=color.black, bgcolor=na)
+                table.cell(ledger, 6, i + 1, array.get(tTrigger, i), text_color=color.black, bgcolor=na)
+                table.cell(ledger, 7, i + 1, array.get(tEligible, i), text_color=color.black, bgcolor=na)
+                table.cell(ledger, 8, i + 1, array.get(tImpact, i), text_color=color.black, bgcolor=na)
+                table.cell(ledger, 9, i + 1, array.get(tStatus, i), text_color=color.black, bgcolor=array.get(tBg, i))
+        for i = 0 to array.size(iId) - 1
+            if inspectOneOB and obFromLast == array.get(iRank, i)
+                table.cell(ledger, 0, 1, array.get(iId, i), text_color=color.black, bgcolor=na)
+                table.cell(ledger, 1, 1, array.get(iType, i), text_color=color.black, bgcolor=na)
+                table.cell(ledger, 2, 1, array.get(iSide, i), text_color=color.black, bgcolor=na)
+                table.cell(ledger, 3, 1, array.get(iBottom, i), text_color=color.black, bgcolor=na)
+                table.cell(ledger, 4, 1, array.get(iTop, i), text_color=color.black, bgcolor=na)
+                table.cell(ledger, 5, 1, array.get(iOrigin, i), text_color=color.black, bgcolor=na)
+                table.cell(ledger, 6, 1, array.get(iTrigger, i), text_color=color.black, bgcolor=na)
+                table.cell(ledger, 7, 1, array.get(iEligible, i), text_color=color.black, bgcolor=na)
+                table.cell(ledger, 8, 1, array.get(iImpact, i), text_color=color.black, bgcolor=na)
+                table.cell(ledger, 9, 1, array.get(iStatus, i), text_color=color.black, bgcolor=array.get(iBg, i))

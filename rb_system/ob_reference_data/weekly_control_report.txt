@@ -1,0 +1,59 @@
+WEEKLY DIRECTION-CONTROL STATE MACHINE -- FIRST PASS, UNVERIFIED
+
+This is an additive layer over the locked weekly_ob_generator.py engine.
+It does not change any OB/swing/MSS fact. Every row below is a candidate
+answer that still needs chart-by-chart verification, same as every OB
+lifecycle fact was verified before being locked.
+
+INTERPRETIVE DECISIONS THIS MODULE MADE (verify these against SPEC.md):
+1. Trend state is read directly from the locked engine's internal
+   swing regime (0=UNDEFINED,1=BULLISH/up,2=BEARISH/down). This assumes
+   the engine's regime flip IS the SPEC.md SS15 'protected swing broken'
+   trend reversal event -- they are the same MSS in this engine.
+2. Pro-trend vs opposing is classified purely by zone direction vs
+   current trend (SPEC.md SS15: 'old' and 'aggressive' POIs become
+   opposing after a flip), not by the zone's AOB/IFOB/AIFOB origin type.
+3. 'Active/alive' POI (forcing continued control) = not rejected, not
+   OOB, not yet SPENT (state in IFOB/AOB/AIFOB). A SPENT zone is
+   treated as having already done its job, not as still forcing control.
+   Fixed 2026-09-16 (real lookahead bug, user-caught): this check used
+   to read each zone's FINAL end-of-dataset state, not its state as of
+   the week being examined, because the whole dataset was processed
+   before the control loop below ever started. Every alive/spent check
+   now reads a per-week snapshot instead -- see state_by_week in the
+   source. This can change past BOTH-vs-direct-switch answers; treat
+   every one as unverified again until re-checked against the chart.
+4a. An opposing-direction impact only escalates to BOTH if the
+   currently-controlling side still has a live (unspent) zone. If
+   the old side already delivered its reaction and is spent, control
+   SWITCHES straight to the new zone's direction (CONTROL_SWITCHED)
+   instead of passing through BOTH. Chart-confirmed 2026-04-14
+   (zone 3 SELL): zone 1 (BUY) had already delivered its reaction and
+   was spent, so this should switch straight to SELL_ONLY and hold
+   through every 4H sell impact until price reaches the next Weekly
+   zone, not oscillate through BOTH/BUY_ONLY.
+4. Opposing-gains-control's 'reaction produces a confirmed Weekly
+   swing' is matched to ANY same-direction swing confirmation between
+   the opposing zone's impact week and the current week -- not proven
+   to be caused BY that specific zone's reaction. If a chart case shows
+   the wrong opposing zone credited, this matching rule is the first
+   suspect.
+5. Opposing-loses-control is detected only via the engine's own
+   stranding-to-OOB rule or rejection. SPEC.md SS14's separate
+   'Weekly-close POI breach' mechanism is NOT implemented (see
+   docs/BUILD_ORDER.md audit -- the locked engine itself only has one
+   breach mechanism, not two).
+6. From NONE, whichever zone (either direction) is impacted FIRST
+   starts control in ITS OWN direction, even if that is opposite the
+   current structural trend (SPEC.md SS9 explicitly allows trend and
+   control to diverge; SS16 says a no-control state waits for 'a
+   valid Weekly POI of either direction' and then processes it
+   normally). All later BOTH/opposing-gains/opposing-loses/no-control
+   logic is therefore relative to the ESTABLISHED CONTROL direction,
+   not to structural trend. A trend flip does NOT reset control by
+   itself (SPEC.md SS9: trend and control are independent) -- an
+   active campaign carries straight through a flip until one of the
+   explicit transfer rules fires (encounter/gain/lose/no-control).
+
+Weeks processed: 37
+Control-relevant events: 23
