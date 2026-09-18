@@ -111,6 +111,24 @@ def is_spent_state(state: Optional[int], rejected: bool) -> bool:
     return state == 3 and not rejected
 
 
+def body_close_dead(z: "wob.Zone", week) -> bool:
+    """SPEC.md SS14's Weekly-close POI breach, ported 2026-09-18 from this
+    session's own chart-verified findings (zones #8/#9 in the 04-14..09-11
+    control-gate walkthrough) -- previously NOT implemented anywhere in this
+    module (see the old, now-superseded decision #5 in write_outputs below).
+
+    A zone's own thesis dies the moment a Weekly candle's body closes at or
+    beyond its NEAR boundary -- a body close merely INSIDE the zone (no
+    clean wick-reject) is enough on its own, exactly like a full close
+    THROUGH it; both are the same underlying condition, checked the same
+    way. For a SELL zone (approached from below), that's `close >= zb`. For
+    a BUY zone (approached from above), that's `close <= zt`. This is
+    distinct from -- and in addition to -- the locked engine's own
+    stranding-to-OOB rule (a fresh opposing swing forming beyond the zone),
+    which is a different, already-implemented mechanism."""
+    return (week.c >= z.zb) if not z.bullish else (week.c <= z.zt)
+
+
 def run(args: argparse.Namespace) -> int:
     path = Path(args.csv_file).expanduser().resolve()
     base = path.parent
@@ -171,6 +189,21 @@ def run(args: argparse.Namespace) -> int:
             impacts_by_week.setdefault(z.stop, []).append(z)
     swing_high_weeks = sorted({e.confirm for e in engine.events if e.kind == 0})
     swing_low_weeks = sorted({e.confirm for e in engine.events if e.kind == 1})
+    # Earliest confirm timestamp per (kind, week), for ordering a same-week
+    # swing-resume against a same-week zone impact by REAL time (see the
+    # combined resume-from-NONE step below) -- week-bucket order alone isn't
+    # enough, and defaulting to "whichever check runs first in the code"
+    # silently picked the wrong one for this session's own gate 3->4
+    # (zone 5's impact and the swing-high resume both land in week 22; the
+    # swing fires first in real time, at 16:51, then zone 5 at 18:37 -- BOTH,
+    # not a direct switch to BUY_ONLY).
+    earliest_swing_at: Dict[Tuple[int, int], datetime] = {}
+    for e in engine.events:
+        if e.at is None:
+            continue
+        key = (e.kind, e.confirm)
+        if key not in earliest_swing_at or e.at < earliest_swing_at[key]:
+            earliest_swing_at[key] = e.at
 
     # Track OOB/rejected transitions week-by-week for "loses control", from
     # the per-week snapshot -- not live z.state, for the same reason as above.
@@ -183,6 +216,17 @@ def run(args: argparse.Namespace) -> int:
     controlling_zone_id: Optional[int] = None  # the single Weekly zone responsible for the
     # ACTIVE single-direction control (BUY_ONLY/SELL_ONLY), for H4 parent-zone linkage.
     # None while control is NONE or BOTH (BOTH has two sides, no single "the" zone).
+    # `paused_bull`: set ONLY when a same-direction swing confirms and pauses
+    # an otherwise-still-alive campaign to NONE (SPEC.md SS16, ported
+    # 2026-09-18 -- see the SWING_PAUSE/SWING_RESUME checks below). None
+    # means either not currently paused, or NONE was reached some other way
+    # (a zone's own body-close death, or the very start) -- those exits only
+    # resume via a fresh zone impact (the existing CAMPAIGN_START check),
+    # never via a swing confirming, per this session's own gates 11-14.
+    paused_bull: Optional[bool] = None
+    # Zones already known dead by their own Weekly-close body-inside/through
+    # rule (`body_close_dead`), so each zone is only ever logged once.
+    body_dead_ids: set = set()
     events: List[ControlEvent] = []
     weekly_rows = []
 
@@ -235,17 +279,99 @@ def run(args: argparse.Namespace) -> int:
         # campaign can start opposite of trend -- see decision #6 below).
         control_bull = control == "BUY_ONLY"
 
-        # 1) Campaign start/resume from NONE: whichever POI (either
-        #    direction) is impacted first starts control in ITS OWN
-        #    direction. Implements SS16's "wait until price encounters a
-        #    valid Weekly POI of either direction, process normally."
-        if control == "NONE" and impacts_this_week:
-            first = impacts_this_week[0]
-            control = "BUY_ONLY" if first.bullish else "SELL_ONLY"
-            control_bull = first.bullish
-            controlling_zone_id = first.id
-            kind = "CAMPAIGN_START" if is_pro(first, trend_at[k]) else "CAMPAIGN_START_COUNTERTREND"
-            log(k, kind, f"Zone {first.id} impacted (direction={'BUY' if first.bullish else 'SELL'}, trend={trend})", first.id)
+        # 0/1/5 combined, ported 2026-09-18: zone-death (SS14), campaign
+        # start/resume from NONE, and the swing-confirm pause (SS16) all
+        # interact within a single week and must be resolved in REAL
+        # chronological order, not as separate sequential checks -- two
+        # concrete cases this session's own gates exposed by testing:
+        #   - gate 3->4 (week 22): a swing-high resume (16:51) and zone 5's
+        #     impact (18:37) land in the SAME week. Applying the impact
+        #     check first (as an earlier version of this code did) wrongly
+        #     jumps straight to BUY_ONLY instead of SELL_ONLY -> BOTH.
+        #   - gate 6->7 (week 24): the pausing swing low AND the resuming
+        #     swing high land in the SAME week (00:29 and 22:24
+        #     respectively). Checking pause and resume as two separate,
+        #     non-interacting passes over the week misses the resume
+        #     entirely, since `paused_bull` isn't set until after the
+        #     resume check has already run for that week.
+        #   - gates 11->12, 13->14: a zone can be impacted AND die to its
+        #     own Weekly-close body rule in the SAME week (its own
+        #     containing week is also its impact week) -- zone-death must
+        #     therefore be ordered relative to that week's own impact, not
+        #     unconditionally before it.
+        # Built as a small sorted list of this week's real candidate
+        # triggers, then walked in time order, each one acting on whatever
+        # control state the PRIOR trigger in the same week left behind.
+        week_triggers: List[Tuple[datetime, str, object]] = []
+        if control in ("BUY_ONLY", "SELL_ONLY") and controlling_zone_id is not None:
+            z = next((zz for zz in engine.zones if zz.id == controlling_zone_id), None)
+            if z is not None and controlling_zone_id not in body_dead_ids and body_close_dead(z, weeks[k]):
+                week_triggers.append((weeks[k].end, "zone_death", z))
+        for z in impacts_this_week:
+            week_triggers.append((z.impact_time, "impact", z))
+        if (0, k) in earliest_swing_at:
+            week_triggers.append((earliest_swing_at[(0, k)], "swing_high", None))
+        if (1, k) in earliest_swing_at:
+            week_triggers.append((earliest_swing_at[(1, k)], "swing_low", None))
+        week_triggers.sort(key=lambda t: t[0])
+
+        for at, kind_, payload in week_triggers:
+            if kind_ == "zone_death":
+                z = payload
+                if control in ("BUY_ONLY", "SELL_ONLY") and controlling_zone_id == z.id and z.id not in body_dead_ids:
+                    body_dead_ids.add(z.id)
+                    log(k, "ZONE_DEATH", f"Zone {z.id} (providing {control}) closes body inside/through its own box -> NONE", z.id)
+                    control = "NONE"
+                    control_bull = False
+                    controlling_zone_id = None
+                    paused_bull = None  # zone-death only resumes via a fresh impact, never a swing (gates 12->13)
+            elif kind_ == "impact":
+                z = payload
+                if control == "NONE":
+                    control = "BUY_ONLY" if z.bullish else "SELL_ONLY"
+                    control_bull = z.bullish
+                    controlling_zone_id = z.id
+                    log_kind = "CAMPAIGN_START" if is_pro(z, trend_at[k]) else "CAMPAIGN_START_COUNTERTREND"
+                    log(k, log_kind, f"Zone {z.id} impacted (direction={'BUY' if z.bullish else 'SELL'}, trend={trend})", z.id)
+                # An impact while already BUY_ONLY/SELL_ONLY/BOTH is handled
+                # by check 2 below (same-side: a new entry, no control
+                # change; opposite-side: opposing encounter), using
+                # `impacts_this_week` directly -- not re-litigated here.
+            elif kind_ in ("swing_high", "swing_low"):
+                # Same-direction pause: a swing LOW pauses SELL_ONLY (this
+                # session's whole basis -- "we stopped selling because
+                # price confirmed swing low"); a swing HIGH pauses
+                # BUY_ONLY, its mirror. Real bug fixed while porting this:
+                # an earlier version of this exact block had the polarity
+                # backwards (swing HIGH pausing SELL_ONLY), caught by
+                # testing against gate 1->2 -- the pause fired at the wrong
+                # week (19, on a swing HIGH) instead of the right one (21,
+                # on the real swing LOW).
+                pauses_sell = kind_ == "swing_low"
+                pauses_buy = kind_ == "swing_high"
+                if control == "SELL_ONLY" and pauses_sell or control == "BUY_ONLY" and pauses_buy:
+                    opposing_alive = any(
+                        zz.bullish != control_bull and is_alive_state(*snapshot_k[zz.id])
+                        for zz in engine.zones if zz.id in snapshot_k
+                    )
+                    if not opposing_alive:
+                        log(k, "SWING_PAUSE", f"{'Swing low' if not control_bull else 'Swing high'} confirms, no opposing POI alive -> NONE", None)
+                        paused_bull = control_bull
+                        control = "NONE"
+                        control_bull = False
+                        controlling_zone_id = None
+                elif control == "NONE" and paused_bull is False and kind_ == "swing_high":
+                    # SELL was paused; a swing HIGH (opposite kind) resumes it.
+                    control = "SELL_ONLY"
+                    control_bull = False
+                    log(k, "SWING_RESUME", "Swing high confirms -> SELL_ONLY", None)
+                    paused_bull = None
+                elif control == "NONE" and paused_bull is True and kind_ == "swing_low":
+                    # BUY was paused; a swing LOW (opposite kind) resumes it.
+                    control = "BUY_ONLY"
+                    control_bull = True
+                    log(k, "SWING_RESUME", f"{'Swing high' if not paused_bull else 'Swing low'} confirms -> {control}", None)
+                    paused_bull = None
 
         # 2) A zone opposite the CONTROLLING direction gets impacted. Only
         #    escalate to BOTH if the CURRENT controlling side still has a
@@ -333,16 +459,12 @@ def run(args: argparse.Namespace) -> int:
                     control = "NONE"
                     log(k, "NO_CONTROL", "No active POI on either side", None)
 
-        # 5) DISABLED (SPECIFICATION_PENDING). A prior version dropped control
-        #    to NONE the week after the founding zone itself became spent --
-        #    but a spent founding zone is not an invalidation; the campaign
-        #    persists as a state until a real transfer event fires (opposing
-        #    encounter/switch above), per the user's explicit rule: "keep
-        #    selling until we come across another OB." SPEC.md SS16's actual
-        #    no-control case (a confirmed swing forms with NO POI reaction
-        #    behind it) is a different, more specific check this module does
-        #    not yet implement -- do not approximate it with "is the founding
-        #    zone still unspent," which is what caused the bug.
+        # (SPEC.md SS16's no-control pause, and its opposite-swing resume,
+        # are both handled inside the time-ordered week_triggers walk above
+        # -- not as separate sequential checks; see that block's own
+        # comment for why. The old swing-taken-out resume rule is abandoned
+        # per the user's explicit instruction 2026-09-17/18 -- do not
+        # reintroduce it.)
 
         weekly_rows.append((k, trend, control, str(controlling_opp) if controlling_opp else "", str(controlling_zone_id) if controlling_zone_id else ""))
 
