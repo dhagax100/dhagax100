@@ -350,12 +350,20 @@ def run(args: argparse.Namespace) -> int:
                 pauses_sell = kind_ == "swing_low"
                 pauses_buy = kind_ == "swing_high"
                 if control == "SELL_ONLY" and pauses_sell or control == "BUY_ONLY" and pauses_buy:
-                    opposing_alive = any(
-                        zz.bullish != control_bull and is_alive_state(*snapshot_k[zz.id])
+                    # "No opposing zone IN CONTROL" -- not merely alive/armed
+                    # on the chart. A zone only gains control by being
+                    # impacted (that's how checks 2-4 already work: BOTH
+                    # happens on an opposing IMPACT, not on an opposing zone
+                    # merely existing untouched). An armed-but-never-touched
+                    # opposing zone (state in 0,1,4, impact_time=None) does
+                    # not block this pause -- only a zone that has actually
+                    # been impacted (SPENT, state==3, not rejected) does.
+                    opposing_in_control = any(
+                        zz.bullish != control_bull and is_spent_state(*snapshot_k[zz.id])
                         for zz in engine.zones if zz.id in snapshot_k
                     )
-                    if not opposing_alive:
-                        log(k, "SWING_PAUSE", f"{'Swing low' if not control_bull else 'Swing high'} confirms, no opposing POI alive -> NONE", None)
+                    if not opposing_in_control:
+                        log(k, "SWING_PAUSE", f"{'Swing low' if not control_bull else 'Swing high'} confirms, no opposing POI in control -> NONE", None)
                         paused_bull = control_bull
                         control = "NONE"
                         control_bull = False
