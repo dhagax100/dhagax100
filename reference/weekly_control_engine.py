@@ -350,24 +350,53 @@ def run(args: argparse.Namespace) -> int:
                 pauses_sell = kind_ == "swing_low"
                 pauses_buy = kind_ == "swing_high"
                 if control == "SELL_ONLY" and pauses_sell or control == "BUY_ONLY" and pauses_buy:
-                    # "No opposing zone IN CONTROL" -- not merely alive/armed
-                    # on the chart. A zone only gains control by being
-                    # impacted (that's how checks 2-4 already work: BOTH
-                    # happens on an opposing IMPACT, not on an opposing zone
-                    # merely existing untouched). An armed-but-never-touched
-                    # opposing zone (state in 0,1,4, impact_time=None) does
-                    # not block this pause -- only a zone that has actually
-                    # been impacted (SPENT, state==3, not rejected) does.
-                    opposing_in_control = any(
-                        zz.bullish != control_bull and is_spent_state(*snapshot_k[zz.id])
-                        for zz in engine.zones if zz.id in snapshot_k
+                    # "No opposing zone IN CONTROL" is already what being in
+                    # a pure SELL_ONLY/BUY_ONLY state (as opposed to BOTH)
+                    # MEANS -- a zone only gains a concurrent claim to
+                    # control by being impacted, and check 2 (above) already
+                    # promotes control to BOTH the instant that happens. So
+                    # while control is still single-direction here, there is
+                    # by definition no live opposing control to check for;
+                    # an earlier version of this block re-checked it anyway
+                    # via is_spent_state (or, before that, is_alive_state),
+                    # which wrongly used a zone's OWN ever-impacted history --
+                    # a genuinely stale, long-dead zone (e.g. zone #1's BUY
+                    # campaign, spent and already zone-death'd back at week
+                    # 10) stayed "spent" forever and kept blocking this pause
+                    # for every later, unrelated campaign. Caught by testing
+                    # against gate 1->2 (week 21): the pause silently never
+                    # fired at all.
+                    log(k, "SWING_PAUSE", f"{'Swing low' if not control_bull else 'Swing high'} confirms, no opposing control -> NONE", None)
+                    paused_bull = control_bull
+                    control = "NONE"
+                    control_bull = False
+                    controlling_zone_id = None
+                elif control == "BOTH" and (pauses_sell or pauses_buy):
+                    # The same pause event while BOTH sides are concurrently
+                    # active doesn't drop to NONE -- it hands FULL control to
+                    # the side the swing did NOT pause (rules 2/3's stated
+                    # exception: "if we come to both... buying keeps the
+                    # control"). Only act if the opposing (surviving) side
+                    # actually has a spent zone to hand control to.
+                    # pauses_sell means a swing LOW paused the SELL side ->
+                    # BUY keeps/gains control (surviving_bull=True).
+                    # pauses_buy means a swing HIGH paused the BUY side ->
+                    # SELL keeps/gains control (surviving_bull=False).
+                    surviving_bull = True if pauses_sell else False
+                    survivor = next(
+                        (zz for zz in engine.zones
+                         if zz.bullish == surviving_bull and zz.id in snapshot_k and is_spent_state(*snapshot_k[zz.id])),
+                        None,
                     )
-                    if not opposing_in_control:
-                        log(k, "SWING_PAUSE", f"{'Swing low' if not control_bull else 'Swing high'} confirms, no opposing POI in control -> NONE", None)
-                        paused_bull = control_bull
-                        control = "NONE"
-                        control_bull = False
-                        controlling_zone_id = None
+                    if survivor is not None:
+                        control = "BUY_ONLY" if surviving_bull else "SELL_ONLY"
+                        control_bull = surviving_bull
+                        controlling_zone_id = survivor.id
+                        controlling_opp = None
+                        paused_bull = None
+                        log(k, "SWING_PAUSE_BOTH",
+                            f"{'Swing low' if pauses_sell else 'Swing high'} confirms while BOTH -> "
+                            f"opposing side keeps control ({control})", survivor.id)
                 elif control == "NONE" and paused_bull is False and kind_ == "swing_high":
                     # SELL was paused; a swing HIGH (opposite kind) resumes it.
                     control = "SELL_ONLY"
