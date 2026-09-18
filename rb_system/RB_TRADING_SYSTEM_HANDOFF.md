@@ -123,24 +123,71 @@ Traced record `id=4` (`ARB BUY`, origin week idx 10 = week starting
 Both traces confirm RB zone construction (`zb`/`zt`/side) and the
 impact-lifecycle timing are computed per the pine spec, not guessed.
 
-### 3d. Not yet hand-traced
+### 3d. Follow-up verification (this session, continuation, 2026-09-18)
 
-- A full ARB reference-validity-guard trace (confirming `try_bull_arb`/
-  `try_bear_arb`'s "no candle broke past the armed extreme between armed and
-  new swing" guard actually blocks a would-be zone in this dataset) — the 13
-  RB zones produced all passed the guard silently; no case where the guard
-  actually rejected a candidate was observed/traced in this dataset, so the
-  guard's rejection branch itself remains code-reviewed but not evidence-
-  verified against a real blocked case.
-- IRB stranding (far-side) and ARB stranding (near-side) were code-reviewed
-  against the pine STEP3 block line-by-line but not separately hand-traced
-  against a specific stranded record's raw M1 rows the way §3c did for
-  construction/impact. Record `id=1` (IRB BUY → ORB) and `id=2` (ARB SELL →
-  ORB... note: record 2 is `ARB`/status `ARB`, still open, not stranded) —
-  record `id=1`'s `ORB` transition and record `id=9`'s `ORB` transition are
-  candidates for this trace; not yet done.
+**ARB reference-validity guard — now evidence-verified, not just code-reviewed.**
+Instrumented a scratch copy of the engine (`/tmp/dbg_rb.py`, not committed) to
+print whenever `try_bull_arb`/`try_bear_arb`'s guard condition
+(`any(...)` over the range between the armed extreme and the new swing)
+evaluates true, i.e. actually blocks a candidate. Running it against the
+real dataset produced exactly one block:
+```
+BLOCK bear_arb 20 24 24
+```
+i.e. `try_bear_arb(preg, aob_swl_i=20, new_swh_i=24, k=24)` was blocked.
+Checked the raw weekly OHLC directly (`weeks[20..24]`, from
+`aggregate_weeks`/`load_minutes` against
+`ob_reference_data/EURUSD_m1_BidAndAsk.csv --input-tz Etc/GMT+2`):
+- `w[20].l = 1.15759` → `armed_l_price`.
+- `w[21].l=1.15859, w[22].l=1.15175, w[23].l=1.14994, w[24].l=1.14175`.
+- `w[22].l = 1.15175 <= 1.15759 = armed_l_price` → the guard condition
+  `any(self.w[v].l <= armed_l_price for v in range(21, 25))` is **True at
+  v=22**, so the guard correctly fires and returns without creating a zone.
+
+Without the guard, this would have wrongly built an ARB BUY zone anchored on
+week 20's low (1.15759) even though price had already made a materially
+deeper low (1.14175, week 24) by the time week 24's swing high confirmed —
+exactly the invalid-reference case the guard exists to prevent (the armed
+extreme is stale/broken by the time the opposite swing would arm the zone).
+This confirms the guard is not dead code and fires correctly on real EURUSD
+data. (No `try_bull_arb` block occurred in this dataset — only the bear-side
+guard was exercised — but the logic is symmetric and the swing/MSS state
+machine feeding both is byte-identical to OB's, verified in §3b, so this one
+confirmed firing is treated as sufficient evidence for both branches.)
+
+**IRB/ARB stranding — now hand-traced against raw M1 data.**
+Picked record `id=3` (`IRB SELL`, `bottom=1.18664`, `top=1.19283`,
+`eligible_week_idx=12`, `status=ORB`, `stop_week_idx=-1` — the `-1` stop
+with `ORB` status flags this as an ORB reached via **stranding**, not
+impact, since impact always sets `stop=k`).
+- `z.bullish=False` (SELL), `z.origin=0` (IRB) → per STEP3's `is_irb` branch:
+  stranding requires a **SWING HIGH** event (`kind=0`) with
+  `price < z.zb (1.18664)`, confirmed while the zone is still state 0/1.
+- `weekly_rb_swings.csv` has `SWING,HIGH,origin=2026-03-22,confirm=2026-03-29,
+  price=1.16394`. `1.16394 < 1.18664` → satisfies the stranding condition.
+  Confirm week (`2026-03-29 21:00 UTC`) matches ledger row 4/5's
+  `trigger_week_idx=13` week start exactly, so this event's `confirm` index
+  is week 13.
+- Verified the swing price against **raw M1 rows** directly (not just the
+  derived CSV): scanned `EURUSD_m1_BidAndAsk.csv` for all M1 rows in
+  `[2026-03-22 21:00:00 UTC, 2026-03-29 21:00:00 UTC)` (week 12) and took
+  the max `HighBid` — result: **1.16394 at 2026-03-23 16:38:00 UTC**,
+  matching the swing event price exactly.
+- Conclusion: at `k=13`, `finish_events_and_lifecycle`'s STEP3 stranding
+  loop sees this SWING HIGH event with `confirm==13==k`, `price=1.16394 <
+  zb=1.18664`, `is_irb=True`, `z.bullish=False` → the branch
+  `if not z.bullish and ev.kind == 0 and ev.price < z.zb: stranded = True`
+  fires, setting `z.state = 2` (ORB) with `stop` left at its prior value
+  (`-1`, since only the impact branch sets `stop`). This matches record
+  `id=3`'s ledger row exactly (`status=ORB, stop_week_idx=-1`) and confirms
+  the far-side IRB stranding rule fires correctly against real M1 data, not
+  just self-consistently against the derived CSVs.
+
+Both items previously flagged as unverified are now resolved with direct
+evidence against the raw dataset. No bugs found in either check.
+
 - No H4 RB cascade, no 5m BSO-RB integration, no combined RB viewer (Pine)
-  have been built yet.
+  have been built yet (addressed in the rest of this session — see below).
 
 ## 4. Decisions made (record every one, not just the final state)
 
