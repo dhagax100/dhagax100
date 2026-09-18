@@ -1207,3 +1207,46 @@ Gates 11 and 13 are each a single, standalone entry off a distinct Weekly zone i
 None of gates 9-14 have been run through the same 4H/5m entry-by-entry chart verification the 04-14 to 08-04 window got earlier -- the underlying transition minutes were each checked against the user's own chart screenshots as they were found (07-23 15:43 and 06-05 16:51 both directly confirmed), but the resulting box/entry renders for this extended window have not yet been walked candle-by-candle the way zone 3's original window was.
 
 **What changed from the previous session's plan**: the previous session ended with the `--manual-gates` window fixed at 04-14 to 08-04 (NONE, open-ended) as the extent of verified work, plus four systemic bug fixes (swing-low na-bug, OB re-arm, MSS placement -- later corrected back after a wrong mid-session "fix" -- and the same-bar-origin IFOB guard). This session extended the verified control-gate chain all the way to the edge of the dataset (09-11 22:05, now the final gate), revised the SELL-resume-from-NONE rule from "swing low taken out" to "swing high confirmed", established a new "first zone reaction from a plain NONE" mechanism, and applied the Weekly-close body-inside/through zone-death rule directly to the control-gate level for the first time (previously only used at H4-OB level). `build_manual_gates()` has now been updated with all 14 gates and regenerated/verified programmatically. Next concrete task for whoever continues this: run gates 9-14's boxes and entries through the same candle-by-candle chart verification the 04-14 to 08-04 window already got.
+
+## Session update — 2026-09-18 (concrete worked example of the phantom-candle issue, recorded for future reference)
+
+**User-verified example, to use as the base case when the weekend-gap/phantom-candle issue (flagged 2026-09-17, still unresolved) actually gets fixed.**
+
+**OB #249** (SELL IFOB, authorized, traded -- entry 249-1, 2026-07-06 21:09 Riyadh, SL, -1.00R):
+
+```
+origin_riyadh    = 2026-07-05 20:00:00   (the thin weekend-reopen candle itself)
+origin_open      = 1.14326
+origin_high      = 1.14440
+origin_low       = 1.14303
+origin_close     = 1.14379
+origin_m1_count    = 19     <- only 19 of 240 minutes have real data
+origin_m1_expected = 240
+trigger_riyadh   = 2026-07-05 23:39:00 @ 1.14325
+eligible_riyadh  = 2026-07-06 16:22:00 @ 1.14210
+impact_riyadh    = 2026-07-06 20:11:00
+control_at_impact = SELL_ONLY, parent_weekly_id = 3, authorized = True
+```
+
+**This OB's own origin candle is the exact phantom Sunday-reopen bar** flagged the session before (H4 bar #820, 2026-07-05 20:00-00:00 Riyadh) -- the one that doesn't exist on the real TradingView chart at all. `origin_m1_count=19` makes the partial-data nature explicit in the ledger itself: this candle's body (O=1.14326, H=1.14440, L=1.14303, C=1.14379) was built from only 19 real minutes out of the 240 a full H4 candle should have, all clustered right after the weekend reopen (ticks start 22:11 Riyadh that Sunday).
+
+**Neighboring real candles, for contrast** (all with full 240-minute coverage):
+
+| Candle (Riyadh) | O | H | L | C |
+|---|---|---|---|---|
+| 07-05 20:00 (the phantom one, OB #249's origin) | 1.14326 | 1.14440 | 1.14303 | 1.14379 |
+| 07-06 00:00 | 1.14379 | 1.14407 | 1.14319 | 1.14378 |
+| 07-06 04:00 | 1.14378 | 1.14384 | 1.14273 | 1.14324 |
+| 07-06 08:00 | 1.14324 | 1.14328 | 1.14148 | 1.14202 |
+
+**Why this matters as a worked example**: a real, authorized, actually-traded OB (#249, -1.00R) has its entire structural basis (zb/zt, trigger, eligibility) built on a candle that (a) doesn't exist on the real chart at all, and (b) even by this engine's own accounting, is missing over 92% of its expected 1-minute data (19 of 240). Once the phantom-candle policy decision gets made (drop the ticks / merge into Monday's bar / other), OB #249 is the concrete test case to check: does it survive, change shape, or disappear entirely under whatever fix gets chosen? Use this exact example (origin data above, real neighboring candles for contrast) to validate that fix before trusting it on anything else.
+
+## Session update — 2026-09-18 (why this session's control-gate rules aren't in the automated engine yet)
+
+User asked directly: why hasn't anything discovered/decided this session (or the session before) been folded back into `weekly_control_engine.py` itself, instead of living only in hand-verified prose and `build_manual_gates()`?
+
+**Honest answer, not an excuse**: the standing practice across this whole project (established explicitly by the user pushing back on rushing implementation in an earlier session -- "stop rushing and running everything at once") has been to verify a rule by hand, against raw facts and the real chart, BEFORE folding it into the automated engine. The reasoning at the time: the rules themselves kept changing as understanding deepened -- most concretely, the SELL-resume-from-NONE rule was itself REVERSED mid-session (from "swing low taken out" to "swing high confirmed"). Automating a rule that's still actively being revised means redoing engine work every time the model improves, and risks locking in a wrong rule inside code that's harder to audit than a hand-walked chart sequence.
+
+**That reasoning no longer justifies leaving it undone.** Gates 1-14 are now a settled, complete, user-confirmed sequence covering the full dataset. `weekly_control_engine.py` itself still only implements the ORIGINAL, incomplete rule set from before any of this session's or the previous session's findings -- none of the following exist in it: the body-close-inside/through zone-death rule, the swing-high-confirms resume rule, the first-zone-reaction-from-a-plain-NONE rule, or the corrected lookahead-free control loop needed to make any of this actually re-derivable by the automated engine instead of hand-maintained in `build_manual_gates()`.
+
+**Concrete follow-up, not yet started**: port gates 1-14's rules into `weekly_control_engine.py` itself, so the automated engine can independently reproduce this same 14-gate sequence from raw data, instead of the sequence only existing as a hardcoded table plus prose. This is real engineering work (the control loop's core logic needs the same care the lookahead-bug fix got), not a quick patch -- flagged here as the next concrete task, pending the user's go-ahead on when to start it.
