@@ -230,8 +230,8 @@ def run(args: argparse.Namespace) -> int:
     events: List[ControlEvent] = []
     weekly_rows = []
 
-    def log(k: int, kind: str, detail: str, zone_id: Optional[int]) -> None:
-        at = weeks[k].start
+    def log(k: int, kind: str, detail: str, zone_id: Optional[int], at_override: Optional[datetime] = None) -> None:
+        at = at_override if at_override is not None else weeks[k].start
         events.append(ControlEvent(k, at, kind, detail, zone_id, trend, control))
 
     for k in range(n):
@@ -302,11 +302,21 @@ def run(args: argparse.Namespace) -> int:
         # Built as a small sorted list of this week's real candidate
         # triggers, then walked in time order, each one acting on whatever
         # control state the PRIOR trigger in the same week left behind.
+        # Zone-death is checked AFTER the whole in-week trigger walk below
+        # (see the block right after this loop), not pre-built here as a
+        # dated candidate -- a zone that gets IMPACTED during this same week
+        # (setting controlling_zone_id partway through the loop) can also
+        # die to its own Weekly-close body rule in that identical week
+        # (gate 11->12: zone 9 impacted 07-30, dies at that week's own close
+        # 08-03). A pre-built candidate keyed off controlling_zone_id AS OF
+        # THE START of the week can never see that same-week zone -- it only
+        # ever checked whichever zone was already controlling BEFORE this
+        # week began, silently pushing the death one full week late. Since
+        # a Weekly close is always the last thing that can happen in a week
+        # (after any impact/swing time within it), checking once at the end,
+        # against whatever zone ends up controlling, is equivalent to -- and
+        # simpler than -- threading it through the sorted list.
         week_triggers: List[Tuple[datetime, str, object]] = []
-        if control in ("BUY_ONLY", "SELL_ONLY") and controlling_zone_id is not None:
-            z = next((zz for zz in engine.zones if zz.id == controlling_zone_id), None)
-            if z is not None and controlling_zone_id not in body_dead_ids and body_close_dead(z, weeks[k]):
-                week_triggers.append((weeks[k].end, "zone_death", z))
         for z in impacts_this_week:
             week_triggers.append((z.impact_time, "impact", z))
         if (0, k) in earliest_swing_at:
@@ -316,23 +326,14 @@ def run(args: argparse.Namespace) -> int:
         week_triggers.sort(key=lambda t: t[0])
 
         for at, kind_, payload in week_triggers:
-            if kind_ == "zone_death":
-                z = payload
-                if control in ("BUY_ONLY", "SELL_ONLY") and controlling_zone_id == z.id and z.id not in body_dead_ids:
-                    body_dead_ids.add(z.id)
-                    log(k, "ZONE_DEATH", f"Zone {z.id} (providing {control}) closes body inside/through its own box -> NONE", z.id)
-                    control = "NONE"
-                    control_bull = False
-                    controlling_zone_id = None
-                    paused_bull = None  # zone-death only resumes via a fresh impact, never a swing (gates 12->13)
-            elif kind_ == "impact":
+            if kind_ == "impact":
                 z = payload
                 if control == "NONE":
                     control = "BUY_ONLY" if z.bullish else "SELL_ONLY"
                     control_bull = z.bullish
                     controlling_zone_id = z.id
                     log_kind = "CAMPAIGN_START" if is_pro(z, trend_at[k]) else "CAMPAIGN_START_COUNTERTREND"
-                    log(k, log_kind, f"Zone {z.id} impacted (direction={'BUY' if z.bullish else 'SELL'}, trend={trend})", z.id)
+                    log(k, log_kind, f"Zone {z.id} impacted (direction={'BUY' if z.bullish else 'SELL'}, trend={trend})", z.id, at_override=at)
                 # An impact while already BUY_ONLY/SELL_ONLY/BOTH is handled
                 # by check 2 below (same-side: a new entry, no control
                 # change; opposite-side: opposing encounter), using
@@ -366,7 +367,7 @@ def run(args: argparse.Namespace) -> int:
                     # for every later, unrelated campaign. Caught by testing
                     # against gate 1->2 (week 21): the pause silently never
                     # fired at all.
-                    log(k, "SWING_PAUSE", f"{'Swing low' if not control_bull else 'Swing high'} confirms, no opposing control -> NONE", None)
+                    log(k, "SWING_PAUSE", f"{'Swing low' if not control_bull else 'Swing high'} confirms, no opposing control -> NONE", None, at_override=at)
                     paused_bull = control_bull
                     control = "NONE"
                     control_bull = False
@@ -396,19 +397,35 @@ def run(args: argparse.Namespace) -> int:
                         paused_bull = None
                         log(k, "SWING_PAUSE_BOTH",
                             f"{'Swing low' if pauses_sell else 'Swing high'} confirms while BOTH -> "
-                            f"opposing side keeps control ({control})", survivor.id)
+                            f"opposing side keeps control ({control})", survivor.id, at_override=at)
                 elif control == "NONE" and paused_bull is False and kind_ == "swing_high":
                     # SELL was paused; a swing HIGH (opposite kind) resumes it.
                     control = "SELL_ONLY"
                     control_bull = False
-                    log(k, "SWING_RESUME", "Swing high confirms -> SELL_ONLY", None)
+                    log(k, "SWING_RESUME", "Swing high confirms -> SELL_ONLY", None, at_override=at)
                     paused_bull = None
                 elif control == "NONE" and paused_bull is True and kind_ == "swing_low":
                     # BUY was paused; a swing LOW (opposite kind) resumes it.
                     control = "BUY_ONLY"
                     control_bull = True
-                    log(k, "SWING_RESUME", f"{'Swing high' if not paused_bull else 'Swing low'} confirms -> {control}", None)
+                    log(k, "SWING_RESUME", f"{'Swing high' if not paused_bull else 'Swing low'} confirms -> {control}", None, at_override=at)
                     paused_bull = None
+
+        # Zone-death (SPEC.md SS14), checked here -- after the in-week
+        # trigger walk above, against whoever ends up controlling by this
+        # point -- rather than pre-built into week_triggers keyed off who
+        # was controlling before the week started (see the comment above
+        # week_triggers's construction for why: a same-week impact must be
+        # able to die in that same week too).
+        if control in ("BUY_ONLY", "SELL_ONLY") and controlling_zone_id is not None:
+            z = next((zz for zz in engine.zones if zz.id == controlling_zone_id), None)
+            if z is not None and controlling_zone_id not in body_dead_ids and body_close_dead(z, weeks[k]):
+                body_dead_ids.add(z.id)
+                log(k, "ZONE_DEATH", f"Zone {z.id} (providing {control}) closes body inside/through its own box -> NONE", z.id, at_override=weeks[k].end)
+                control = "NONE"
+                control_bull = False
+                controlling_zone_id = None
+                paused_bull = None  # zone-death only resumes via a fresh impact, never a swing (gates 12->13)
 
         # 2) A zone opposite the CONTROLLING direction gets impacted. Only
         #    escalate to BOTH if the CURRENT controlling side still has a
