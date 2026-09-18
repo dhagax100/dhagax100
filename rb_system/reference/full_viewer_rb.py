@@ -43,12 +43,17 @@ import argparse
 import sys
 from datetime import timedelta, timezone
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "ob_reference"))
 import weekly_rb_generator as wrb  # noqa: E402  (verified RB engine, unmodified)
-import h4_rb_engine as h4rb        # noqa: E402  (reuses its aggregate_h4)
+import h4_rb_engine as h4rb        # noqa: E402  (reuses its aggregate_h4/load_control_by_week/permits)
+import weekly_ob_generator as wob  # noqa: E402  (only for aggregate_weeks -- same week grid weekly_control_engine_rb.py used)
+from five_bso_engine import (       # noqa: E402  (reused verbatim, POI-agnostic -- same as five_rb_bso_engine.py)
+    run_bso_chain, structural_invalid_at, aggregate_5m,
+)
 
 UTC = timezone.utc
 
@@ -64,6 +69,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--rb-cap", type=int, default=120, choices=range(1, 451))
     p.add_argument("--h4-rb-cap", type=int, default=200, choices=range(1, 451))
     p.add_argument("--table-cap", type=int, default=20, choices=range(1, 21))
+    p.add_argument("--bso-cap", type=int, default=200, choices=range(1, 451))
+    p.add_argument("--week-close-zone", default="America/New_York")
+    p.add_argument("--week-close-hour", type=int, default=17, choices=range(24))
+    p.add_argument("--control-ledger", default=None, help="path to weekly_control_ledger_rb.csv; default: alongside input CSV")
     p.add_argument("--out-dir", default=None)
     return p.parse_args()
 
@@ -250,6 +259,144 @@ def build_struct_block(prefix: str, engine, bars, label_cap: int, draw_flag_expr
     ]
 
 
+def arr_generic(kind: str, values: List[str]) -> str:
+    return f"array.from({', '.join(values)})" if values else f"array.new<{kind}>()"
+
+
+def build_bso_extra_lines_rb(bso_results: list, display_tz: ZoneInfo) -> List[str]:
+    """RB analog of `full_viewer.py`'s `build_bso_extra_lines` (~lines
+    440-580 there): entry/SL/TP lines, the fixed-R green/red boxes, and a
+    ledger table, on the 5m chart only (`onFive`). Reuses the SAME
+    `five_bso_engine.run_bso_chain`-produced `res` dict shape (RB's
+    `five_rb_bso_engine.py` imports that function unchanged, so its result
+    dicts have identical keys) -- only the column set is trimmed for RB:
+    there is no Weekly-OB-parent lineage concept for RB (five_rb_bso_engine.
+    py's own targets never carry a parent_weekly_id -- see its module
+    docstring), so that column is dropped rather than shown as a permanent
+    "-" placeholder; everything else (entry/SL/TP lines, R:R boxes, table
+    columns, toggle) mirrors the OB version's naming and structure exactly,
+    using `bso5...`/`inspectOne5mBSO`/`bso5FromLast`/group="5m BSO
+    inspection" for the same reason `h4_rb_engine.py` mirrors
+    `inspectOneH4OB`/`h4ObFromLast`'s naming for its own H4 toggle."""
+    n = len(bso_results)
+
+    def pt(t: Optional[object]) -> str:
+        return pine_time(t) if t is not None else "na"
+
+    def pf(v: Optional[float]) -> str:
+        return f"{v:.5f}" if v is not None else "na"
+
+    ids, sides, restings, entries, sls, tps, results, exits, excursions = ([] for _ in range(9))
+    blefts, brights, bys = [], [], []
+    clefts, crights, cys, ccols = [], [], [], []
+    gleft, gright, gtop, gbottom = [], [], [], []
+    rleft, rright, rtop, rbottom = [], [], [], []
+    for z, _it, _parent_id, _invalidation_reason, res in bso_results:
+        attempt_no = res.get("attempt")
+        ids.append(f"\"#{z.id}\"" if attempt_no in (None, 1) else f"\"#{z.id} (re-entry {attempt_no})\"")
+        sides.append(f"\"{'BUY' if z.bullish else 'SELL'}\"")
+        restings.append(f"\"{pine_text(wrb.display_iso(res.get('resting_at'), display_tz))}\"")
+        entry_t, entry_p = res.get("entry_time"), res.get("entry_price")
+        entry_txt = f"{wrb.display_iso(entry_t, display_tz)} @ {entry_p:.5f}" if entry_t is not None and entry_p is not None else "-"
+        entries.append(f"\"{pine_text(entry_txt)}\"")
+        sl_v, tp_v, risk_v = res.get("sl_price"), res.get("tp_price"), res.get("risk")
+        sl_txt = f"{risk_v / 0.0001:.1f}/{sl_v:.5f}" if sl_v is not None and risk_v is not None else ("-" if sl_v is None else f"{sl_v:.5f}")
+        sls.append(f"\"{sl_txt}\"")
+        tps.append(f"\"{tp_v:.5f}\"" if tp_v is not None else "\"-\"")
+        result_txt = res.get("result") or res.get("stage") or "?"
+        results.append(f"\"{pine_text(result_txt)}\"")
+        exit_t, exit_p = res.get("exit_time"), res.get("exit_price")
+        exit_txt = f"{wrb.display_iso(exit_t, display_tz)} @ {exit_p:.5f}" if exit_t is not None and exit_p is not None else "-"
+        exits.append(f"\"{pine_text(exit_txt)}\"")
+        mfe_v, mae_v = res.get("mfe"), res.get("mae")
+        excursion_txt = f"{mfe_v / 0.0001:.1f}/{mae_v / 0.0001:.1f}" if mfe_v is not None and mae_v is not None else "-"
+        excursions.append(f"\"{excursion_txt}\"")
+
+        cs, ep = res.get("candidate_since"), res.get("entry_price")
+        blefts.append(pt(cs) if cs is not None and entry_t is not None else "na")
+        brights.append(pt(entry_t) if cs is not None and entry_t is not None else "na")
+        bys.append(pf(ep) if cs is not None and entry_t is not None else "na")
+
+        result = res.get("result")
+        if result in ("SL", "TP") and entry_t is not None and exit_t is not None and exit_p is not None:
+            clefts.append(pt(entry_t)); crights.append(pt(exit_t)); cys.append(pf(exit_p))
+            ccols.append("color.red" if result == "SL" else "color.green")
+        else:
+            clefts.append("na"); crights.append("na"); cys.append("na"); ccols.append("na")
+
+        end_t = res.get("excursion_end_time")
+        if entry_t is not None and end_t is not None and tp_v is not None and sl_v is not None:
+            gleft.append(pt(entry_t)); gright.append(pt(end_t))
+            gtop.append(pf(max(entry_p, tp_v))); gbottom.append(pf(min(entry_p, tp_v)))
+            rleft.append(pt(entry_t)); rright.append(pt(end_t))
+            rtop.append(pf(max(entry_p, sl_v))); rbottom.append(pf(min(entry_p, sl_v)))
+        else:
+            gleft.append("na"); gright.append("na"); gtop.append("na"); gbottom.append("na")
+            rleft.append("na"); rright.append("na"); rtop.append("na"); rbottom.append("na")
+
+    return [
+        "bool inspectOne5mBSO = input.bool(false, \"Inspect one 5m BSO only\", group=\"5m BSO inspection\")",
+        f"int bso5FromLast = input.int(1, \"5m BSO from last\", minval=1, maxval={max(1, n)}, group=\"5m BSO inspection\", tooltip=\"1 = most recent 5m BSO attempt, 2 = the one before it, and so on.\")",
+        f"var table bso5Ledger = table.new(position.top_right, 9, {n + 1}, border_width=1)",
+        f"var array<string> bso5Id = {arr_generic('string', ids)}",
+        f"var array<string> bso5Side = {arr_generic('string', sides)}",
+        f"var array<string> bso5Resting = {arr_generic('string', restings)}",
+        f"var array<string> bso5Entry = {arr_generic('string', entries)}",
+        f"var array<string> bso5Sl = {arr_generic('string', sls)}",
+        f"var array<string> bso5Tp = {arr_generic('string', tps)}",
+        f"var array<string> bso5Result = {arr_generic('string', results)}",
+        f"var array<string> bso5Exit = {arr_generic('string', exits)}",
+        f"var array<string> bso5Excursion = {arr_generic('string', excursions)}",
+        "if barstate.islast",
+        "    if onFive",
+        f"        array<int> bso5BLeft = {arr_generic('int', blefts)}",
+        f"        array<int> bso5BRight = {arr_generic('int', brights)}",
+        f"        array<float> bso5BY = {arr_generic('float', bys)}",
+        f"        array<int> bso5CLeft = {arr_generic('int', clefts)}",
+        f"        array<int> bso5CRight = {arr_generic('int', crights)}",
+        f"        array<float> bso5CY = {arr_generic('float', cys)}",
+        f"        array<color> bso5CCol = {arr_generic('color', ccols)}",
+        f"        array<int> bso5GLeft = {arr_generic('int', gleft)}",
+        f"        array<int> bso5GRight = {arr_generic('int', gright)}",
+        f"        array<float> bso5GTop = {arr_generic('float', gtop)}",
+        f"        array<float> bso5GBottom = {arr_generic('float', gbottom)}",
+        f"        array<int> bso5RLeft = {arr_generic('int', rleft)}",
+        f"        array<int> bso5RRight = {arr_generic('int', rright)}",
+        f"        array<float> bso5RTop = {arr_generic('float', rtop)}",
+        f"        array<float> bso5RBottom = {arr_generic('float', rbottom)}",
+        "        table.cell(bso5Ledger, 0, 0, \"RB\", text_color=color.white, bgcolor=color.new(color.purple,15))",
+        "        table.cell(bso5Ledger, 1, 0, \"Side\", text_color=color.white, bgcolor=color.new(color.purple,15))",
+        "        table.cell(bso5Ledger, 2, 0, \"Resting (RYD)\", text_color=color.white, bgcolor=color.new(color.purple,15))",
+        "        table.cell(bso5Ledger, 3, 0, \"Entry (RYD / px)\", text_color=color.white, bgcolor=color.new(color.purple,15))",
+        "        table.cell(bso5Ledger, 4, 0, \"SL\", text_color=color.white, bgcolor=color.new(color.purple,15))",
+        "        table.cell(bso5Ledger, 5, 0, \"TP\", text_color=color.white, bgcolor=color.new(color.purple,15))",
+        "        table.cell(bso5Ledger, 6, 0, \"Result\", text_color=color.white, bgcolor=color.new(color.purple,15))",
+        "        table.cell(bso5Ledger, 7, 0, \"Exit (RYD / px)\", text_color=color.white, bgcolor=color.new(color.purple,15))",
+        "        table.cell(bso5Ledger, 8, 0, \"MFE/MAE (pips)\", text_color=color.white, bgcolor=color.new(color.purple,15))",
+        "        for i = 0 to array.size(bso5Id) - 1",
+        "            bRank = array.size(bso5Id) - i",
+        "            if not inspectOne5mBSO or bRank == bso5FromLast",
+        "                bRow = inspectOne5mBSO ? 1 : i + 1",
+        "                table.cell(bso5Ledger, 0, bRow, array.get(bso5Id, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(bso5Ledger, 1, bRow, array.get(bso5Side, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(bso5Ledger, 2, bRow, array.get(bso5Resting, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(bso5Ledger, 3, bRow, array.get(bso5Entry, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(bso5Ledger, 4, bRow, array.get(bso5Sl, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(bso5Ledger, 5, bRow, array.get(bso5Tp, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(bso5Ledger, 6, bRow, array.get(bso5Result, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(bso5Ledger, 7, bRow, array.get(bso5Exit, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(bso5Ledger, 8, bRow, array.get(bso5Excursion, i), text_color=color.black, bgcolor=na)",
+        "                if not na(array.get(bso5BLeft, i))",
+        "                    line.new(array.get(bso5BLeft, i), array.get(bso5BY, i), array.get(bso5BRight, i), array.get(bso5BY, i), xloc=xloc.bar_time, extend=extend.none, color=color.blue, width=2)",
+        "                if not na(array.get(bso5CLeft, i))",
+        "                    line.new(array.get(bso5CLeft, i), array.get(bso5CY, i), array.get(bso5CRight, i), array.get(bso5CY, i), xloc=xloc.bar_time, extend=extend.none, color=array.get(bso5CCol, i), width=2)",
+        "                if not na(array.get(bso5GLeft, i))",
+        "                    box.new(array.get(bso5GLeft, i), array.get(bso5GTop, i), array.get(bso5GRight, i), array.get(bso5GBottom, i), border_color=color.green, bgcolor=color.new(color.green, 80), xloc=xloc.bar_time)",
+        "                if not na(array.get(bso5RLeft, i))",
+        "                    box.new(array.get(bso5RLeft, i), array.get(bso5RTop, i), array.get(bso5RRight, i), array.get(bso5RBottom, i), border_color=color.red, bgcolor=color.new(color.red, 80), xloc=xloc.bar_time)",
+    ]
+
+
 def main() -> int:
     args = parse_args()
     csv_path = Path(args.csv_file)
@@ -259,6 +406,7 @@ def main() -> int:
     minutes, warnings = wrb.load_minutes(csv_path, input_tz, args.price_side)
     for w in warnings:
         print("WARNING:", w, file=sys.stderr)
+    mt = [m.t for m in minutes]
 
     weeks = wrb.aggregate_weeks(minutes, ZoneInfo("America/New_York"), 17)
     weekly_engine = wrb.WeeklyRBEngine(minutes, weeks)
@@ -268,6 +416,60 @@ def main() -> int:
     h4_engine = wrb.WeeklyRBEngine(minutes, h4_bars)
     h4_engine.run()
 
+    # Control gate for the H4 authorized flag shown in the H4 table -- same
+    # RB-native ledger h4_rb_engine.py/five_rb_bso_engine.py now use (see
+    # RB_TRADING_SYSTEM_HANDOFF.md; this used to read OB's control ledger,
+    # corrected here to match). Optional: if the ledger isn't present yet,
+    # every zone is simply treated as unauthorized rather than failing --
+    # this viewer's job is to draw zones, not to fail without the gate.
+    base = csv_path.resolve().parent
+    control_path = Path(args.control_ledger) if args.control_ledger else base / "weekly_control_ledger_rb.csv"
+    control_by_week = h4rb.load_control_by_week(control_path) if control_path.exists() else {}
+    close_tz = ZoneInfo(args.week_close_zone)
+    ctrl_weeks = wob.aggregate_weeks(minutes, close_tz, args.week_close_hour)
+    ctrl_week_starts = [w.start for w in ctrl_weeks]
+    from bisect import bisect_left as _bl
+
+    def control_at(t):
+        if t is None or not control_by_week:
+            return ""
+        idx = _bl(ctrl_week_starts, t)
+        if idx >= len(ctrl_week_starts) or ctrl_week_starts[idx] != t:
+            idx -= 1
+        idx = max(0, min(idx, len(ctrl_week_starts) - 1))
+        return control_by_week.get(idx, "NONE")
+
+    # 5m BSO targets: impacted, never-stranded-before-impact, control-
+    # authorized -- identical gate to five_rb_bso_engine.py's own main(),
+    # duplicated here (not imported) only because that module's main() is a
+    # script entrypoint, not an importable function; the underlying
+    # run_bso_chain/structural_invalid_at calls below are the SAME reused
+    # functions, so results match that engine's own ledger exactly.
+    targets = []
+    for z in h4_engine.rbs:
+        impacted = z.state == 3
+        if not impacted or z.impact_time is None:
+            continue
+        if z.pre_spent_state not in (0, 1):
+            continue
+        ctrl = control_at(z.impact_time)
+        if control_by_week and not h4rb.permits(ctrl, z.bullish):
+            continue
+        targets.append((z, z.impact_time, ""))
+
+    five_bars = aggregate_5m(minutes)
+    five_bar_starts = [b.start for b in five_bars]
+    five_engine = wrb.WeeklyRBEngine(minutes, five_bars)
+    five_engine.run()
+    h4_bar_starts = [b.start for b in h4_bars]
+
+    bso_results = []
+    for z, it, parent_id in targets[-args.bso_cap:]:
+        invalidated_at, invalidation_reason = structural_invalid_at(z, it, h4_bars, h4_bar_starts, h4_engine.events, minutes, mt)
+        attempts = run_bso_chain(z, it, five_bar_starts, five_engine.events, minutes, mt, invalidated_at)
+        for res in attempts:
+            bso_results.append((z, it, parent_id, invalidation_reason, res))
+
     right_edge = minutes[-1].t + timedelta(days=365)
     weekly_shown = weekly_engine.rbs[-args.rb_cap:]
     weekly_table = weekly_engine.rbs[-args.table_cap:][::-1]
@@ -276,7 +478,7 @@ def main() -> int:
 
     lines = [
         "//@version=6",
-        "indicator(\"FXCM RB - Python Reference (Weekly + H4)\", overlay=true, max_labels_count=500, max_boxes_count=500, max_lines_count=500)",
+        "indicator(\"FXCM RB - Python Reference (Weekly + H4 + 5m BSO)\", overlay=true, max_labels_count=500, max_boxes_count=500, max_lines_count=500)",
         "// GENERATED FROM 1-MINUTE FXCM BID DATA. RB zones/lifecycle follow",
         "// RB_Indicator_v1.pine's addRBFromSwing/tryBullARB/tryBearARB/STEP2/STEP3",
         "// verbatim (weekly_rb_generator.py / h4_rb_engine.py). Drawing convention",
@@ -284,21 +486,31 @@ def main() -> int:
         "// blue(bull)/black(bear) by raw wick; ARB green; ORB red, hidden on H4/5m",
         "// (only ever drawn on the Weekly chart here) -- flagged in that same header",
         "// comment as a convention to double-check for RB, not silently changed here.",
-        "// Weekly chart: Weekly RB zones + swing/MSS labels + table. H4 chart: H4 RB",
-        "// zones + table. 5m chart: H4 RB boxes only (no table). Every other",
-        "// timeframe draws nothing.",
+        "// Weekly chart: Weekly RB zones + swing/MSS labels + table (+ 'Inspect one",
+        "// RB only' toggle). H4 chart: H4 RB zones + table (+ 'Inspect one 4H RB",
+        "// only' toggle). 5m chart: H4 RB boxes (no table) + the 5m BSO",
+        "// entry/SL/TP lines, R:R boxes, and ledger table (+ 'Inspect one 5m BSO",
+        "// only' toggle). Every other timeframe draws nothing. All table times are",
+        "// Riyadh, labeled (RYD).",
         "float lowGap = ta.atr(14) * 0.08",
         "bool onWeekly = timeframe.period == \"1W\"",
         "bool onH4 = timeframe.period == \"240\"",
         "bool onFive = timeframe.period == \"5\"",
+        "bool inspectOneRB = input.bool(false, \"Inspect one RB only\", group=\"Weekly RB inspection\")",
+        f"int rbFromLast = input.int(1, \"RB from last\", minval=1, maxval={max(1, len(weekly_shown))}, group=\"Weekly RB inspection\")",
+        "bool inspectOneH4RB = input.bool(false, \"Inspect one 4H RB only\", group=\"H4 RB inspection\")",
+        f"int h4RbFromLast = input.int(1, \"4H RB from last\", minval=1, maxval={max(1, len(h4_shown))}, group=\"H4 RB inspection\")",
     ]
 
     lines += build_struct_block("w", weekly_engine, weeks, args.label_cap, "onWeekly")
     lines += build_rb_block("w", weekly_engine, weeks, weekly_shown, weekly_table, display_tz,
-                             draw_flag_expr="onWeekly", hide_orb=False, right_edge=right_edge, with_table=True)
+                             draw_flag_expr="onWeekly", hide_orb=False, right_edge=right_edge, with_table=True,
+                             inspect_flag_expr="inspectOneRB", from_last_expr="rbFromLast", draw_impact_line=True)
     lines += build_rb_block("h4", h4_engine, h4_bars, h4_shown, h4_table, display_tz,
                              draw_flag_expr="onH4 or onFive", hide_orb=True, right_edge=right_edge,
-                             with_table=True, table_flag_expr="onH4")
+                             with_table=True, table_flag_expr="onH4",
+                             inspect_flag_expr="inspectOneH4RB", from_last_expr="h4RbFromLast", draw_impact_line=True)
+    lines += build_bso_extra_lines_rb(bso_results, display_tz)
 
     out_dir = Path(args.out_dir) if args.out_dir else Path(__file__).resolve().parent.parent / "data"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -307,6 +519,7 @@ def main() -> int:
     print("Created: full_viewer_rb.pine")
     print(f"Weekly RB zones: {len(weekly_engine.rbs)} ({len(weekly_shown)} shown)")
     print(f"H4 RB zones: {len(h4_engine.rbs)} ({len(h4_shown)} shown, ORB hidden on H4/5m)")
+    print(f"5m BSO targets: {len(targets)}, attempts drawn: {len(bso_results)}")
     return 0
 
 
