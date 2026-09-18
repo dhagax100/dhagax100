@@ -1,0 +1,26 @@
+RB-NATIVE WEEKLY DIRECTION-CONTROL STATE MACHINE
+
+Rule-for-rule port of weekly_control_engine.py, driven on RB's own
+IRB/ARB/ORB/SPENT zone/event timeline instead of OB's. See the module
+docstring in weekly_control_engine_rb.py for the full substitution
+reasoning (rejected flag, is_alive/is_spent, body_close_dead).
+
+SUBSTITUTIONS MADE (verify against RB_Indicator_v1.pine):
+1. `rejected` -- RB has no such field; hardwired absent (RbZone has
+   no rejected attribute at all).
+2. is_alive_state: state in (0,1) [IRB/ARB] -- RB's state family has
+   no 3rd alive type (no AIFOB-equivalent promotion).
+3. is_spent_state: state == 3 [SPENT], trivial once rejected is gone.
+4. body_close_dead -- NOT PORTED. RB_Indicator_v1.pine's header says
+   in so many words: wick IMPACT + STRANDING only, no close-through
+   rule. There is no RB fact this could substitute with (once
+   SPENT, RB's own lifecycle never revisits a zone again). The
+   single-side ZONE_DEATH transition this enables in OB's control
+   engine is simply absent here; single-side control only changes
+   via swing-pause/resume or opposing-impact escalation.
+5. newly_oob_ids -- RB's stranding-to-ORB (state 2) is the direct
+   analog of OB's stranding-to-OOB (state 2); used unchanged for
+   OPPOSING_LOSES_CONTROL.
+
+Weeks processed: 37
+Control-relevant events: 27
