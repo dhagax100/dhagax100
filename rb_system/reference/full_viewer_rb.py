@@ -182,6 +182,7 @@ def build_rb_block(prefix: str, engine, bars, shown, table_zones, display_tz: Zo
             f"var array<color> {prefix}TBg = {arr('color', t_bg)}",
         ]
         header = ["RB", "Type", "Side", "Bottom", "Top", "Origin (RYD)", "Trigger (RYD)", "Eligible (RYD)", "Impact (RYD)"]
+        lines.append("if barstate.islast")
         lines.append(f"    if {table_flag_expr}")
         for col, h in enumerate(header):
             lines.append(f"        table.cell({prefix}Ledger, {col}, 0, \"{h}\", text_color=color.white, bgcolor=color.new(color.green,15))")
