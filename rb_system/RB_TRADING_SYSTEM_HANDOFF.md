@@ -369,6 +369,75 @@ on OB zones, as expected from the POI-agnostic finding above.
 Files added: `rb_system/reference/five_rb_bso_engine.py`,
 `rb_system/data/five_rb_bso_ledger.csv`.
 
+## 5d. `weekly_control_engine.py` reuse question -- answered (this session)
+
+Already answered in full in §5b: `weekly_control_engine.py` is NOT
+reusable as-is for RB, and there is no RB analog to build in its place.
+It is built entirely on OB-specific facts (the `rejected`-vs-OOB
+distinction, the AOB/IFOB/AIFOB state family, a Weekly-close body-death
+rule discovered specifically for OB) and its own SPEC.md SS9-16, none of
+which exist in `RB_Indicator_v1.pine` (confirmed by a full grep -- zero
+mentions of control/permission/weekly-gating anywhere in that file). No
+new module was built for this; `h4_rb_engine.py` and `five_rb_bso_engine.py`
+both simply skip the gating step entirely, using their own zone-lifecycle
+status instead (impacted + never-ORB-before-impact).
+
+## 5e. Combined RB Pine viewer (this session, continuation, 2026-09-18)
+
+Built `rb_system/reference/full_viewer_rb.py`, an RB analog of
+`ob_reference/full_viewer.py`, deliberately smaller in scope since RB has
+no control layer and the task only asked for the RB-equivalent drawing,
+not a BSO-lines layer (that already has its own ledger from §5c). It
+draws:
+- Weekly RB zones + swing/MSS labels + a ledger table, on the Weekly chart
+  (`onWeekly`, reusing `WeeklyRBEngine` unchanged, same swing/MSS output
+  already verified in §3b/§5b).
+- H4 RB zones + a ledger table, on the H4 chart (`onH4`), and the SAME H4
+  boxes (no table) also on the 5m chart (`onFive`) -- matching
+  `full_viewer.py`'s own cross-timeframe convention for its H4 OB layer.
+
+Drawing convention, taken verbatim from `RB_Indicator_v1.pine`'s header
+(lines 26-33, the only RB drawing-rule source per this project's
+discipline): dashed border (`border_style=line.style_dashed`), hollow
+(`bgcolor=na`); IRB = blue(bull)/black(bear) by the zone's own raw-wick
+`bullish` field (unaffected by which hunt fired it -- confirmed this is
+already the raw-wick label, not the trigger-hunt label, by re-reading
+`weekly_rb_generator.py`'s own `add_rb_from_swing`/`consume_break`/
+`try_bull_arb`/`try_bear_arb` -- `bullish` is set once at zone creation
+from the swing-pivot's wick type and never touched again); ARB = green,
+fixed; ORB = red, fixed, and skipped entirely on the H4 and 5m draw layers
+(`hide_orb=True` there) -- only ever drawn on the Weekly chart. Carried
+this "hidden on lower timeframes" rule over from the pine file's own text
+("hidden on 5m/1h/4h like OOB/OFVG ... flag if RB shouldn't follow that
+convention") WITHOUT silently altering it, per that comment's own explicit
+instruction to flag rather than assume -- flagging it here as inherited,
+not independently re-derived or verified against a real chart. There is
+no native 1h engine in this Python reference for either OB or RB, so the
+"hidden on ... 1h" part of that sentence has no layer to apply to yet.
+
+**Real bug found and fixed while building this**: an f-string used inside
+a Python list comprehension containing an escaped `\"` triggered
+`SyntaxError: f-string expression part cannot include a backslash`
+(Python's f-string grammar disallows a backslash inside the expression
+part, only inside the literal text) -- fixed by removing the redundant
+re-quoting entirely (the source strings were already correctly quoted).
+
+**What this has NOT been checked against**: unlike the earlier RB stages,
+this Pine file has not been pasted into TradingView and chart-verified --
+the task's remaining time did not cover that step. Its array-packed
+runtime-draw-loop technique is copied directly from `weekly_ob_generator.
+write_ob_pine`/`full_viewer.py`'s H4 layer, both of which were themselves
+only made statement-limit-safe after real TradingView failures (CE10205/
+CE10295, documented in the OB handoff) forced that redesign -- this file
+reuses that already-proven structure rather than the original naive
+one-statement-per-zone approach, but "reuses a proven pattern" is not the
+same as "has itself been pasted into Pine Editor and confirmed to compile
+and render correctly." Flagging this explicitly rather than claiming a
+verification that was not actually done.
+
+Files added: `rb_system/reference/full_viewer_rb.py`,
+`rb_system/data/full_viewer_rb.pine`.
+
 ## 6. Files
 
 - `rb_system/reference/weekly_rb_generator.py` — Weekly RB engine (this
@@ -384,16 +453,48 @@ Files added: `rb_system/reference/five_rb_bso_engine.py`,
   python3 weekly_rb_generator.py ../ob_reference_data/EURUSD_m1_BidAndAsk.csv --input-tz Etc/GMT+2
   ```
 
-## 7. State of the branch at end of this session
+## 7. State of the branch at end of this session (updated 2026-09-18, continuation)
 
 - Weekly RB engine: **built and hand-verified** per §3 (swing/MSS byte-match;
   2 RB records fully traced for construction+impact against raw weekly OHLC
-  and M1 rows).
-- H4 RB cascade, 5m BSO-RB, combined RB viewer: **not started** — stopping
-  here per the task's own instruction to stop at a clean, verified,
-  committed checkpoint rather than leave a half-built later layer unverified.
-- Next exact action for a continuing session: build `h4_rb_engine.py` by
-  reusing `WeeklyRBEngine` the same way `h4_ob_engine.py` reuses
-  `WeeklyOBEngine` (`origin_gap_window=None`, H4-bar aggregation in place of
-  Weekly), then hand-verify 2-3 H4 RB records the same way §3c did for
-  Weekly, before moving to 5m.
+  and M1 rows), PLUS §3d's follow-up: the ARB reference-validity guard and
+  IRB/ARB stranding are now BOTH evidence-verified against real data (no
+  longer just code-reviewed) -- one real guard block found and traced
+  (week 22 low breaking the armed low from week 20), one real stranding
+  found and traced (record `id=3`, swing high 1.16394 confirmed against
+  raw M1 data below its zone bottom).
+- H4 RB cascade: **built and hand-verified** (§5b) --
+  `rb_system/reference/h4_rb_engine.py`, byte-identical swing/MSS at H4
+  resolution, 3 records hand-traced against raw H4/M1 data. Resolved
+  ambiguity: no RB analog to OB's weekly-control gating exists, so the H4
+  RB ledger is intentionally ungated.
+- 5m BSO for RB: **built and hand-verified** (§5c) --
+  `rb_system/reference/five_rb_bso_engine.py`, reusing OB's
+  `run_bso`/`structural_invalid_at`/`run_bso_chain`/`ledger_row`/
+  `aggregate_5m` UNCHANGED (confirmed POI-agnostic by reading the code),
+  with only `main()`'s targeting rule replaced (impacted + never-stranded,
+  no control gate). 2 records hand-traced against raw M1 rows (exact entry
+  and SL-exit minute/price match).
+- `weekly_control_engine.py` reuse question: **answered** (§5d) -- not
+  reusable, no RB analog exists or was built; both H4/5m RB engines above
+  simply skip that gating step.
+- Combined RB Pine viewer: **built** (§5e) --
+  `rb_system/reference/full_viewer_rb.py` /
+  `rb_system/data/full_viewer_rb.pine`. Drawing conventions taken verbatim
+  from `RB_Indicator_v1.pine`'s header. One real bug found and fixed while
+  building it (an f-string containing a backslash inside its expression
+  part -- Python syntax error, fixed by removing redundant re-quoting).
+  **Not yet chart-tested in TradingView** -- flagged explicitly in §5e as
+  the one remaining unverified piece of this session's work; the array-
+  packing technique it uses is copied from OB's own already
+  statement-limit-safe pattern, but that is not the same as confirming
+  this specific generated file compiles and renders in Pine Editor.
+- Every stage above has its own commit on `claude/practical-gauss-je3gsg`,
+  pushed incrementally (not one giant commit): `dcc2877` (guard/stranding
+  verification), `ae9c2f3` (H4 cascade), `d40ea19` (5m BSO), and the commit
+  containing this handoff update (viewer + final write-up).
+- No genuine unresolved ambiguity remains open from this continuation pass
+  beyond the one flagged above (viewer not chart-tested) -- every other
+  question the task asked ("does X need an RB variant or is it reusable
+  as-is") was answered by reading the actual code, with the reasoning
+  recorded in §5b/§5c/§5d, not assumed either way.

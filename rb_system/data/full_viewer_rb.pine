@@ -1,0 +1,567 @@
+//@version=6
+indicator("FXCM RB - Python Reference (Weekly + H4)", overlay=true, max_labels_count=500, max_boxes_count=500, max_lines_count=500)
+// GENERATED FROM 1-MINUTE FXCM BID DATA. RB zones/lifecycle follow
+// RB_Indicator_v1.pine's addRBFromSwing/tryBullARB/tryBearARB/STEP2/STEP3
+// verbatim (weekly_rb_generator.py / h4_rb_engine.py). Drawing convention
+// (from that pine file's own header): dashed hollow boxes; IRB
+// blue(bull)/black(bear) by raw wick; ARB green; ORB red, hidden on H4/5m
+// (only ever drawn on the Weekly chart here) -- flagged in that same header
+// comment as a convention to double-check for RB, not silently changed here.
+// Weekly chart: Weekly RB zones + swing/MSS labels + table. H4 chart: H4 RB
+// zones + table. 5m chart: H4 RB boxes only (no table). Every other
+// timeframe draws nothing.
+float lowGap = ta.atr(14) * 0.08
+bool onWeekly = timeframe.period == "1W"
+bool onH4 = timeframe.period == "240"
+bool onFive = timeframe.period == "5"
+var array<int> wStructX = array.from(timestamp("GMT+0", 2025, 12, 28, 22, 0), timestamp("GMT+0", 2026, 1, 25, 22, 0), timestamp("GMT+0", 2026, 2, 8, 22, 0), timestamp("GMT+0", 2026, 3, 22, 21, 0), timestamp("GMT+0", 2026, 4, 12, 21, 0), timestamp("GMT+0", 2026, 5, 3, 21, 0), timestamp("GMT+0", 2026, 5, 24, 21, 0), timestamp("GMT+0", 2026, 6, 14, 21, 0), timestamp("GMT+0", 2026, 7, 12, 21, 0), timestamp("GMT+0", 2026, 8, 16, 21, 0), timestamp("GMT+0", 2026, 1, 11, 22, 0), timestamp("GMT+0", 2026, 2, 1, 22, 0), timestamp("GMT+0", 2026, 3, 8, 21, 0), timestamp("GMT+0", 2026, 3, 29, 21, 0), timestamp("GMT+0", 2026, 4, 26, 21, 0), timestamp("GMT+0", 2026, 5, 17, 21, 0), timestamp("GMT+0", 2026, 6, 7, 21, 0), timestamp("GMT+0", 2026, 6, 21, 21, 0), timestamp("GMT+0", 2026, 7, 26, 21, 0), timestamp("GMT+0", 2026, 8, 30, 21, 0), timestamp("GMT+0", 2026, 2, 1, 22, 0), timestamp("GMT+0", 2026, 3, 22, 21, 0), timestamp("GMT+0", 2026, 4, 26, 21, 0), timestamp("GMT+0", 2026, 7, 12, 21, 0))
+var array<float> wStructY = array.from(1.17542, 1.20825, 1.19283, 1.16394, 1.18488, 1.17963, 1.16854, 1.16217, 1.14822, 1.17112, 1.15692, 1.17652, 1.14089, 1.14427, 1.16547, 1.15759, 1.14994, 1.13242, 1.13529, 1.15659, 1.17652, 1.16394, 1.16547, 1.14822)
+var array<string> wStructTxt = array.from("▲", "▲", "▲", "▲", "▲", "▲", "▲", "▲", "▲", "▲", "▼", "▼", "▼", "▼", "▼", "▼", "▼", "▼", "▼", "▼", "✕", "✕", "✕", "✕")
+var array<color> wStructCol = array.from(color.blue, color.blue, color.blue, color.blue, color.blue, color.blue, color.blue, color.blue, color.blue, color.blue, color.black, color.black, color.black, color.black, color.black, color.black, color.black, color.black, color.black, color.black, color.black, color.blue, color.black, color.blue)
+var array<bool> wStructLow = array.from(false, false, false, false, false, false, false, false, false, false, true, true, true, true, true, true, true, true, true, true, true, false, true, false)
+if barstate.islast
+    if onWeekly
+        for i = 0 to array.size(wStructX) - 1
+            sYY = array.get(wStructLow, i) ? array.get(wStructY, i) - lowGap : array.get(wStructY, i)
+            label.new(array.get(wStructX, i), sYY, array.get(wStructTxt, i), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=array.get(wStructCol, i), size=size.small)
+var array<int> wLeft = array.from(timestamp("GMT+0", 2026, 1, 11, 22, 0), timestamp("GMT+0", 2026, 1, 25, 22, 0), timestamp("GMT+0", 2026, 2, 8, 22, 0), timestamp("GMT+0", 2026, 3, 8, 21, 0), timestamp("GMT+0", 2026, 3, 29, 21, 0), timestamp("GMT+0", 2026, 4, 12, 21, 0), timestamp("GMT+0", 2026, 5, 3, 21, 0), timestamp("GMT+0", 2026, 5, 17, 21, 0), timestamp("GMT+0", 2026, 5, 24, 21, 0), timestamp("GMT+0", 2026, 6, 14, 21, 0), timestamp("GMT+0", 2026, 6, 21, 21, 0), timestamp("GMT+0", 2026, 7, 26, 21, 0), timestamp("GMT+0", 2026, 8, 16, 21, 0))
+var array<float> wTop = array.from(1.15731, 1.20825, 1.19283, 1.14123, 1.15054, 1.18488, 1.17963, 1.16014, 1.16854, 1.16217, 1.13820, 1.13689, 1.17112)
+var array<float> wBottom = array.from(1.15692, 1.18649, 1.18664, 1.14089, 1.14427, 1.17621, 1.17841, 1.15759, 1.16576, 1.15662, 1.13242, 1.13529, 1.16758)
+var array<color> wCol = array.from(color.red, color.green, color.red, color.green, color.red, color.green, color.red, color.green, color.red, color.red, color.green, color.red, color.green)
+var array<string> wLabel = array.from("#1 ORB BUY", "#2 ARB SELL", "#3 ORB SELL", "#4 ARB BUY", "#5 ORB BUY", "#6 ARB SELL", "#7 ORB SELL", "#8 ARB BUY", "#9 ORB SELL", "#10 ORB SELL", "#11 ARB BUY", "#12 ORB BUY", "#13 ARB SELL")
+var int wimpact_x_1 = na
+if time <= timestamp("GMT+0", 2026, 3, 3, 16, 25) and timestamp("GMT+0", 2026, 3, 3, 16, 25) < time_close
+    wimpact_x_1 := time
+var int wimpact_x_2 = na
+if time <= timestamp("GMT+0", 2026, 2, 9, 11, 1) and timestamp("GMT+0", 2026, 2, 9, 11, 1) < time_close
+    wimpact_x_2 := time
+var int wimpact_x_4 = na
+if time <= timestamp("GMT+0", 2026, 6, 23, 9, 43) and timestamp("GMT+0", 2026, 6, 23, 9, 43) < time_close
+    wimpact_x_4 := time
+var int wimpact_x_5 = na
+if time <= timestamp("GMT+0", 2026, 6, 8, 11, 12) and timestamp("GMT+0", 2026, 6, 8, 11, 12) < time_close
+    wimpact_x_5 := time
+var int wimpact_x_6 = na
+if time <= timestamp("GMT+0", 2026, 5, 6, 10, 51) and timestamp("GMT+0", 2026, 5, 6, 10, 51) < time_close
+    wimpact_x_6 := time
+var int wimpact_x_8 = na
+if time <= timestamp("GMT+0", 2026, 6, 3, 14, 33) and timestamp("GMT+0", 2026, 6, 3, 14, 33) < time_close
+    wimpact_x_8 := time
+var int wimpact_x_9 = na
+if time <= timestamp("GMT+0", 2026, 8, 19, 15, 31) and timestamp("GMT+0", 2026, 8, 19, 15, 31) < time_close
+    wimpact_x_9 := time
+var int wimpact_x_10 = na
+if time <= timestamp("GMT+0", 2026, 8, 7, 14, 30) and timestamp("GMT+0", 2026, 8, 7, 14, 30) < time_close
+    wimpact_x_10 := time
+var int wimpact_x_11 = na
+if time <= timestamp("GMT+0", 2026, 7, 23, 14, 24) and timestamp("GMT+0", 2026, 7, 23, 14, 24) < time_close
+    wimpact_x_11 := time
+if barstate.islast
+    if onWeekly
+        array<int> wRight = array.from((na(wimpact_x_1) ? timestamp("GMT+0", 2026, 3, 3, 16, 25) : wimpact_x_1), (na(wimpact_x_2) ? timestamp("GMT+0", 2026, 2, 9, 11, 1) : wimpact_x_2), timestamp("GMT+0", 2027, 9, 11, 21, 5), (na(wimpact_x_4) ? timestamp("GMT+0", 2026, 6, 23, 9, 43) : wimpact_x_4), (na(wimpact_x_5) ? timestamp("GMT+0", 2026, 6, 8, 11, 12) : wimpact_x_5), (na(wimpact_x_6) ? timestamp("GMT+0", 2026, 5, 6, 10, 51) : wimpact_x_6), timestamp("GMT+0", 2027, 9, 11, 21, 5), (na(wimpact_x_8) ? timestamp("GMT+0", 2026, 6, 3, 14, 33) : wimpact_x_8), (na(wimpact_x_9) ? timestamp("GMT+0", 2026, 8, 19, 15, 31) : wimpact_x_9), (na(wimpact_x_10) ? timestamp("GMT+0", 2026, 8, 7, 14, 30) : wimpact_x_10), (na(wimpact_x_11) ? timestamp("GMT+0", 2026, 7, 23, 14, 24) : wimpact_x_11), timestamp("GMT+0", 2027, 9, 11, 21, 5), timestamp("GMT+0", 2027, 9, 11, 21, 5))
+        for i = 0 to array.size(wLeft) - 1
+            rCol = array.get(wCol, i)
+            box.new(array.get(wLeft, i), array.get(wTop, i), array.get(wRight, i), array.get(wBottom, i), border_color=rCol, border_width=1, border_style=line.style_dashed, bgcolor=na, xloc=xloc.bar_time)
+            label.new(array.get(wLeft, i), array.get(wTop, i), array.get(wLabel, i), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_down, color=color.new(rCol,85), textcolor=rCol, size=size.tiny)
+var table wLedger = table.new(position.top_right, 9, 14, border_width=1)
+var array<string> wTId = array.from("#13", "#12", "#11", "#10", "#9", "#8", "#7", "#6", "#5", "#4", "#3", "#2", "#1")
+var array<string> wTType = array.from("ARB", "ORB", "ARB", "ORB", "ORB", "ARB", "ORB", "ARB", "ORB", "ARB", "ORB", "ARB", "ORB")
+var array<string> wTSide = array.from("SELL", "BUY", "BUY", "SELL", "SELL", "BUY", "SELL", "SELL", "BUY", "BUY", "SELL", "SELL", "BUY")
+var array<string> wTBottom = array.from("1.16758", "1.13529", "1.13242", "1.15662", "1.16576", "1.15759", "1.17841", "1.17621", "1.14427", "1.14089", "1.18664", "1.18649", "1.15692")
+var array<string> wTTop = array.from("1.17112", "1.13689", "1.13820", "1.16217", "1.16854", "1.16014", "1.17963", "1.18488", "1.15054", "1.14123", "1.19283", "1.20825", "1.15731")
+var array<string> wTOrigin = array.from("2026-08-17 00:00:00", "2026-07-27 00:00:00", "2026-06-22 00:00:00", "2026-06-15 00:00:00", "2026-05-25 00:00:00", "2026-05-18 00:00:00", "2026-05-04 00:00:00", "2026-04-13 00:00:00", "2026-03-30 00:00:00", "2026-03-09 00:00:00", "2026-02-09 01:00:00", "2026-01-26 01:00:00", "2026-01-12 01:00:00")
+var array<string> wTTrigger = array.from("2026-09-07 00:00:00", "2026-07-27 00:00:00", "2026-07-20 00:00:00", "2026-06-15 00:00:00", "2026-06-01 00:00:00", "2026-06-01 00:00:00", "2026-05-11 00:00:00", "2026-05-04 00:00:00", "2026-04-06 00:00:00", "2026-03-30 00:00:00", "2026-02-16 01:00:00", "2026-02-09 01:00:00", "2026-01-19 01:00:00")
+var array<string> wTEligible = array.from("2026-09-07 00:00:00", "2026-08-31 02:04:00", "2026-07-20 00:00:00", "2026-07-14 17:30:00", "2026-06-15 02:29:00", "2026-06-01 00:00:00", "2026-05-29 19:51:00", "2026-05-04 00:00:00", "2026-04-29 23:37:00", "2026-03-30 00:00:00", "2026-03-23 16:06:00", "2026-02-09 01:00:00", "2026-02-02 18:03:00")
+var array<string> wTImpact = array.from("", "", "2026-07-23 17:24:00", "2026-08-07 17:30:00", "2026-08-19 18:31:00", "2026-06-03 17:33:00", "", "2026-05-06 13:51:00", "2026-06-08 14:12:00", "2026-06-23 12:43:00", "", "2026-02-09 14:01:00", "2026-03-03 19:25:00")
+var array<color> wTBg = array.from(color.new(color.green, 80), color.new(color.red, 80), color.new(color.green, 80), color.new(color.red, 80), color.new(color.red, 80), color.new(color.green, 80), color.new(color.red, 80), color.new(color.green, 80), color.new(color.red, 80), color.new(color.green, 80), color.new(color.red, 80), color.new(color.green, 80), color.new(color.red, 80))
+    if onWeekly
+        table.cell(wLedger, 0, 0, "RB", text_color=color.white, bgcolor=color.new(color.green,15))
+        table.cell(wLedger, 1, 0, "Type", text_color=color.white, bgcolor=color.new(color.green,15))
+        table.cell(wLedger, 2, 0, "Side", text_color=color.white, bgcolor=color.new(color.green,15))
+        table.cell(wLedger, 3, 0, "Bottom", text_color=color.white, bgcolor=color.new(color.green,15))
+        table.cell(wLedger, 4, 0, "Top", text_color=color.white, bgcolor=color.new(color.green,15))
+        table.cell(wLedger, 5, 0, "Origin (RYD)", text_color=color.white, bgcolor=color.new(color.green,15))
+        table.cell(wLedger, 6, 0, "Trigger (RYD)", text_color=color.white, bgcolor=color.new(color.green,15))
+        table.cell(wLedger, 7, 0, "Eligible (RYD)", text_color=color.white, bgcolor=color.new(color.green,15))
+        table.cell(wLedger, 8, 0, "Impact (RYD)", text_color=color.white, bgcolor=color.new(color.green,15))
+        for i = 0 to array.size(wTId) - 1
+            row = i + 1
+            table.cell(wLedger, 0, row, array.get(wTId, i), text_color=color.black, bgcolor=array.get(wTBg, i))
+            table.cell(wLedger, 1, row, array.get(wTType, i), text_color=color.black, bgcolor=na)
+            table.cell(wLedger, 2, row, array.get(wTSide, i), text_color=color.black, bgcolor=na)
+            table.cell(wLedger, 3, row, array.get(wTBottom, i), text_color=color.black, bgcolor=na)
+            table.cell(wLedger, 4, row, array.get(wTTop, i), text_color=color.black, bgcolor=na)
+            table.cell(wLedger, 5, row, array.get(wTOrigin, i), text_color=color.black, bgcolor=na)
+            table.cell(wLedger, 6, row, array.get(wTTrigger, i), text_color=color.black, bgcolor=na)
+            table.cell(wLedger, 7, row, array.get(wTEligible, i), text_color=color.black, bgcolor=na)
+            table.cell(wLedger, 8, row, array.get(wTImpact, i), text_color=color.black, bgcolor=na)
+var array<int> h4Left = array.from(timestamp("GMT+0", 2026, 5, 1, 5, 0), timestamp("GMT+0", 2026, 5, 1, 21, 0), timestamp("GMT+0", 2026, 5, 5, 5, 0), timestamp("GMT+0", 2026, 5, 6, 9, 0), timestamp("GMT+0", 2026, 5, 7, 1, 0), timestamp("GMT+0", 2026, 5, 7, 5, 0), timestamp("GMT+0", 2026, 5, 7, 9, 0), timestamp("GMT+0", 2026, 5, 10, 21, 0), timestamp("GMT+0", 2026, 5, 10, 21, 0), timestamp("GMT+0", 2026, 5, 11, 13, 0), timestamp("GMT+0", 2026, 5, 12, 17, 0), timestamp("GMT+0", 2026, 5, 13, 9, 0), timestamp("GMT+0", 2026, 5, 14, 5, 0), timestamp("GMT+0", 2026, 5, 15, 9, 0), timestamp("GMT+0", 2026, 5, 15, 9, 0), timestamp("GMT+0", 2026, 5, 18, 1, 0), timestamp("GMT+0", 2026, 5, 20, 1, 0), timestamp("GMT+0", 2026, 5, 20, 13, 0), timestamp("GMT+0", 2026, 5, 20, 17, 0), timestamp("GMT+0", 2026, 5, 21, 9, 0), timestamp("GMT+0", 2026, 5, 21, 13, 0), timestamp("GMT+0", 2026, 5, 21, 13, 0), timestamp("GMT+0", 2026, 5, 22, 13, 0), timestamp("GMT+0", 2026, 5, 25, 9, 0), timestamp("GMT+0", 2026, 5, 25, 1, 0), timestamp("GMT+0", 2026, 5, 25, 13, 0), timestamp("GMT+0", 2026, 5, 26, 9, 0), timestamp("GMT+0", 2026, 5, 26, 9, 0), timestamp("GMT+0", 2026, 5, 26, 17, 0), timestamp("GMT+0", 2026, 5, 27, 9, 0), timestamp("GMT+0", 2026, 5, 27, 5, 0), timestamp("GMT+0", 2026, 5, 27, 13, 0), timestamp("GMT+0", 2026, 5, 28, 5, 0), timestamp("GMT+0", 2026, 5, 28, 17, 0), timestamp("GMT+0", 2026, 5, 29, 1, 0), timestamp("GMT+0", 2026, 5, 29, 9, 0), timestamp("GMT+0", 2026, 5, 29, 17, 0), timestamp("GMT+0", 2026, 6, 1, 13, 0), timestamp("GMT+0", 2026, 6, 3, 21, 0), timestamp("GMT+0", 2026, 6, 4, 9, 0), timestamp("GMT+0", 2026, 6, 4, 13, 0), timestamp("GMT+0", 2026, 6, 8, 5, 0), timestamp("GMT+0", 2026, 6, 7, 21, 0), timestamp("GMT+0", 2026, 6, 8, 13, 0), timestamp("GMT+0", 2026, 6, 9, 1, 0), timestamp("GMT+0", 2026, 6, 9, 13, 0), timestamp("GMT+0", 2026, 6, 9, 13, 0), timestamp("GMT+0", 2026, 6, 10, 13, 0), timestamp("GMT+0", 2026, 6, 10, 13, 0), timestamp("GMT+0", 2026, 6, 11, 1, 0), timestamp("GMT+0", 2026, 6, 11, 1, 0), timestamp("GMT+0", 2026, 6, 11, 21, 0), timestamp("GMT+0", 2026, 6, 12, 9, 0), timestamp("GMT+0", 2026, 6, 15, 5, 0), timestamp("GMT+0", 2026, 6, 15, 13, 0), timestamp("GMT+0", 2026, 6, 16, 5, 0), timestamp("GMT+0", 2026, 6, 17, 21, 0), timestamp("GMT+0", 2026, 6, 19, 5, 0), timestamp("GMT+0", 2026, 6, 21, 21, 0), timestamp("GMT+0", 2026, 6, 23, 1, 0), timestamp("GMT+0", 2026, 6, 22, 21, 0), timestamp("GMT+0", 2026, 6, 23, 5, 0), timestamp("GMT+0", 2026, 6, 24, 13, 0), timestamp("GMT+0", 2026, 6, 25, 1, 0), timestamp("GMT+0", 2026, 6, 25, 9, 0), timestamp("GMT+0", 2026, 6, 25, 17, 0), timestamp("GMT+0", 2026, 6, 26, 13, 0), timestamp("GMT+0", 2026, 6, 26, 13, 0), timestamp("GMT+0", 2026, 6, 29, 5, 0), timestamp("GMT+0", 2026, 6, 29, 17, 0), timestamp("GMT+0", 2026, 6, 30, 5, 0), timestamp("GMT+0", 2026, 6, 30, 17, 0), timestamp("GMT+0", 2026, 6, 30, 17, 0), timestamp("GMT+0", 2026, 7, 1, 13, 0), timestamp("GMT+0", 2026, 7, 2, 13, 0), timestamp("GMT+0", 2026, 7, 3, 5, 0), timestamp("GMT+0", 2026, 7, 5, 21, 0), timestamp("GMT+0", 2026, 7, 7, 1, 0), timestamp("GMT+0", 2026, 7, 8, 9, 0), timestamp("GMT+0", 2026, 7, 9, 5, 0), timestamp("GMT+0", 2026, 7, 9, 13, 0), timestamp("GMT+0", 2026, 7, 9, 21, 0), timestamp("GMT+0", 2026, 7, 13, 1, 0), timestamp("GMT+0", 2026, 7, 13, 21, 0), timestamp("GMT+0", 2026, 7, 14, 13, 0), timestamp("GMT+0", 2026, 7, 15, 17, 0), timestamp("GMT+0", 2026, 7, 15, 17, 0), timestamp("GMT+0", 2026, 7, 17, 5, 0), timestamp("GMT+0", 2026, 7, 17, 13, 0), timestamp("GMT+0", 2026, 7, 17, 17, 0), timestamp("GMT+0", 2026, 7, 20, 1, 0), timestamp("GMT+0", 2026, 7, 20, 13, 0), timestamp("GMT+0", 2026, 7, 21, 5, 0), timestamp("GMT+0", 2026, 7, 21, 21, 0), timestamp("GMT+0", 2026, 7, 22, 13, 0), timestamp("GMT+0", 2026, 7, 22, 21, 0), timestamp("GMT+0", 2026, 7, 23, 13, 0), timestamp("GMT+0", 2026, 7, 24, 13, 0), timestamp("GMT+0", 2026, 7, 28, 5, 0), timestamp("GMT+0", 2026, 7, 29, 5, 0), timestamp("GMT+0", 2026, 7, 30, 13, 0), timestamp("GMT+0", 2026, 7, 31, 9, 0), timestamp("GMT+0", 2026, 8, 2, 21, 0), timestamp("GMT+0", 2026, 8, 3, 17, 0), timestamp("GMT+0", 2026, 8, 5, 9, 0), timestamp("GMT+0", 2026, 8, 5, 9, 0), timestamp("GMT+0", 2026, 8, 6, 1, 0), timestamp("GMT+0", 2026, 8, 6, 13, 0), timestamp("GMT+0", 2026, 8, 7, 13, 0), timestamp("GMT+0", 2026, 8, 11, 1, 0), timestamp("GMT+0", 2026, 8, 11, 9, 0), timestamp("GMT+0", 2026, 8, 12, 5, 0), timestamp("GMT+0", 2026, 8, 13, 1, 0), timestamp("GMT+0", 2026, 8, 13, 17, 0), timestamp("GMT+0", 2026, 8, 17, 9, 0), timestamp("GMT+0", 2026, 8, 18, 1, 0), timestamp("GMT+0", 2026, 8, 18, 5, 0), timestamp("GMT+0", 2026, 8, 18, 13, 0), timestamp("GMT+0", 2026, 8, 20, 9, 0), timestamp("GMT+0", 2026, 8, 21, 9, 0), timestamp("GMT+0", 2026, 8, 23, 21, 0), timestamp("GMT+0", 2026, 8, 24, 17, 0), timestamp("GMT+0", 2026, 8, 25, 1, 0), timestamp("GMT+0", 2026, 8, 25, 21, 0), timestamp("GMT+0", 2026, 8, 26, 13, 0), timestamp("GMT+0", 2026, 8, 27, 9, 0), timestamp("GMT+0", 2026, 8, 27, 13, 0), timestamp("GMT+0", 2026, 8, 27, 13, 0), timestamp("GMT+0", 2026, 8, 30, 21, 0), timestamp("GMT+0", 2026, 9, 1, 9, 0), timestamp("GMT+0", 2026, 9, 1, 13, 0), timestamp("GMT+0", 2026, 9, 2, 13, 0), timestamp("GMT+0", 2026, 9, 2, 21, 0), timestamp("GMT+0", 2026, 9, 3, 17, 0), timestamp("GMT+0", 2026, 9, 7, 9, 0), timestamp("GMT+0", 2026, 9, 8, 5, 0), timestamp("GMT+0", 2026, 9, 9, 9, 0), timestamp("GMT+0", 2026, 9, 9, 9, 0), timestamp("GMT+0", 2026, 9, 9, 17, 0), timestamp("GMT+0", 2026, 9, 10, 13, 0), timestamp("GMT+0", 2026, 9, 11, 1, 0), timestamp("GMT+0", 2026, 9, 10, 21, 0))
+var array<float> h4Top = array.from(1.17333, 1.17189, 1.16855, 1.17963, 1.17631, 1.17477, 1.17779, 1.17923, 1.17923, 1.17688, 1.17356, 1.17124, 1.17120, 1.16346, 1.16551, 1.16152, 1.16125, 1.16007, 1.16447, 1.16352, 1.15925, 1.15925, 1.16180, 1.16406, 1.16486, 1.16525, 1.16348, 1.16448, 1.16246, 1.16387, 1.16489, 1.16610, 1.16098, 1.16610, 1.16561, 1.16427, 1.16854, 1.16171, 1.15980, 1.16104, 1.16451, 1.15395, 1.15128, 1.15543, 1.15331, 1.15777, 1.15777, 1.15518, 1.15728, 1.15293, 1.15556, 1.15893, 1.15891, 1.16217, 1.16202, 1.15869, 1.15041, 1.14417, 1.14617, 1.14315, 1.14240, 1.14226, 1.13393, 1.13547, 1.13736, 1.13877, 1.14336, 1.14336, 1.13872, 1.14302, 1.14027, 1.14363, 1.14363, 1.13950, 1.14725, 1.14620, 1.14440, 1.14477, 1.14312, 1.14491, 1.14457, 1.14331, 1.13938, 1.13804, 1.14619, 1.14822, 1.14822, 1.14366, 1.14264, 1.14441, 1.14261, 1.14062, 1.14107, 1.13990, 1.14212, 1.14076, 1.13712, 1.13778, 1.13798, 1.14033, 1.15365, 1.15259, 1.15585, 1.15132, 1.15465, 1.15392, 1.15593, 1.15465, 1.15805, 1.15494, 1.15361, 1.15368, 1.15309, 1.15452, 1.16138, 1.15855, 1.15717, 1.15879, 1.17101, 1.16977, 1.16752, 1.16635, 1.16704, 1.16794, 1.16448, 1.16576, 1.16393, 1.16596, 1.15778, 1.15918, 1.16078, 1.16088, 1.15854, 1.16409, 1.16355, 1.16355, 1.16489, 1.16300, 1.16291, 1.16272, 1.16171, 1.16098)
+var array<float> h4Bottom = array.from(1.17185, 1.17136, 1.16761, 1.17887, 1.17561, 1.17447, 1.17667, 1.17841, 1.17841, 1.17630, 1.17214, 1.16949, 1.17064, 1.16169, 1.16489, 1.16078, 1.16084, 1.15823, 1.16305, 1.16198, 1.15759, 1.15759, 1.15974, 1.16292, 1.16427, 1.16425, 1.16236, 1.16412, 1.16160, 1.16356, 1.16451, 1.16387, 1.15859, 1.16476, 1.16498, 1.16245, 1.16682, 1.16061, 1.15942, 1.15981, 1.16302, 1.15282, 1.15055, 1.15424, 1.15266, 1.15650, 1.15650, 1.15351, 1.15518, 1.15252, 1.15476, 1.15845, 1.15736, 1.16060, 1.16102, 1.15744, 1.14775, 1.14175, 1.14489, 1.14271, 1.14186, 1.14183, 1.13242, 1.13472, 1.13524, 1.13745, 1.14044, 1.14044, 1.13806, 1.14252, 1.13823, 1.14326, 1.14326, 1.13614, 1.14436, 1.14538, 1.14362, 1.14448, 1.14221, 1.14416, 1.14326, 1.14252, 1.13839, 1.13772, 1.14448, 1.14663, 1.14663, 1.14343, 1.14240, 1.14393, 1.14233, 1.14021, 1.14086, 1.13952, 1.14089, 1.14050, 1.13635, 1.13645, 1.13767, 1.13943, 1.15026, 1.15166, 1.15479, 1.15000, 1.15445, 1.15308, 1.15545, 1.15406, 1.15527, 1.15433, 1.15310, 1.15318, 1.15262, 1.15435, 1.15953, 1.15798, 1.15663, 1.15806, 1.16967, 1.16863, 1.16712, 1.16548, 1.16642, 1.16763, 1.16417, 1.16530, 1.16361, 1.16444, 1.15741, 1.15875, 1.15960, 1.15930, 1.15823, 1.16343, 1.16241, 1.16235, 1.16378, 1.16215, 1.16198, 1.15918, 1.16098, 1.16050)
+var array<color> h4Col = array.from(color.blue, color.green, color.green, color.green, color.green, color.blue, color.black, color.green, color.green, color.blue, color.green, color.green, color.blue, color.green, color.black, color.blue, color.black, color.blue, color.green, color.black, color.green, color.green, color.black, color.blue, color.green, color.black, color.green, color.black, color.blue, color.blue, color.green, color.black, color.green, color.green, color.black, color.blue, color.green, color.green, color.green, color.blue, color.green, color.black, color.green, color.green, color.blue, color.green, color.green, color.blue, color.black, color.green, color.black, color.green, color.green, color.green, color.black, color.green, color.green, color.green, color.green, color.black, color.green, color.blue, color.green, color.blue, color.black, color.green, color.green, color.green, color.blue, color.green, color.blue, color.black, color.green, color.green, color.green, color.green, color.black, color.green, color.black, color.green, color.green, color.blue, color.green, color.green, color.green, color.green, color.green, color.blue, color.green, color.black, color.blue, color.green, color.blue, color.green, color.green, color.blue, color.green, color.blue, color.black, color.black, color.green, color.black, color.green, color.green, color.green, color.blue, color.green, color.black, color.green, color.black, color.green, color.blue, color.black, color.green, color.green, color.black, color.blue, color.green, color.green, color.blue, color.blue, color.green, color.black, color.green, color.green, color.black, color.blue, color.green, color.green, color.green, color.black, color.green, color.blue, color.green, color.green, color.black, color.green, color.blue, color.green, color.green, color.black, color.green)
+var array<string> h4Label = array.from("#194 IRB BUY", "#196 ARB BUY", "#198 ARB BUY", "#200 ARB SELL", "#201 ARB SELL", "#202 IRB BUY", "#203 IRB SELL", "#205 ARB SELL", "#206 ARB SELL", "#207 IRB BUY", "#209 ARB BUY", "#211 ARB BUY", "#212 IRB BUY", "#214 ARB BUY", "#215 IRB SELL", "#216 IRB BUY", "#218 IRB SELL", "#219 IRB BUY", "#220 ARB SELL", "#221 IRB SELL", "#222 ARB BUY", "#223 ARB BUY", "#224 IRB SELL", "#226 IRB BUY", "#227 ARB SELL", "#228 IRB SELL", "#229 ARB BUY", "#230 IRB SELL", "#231 IRB BUY", "#232 IRB BUY", "#233 ARB SELL", "#234 IRB SELL", "#235 ARB BUY", "#237 ARB SELL", "#238 IRB SELL", "#239 IRB BUY", "#240 ARB SELL", "#242 ARB BUY", "#244 ARB BUY", "#245 IRB BUY", "#246 ARB SELL", "#248 IRB SELL", "#249 ARB BUY", "#251 ARB SELL", "#252 IRB BUY", "#253 ARB SELL", "#254 ARB SELL", "#255 IRB BUY", "#256 IRB SELL", "#257 ARB BUY", "#258 IRB SELL", "#260 ARB SELL", "#261 ARB SELL", "#263 ARB SELL", "#264 IRB SELL", "#265 ARB BUY", "#267 ARB BUY", "#269 ARB BUY", "#270 ARB BUY", "#272 IRB SELL", "#273 ARB BUY", "#274 IRB BUY", "#276 ARB BUY", "#277 IRB BUY", "#278 IRB SELL", "#280 ARB SELL", "#282 ARB SELL", "#283 ARB SELL", "#284 IRB BUY", "#285 ARB SELL", "#286 IRB BUY", "#287 IRB SELL", "#288 ARB SELL", "#289 ARB BUY", "#291 ARB SELL", "#292 ARB SELL", "#293 IRB SELL", "#295 ARB SELL", "#297 IRB SELL", "#299 ARB SELL", "#300 ARB SELL", "#301 IRB BUY", "#303 ARB BUY", "#305 ARB BUY", "#307 ARB SELL", "#309 ARB SELL", "#310 ARB SELL", "#311 IRB BUY", "#313 ARB BUY", "#314 IRB SELL", "#315 IRB BUY", "#317 ARB BUY", "#318 IRB BUY", "#320 ARB BUY", "#322 ARB SELL", "#323 IRB BUY", "#325 ARB BUY", "#326 IRB BUY", "#328 IRB SELL", "#330 IRB SELL", "#333 ARB SELL", "#334 IRB SELL", "#336 ARB SELL", "#338 ARB BUY", "#340 ARB SELL", "#341 IRB BUY", "#342 ARB SELL", "#343 IRB SELL", "#345 ARB SELL", "#347 IRB SELL", "#348 ARB BUY", "#349 IRB BUY", "#351 IRB SELL", "#353 ARB SELL", "#356 ARB SELL", "#357 IRB SELL", "#358 IRB BUY", "#359 ARB SELL", "#361 ARB SELL", "#362 IRB BUY", "#364 IRB BUY", "#366 ARB BUY", "#367 IRB SELL", "#369 ARB SELL", "#371 ARB BUY", "#372 IRB SELL", "#373 IRB BUY", "#374 ARB SELL", "#376 ARB BUY", "#377 ARB BUY", "#378 IRB SELL", "#380 ARB SELL", "#381 IRB BUY", "#382 ARB SELL", "#383 ARB SELL", "#384 IRB SELL", "#386 ARB SELL", "#387 IRB BUY", "#389 ARB BUY", "#391 ARB BUY", "#392 IRB SELL", "#393 ARB BUY")
+var int h4impact_x_194 = na
+if time <= timestamp("GMT+0", 2026, 5, 1, 19, 34) and timestamp("GMT+0", 2026, 5, 1, 19, 34) < time_close
+    h4impact_x_194 := time
+var int h4impact_x_196 = na
+if time <= timestamp("GMT+0", 2026, 5, 4, 9, 42) and timestamp("GMT+0", 2026, 5, 4, 9, 42) < time_close
+    h4impact_x_196 := time
+var int h4impact_x_198 = na
+if time <= timestamp("GMT+0", 2026, 5, 14, 15, 42) and timestamp("GMT+0", 2026, 5, 14, 15, 42) < time_close
+    h4impact_x_198 := time
+var int h4impact_x_200 = na
+if time <= timestamp("GMT+0", 2026, 5, 10, 21, 20) and timestamp("GMT+0", 2026, 5, 10, 21, 20) < time_close
+    h4impact_x_200 := time
+var int h4impact_x_201 = na
+if time <= timestamp("GMT+0", 2026, 5, 7, 9, 5) and timestamp("GMT+0", 2026, 5, 7, 9, 5) < time_close
+    h4impact_x_201 := time
+var int h4impact_x_202 = na
+if time <= timestamp("GMT+0", 2026, 5, 7, 19, 29) and timestamp("GMT+0", 2026, 5, 7, 19, 29) < time_close
+    h4impact_x_202 := time
+var int h4impact_x_203 = na
+if time <= timestamp("GMT+0", 2026, 5, 8, 11, 1) and timestamp("GMT+0", 2026, 5, 8, 11, 1) < time_close
+    h4impact_x_203 := time
+var int h4impact_x_205 = na
+if time <= timestamp("GMT+0", 2026, 5, 11, 15, 12) and timestamp("GMT+0", 2026, 5, 11, 15, 12) < time_close
+    h4impact_x_205 := time
+var int h4impact_x_206 = na
+if time <= timestamp("GMT+0", 2026, 5, 11, 15, 12) and timestamp("GMT+0", 2026, 5, 11, 15, 12) < time_close
+    h4impact_x_206 := time
+var int h4impact_x_207 = na
+if time <= timestamp("GMT+0", 2026, 5, 12, 2, 54) and timestamp("GMT+0", 2026, 5, 12, 2, 54) < time_close
+    h4impact_x_207 := time
+var int h4impact_x_209 = na
+if time <= timestamp("GMT+0", 2026, 5, 13, 5, 3) and timestamp("GMT+0", 2026, 5, 13, 5, 3) < time_close
+    h4impact_x_209 := time
+var int h4impact_x_211 = na
+if time <= timestamp("GMT+0", 2026, 5, 14, 5, 0) and timestamp("GMT+0", 2026, 5, 14, 5, 0) < time_close
+    h4impact_x_211 := time
+var int h4impact_x_212 = na
+if time <= timestamp("GMT+0", 2026, 5, 14, 9, 59) and timestamp("GMT+0", 2026, 5, 14, 9, 59) < time_close
+    h4impact_x_212 := time
+var int h4impact_x_214 = na
+if time <= timestamp("GMT+0", 2026, 5, 15, 17, 0) and timestamp("GMT+0", 2026, 5, 15, 17, 0) < time_close
+    h4impact_x_214 := time
+var int h4impact_x_215 = na
+if time <= timestamp("GMT+0", 2026, 5, 18, 13, 41) and timestamp("GMT+0", 2026, 5, 18, 13, 41) < time_close
+    h4impact_x_215 := time
+var int h4impact_x_216 = na
+if time <= timestamp("GMT+0", 2026, 5, 19, 11, 19) and timestamp("GMT+0", 2026, 5, 19, 11, 19) < time_close
+    h4impact_x_216 := time
+var int h4impact_x_218 = na
+if time <= timestamp("GMT+0", 2026, 5, 20, 16, 16) and timestamp("GMT+0", 2026, 5, 20, 16, 16) < time_close
+    h4impact_x_218 := time
+var int h4impact_x_219 = na
+if time <= timestamp("GMT+0", 2026, 5, 21, 9, 19) and timestamp("GMT+0", 2026, 5, 21, 9, 19) < time_close
+    h4impact_x_219 := time
+var int h4impact_x_220 = na
+if time <= timestamp("GMT+0", 2026, 5, 21, 10, 15) and timestamp("GMT+0", 2026, 5, 21, 10, 15) < time_close
+    h4impact_x_220 := time
+var int h4impact_x_221 = na
+if time <= timestamp("GMT+0", 2026, 5, 21, 19, 17) and timestamp("GMT+0", 2026, 5, 21, 19, 17) < time_close
+    h4impact_x_221 := time
+var int h4impact_x_222 = na
+if time <= timestamp("GMT+0", 2026, 5, 22, 16, 1) and timestamp("GMT+0", 2026, 5, 22, 16, 1) < time_close
+    h4impact_x_222 := time
+var int h4impact_x_223 = na
+if time <= timestamp("GMT+0", 2026, 5, 22, 16, 1) and timestamp("GMT+0", 2026, 5, 22, 16, 1) < time_close
+    h4impact_x_223 := time
+var int h4impact_x_224 = na
+if time <= timestamp("GMT+0", 2026, 5, 22, 19, 30) and timestamp("GMT+0", 2026, 5, 22, 19, 30) < time_close
+    h4impact_x_224 := time
+var int h4impact_x_226 = na
+if time <= timestamp("GMT+0", 2026, 5, 25, 18, 12) and timestamp("GMT+0", 2026, 5, 25, 18, 12) < time_close
+    h4impact_x_226 := time
+var int h4impact_x_227 = na
+if time <= timestamp("GMT+0", 2026, 5, 25, 13, 0) and timestamp("GMT+0", 2026, 5, 25, 13, 0) < time_close
+    h4impact_x_227 := time
+var int h4impact_x_228 = na
+if time <= timestamp("GMT+0", 2026, 5, 26, 11, 33) and timestamp("GMT+0", 2026, 5, 26, 11, 33) < time_close
+    h4impact_x_228 := time
+var int h4impact_x_229 = na
+if time <= timestamp("GMT+0", 2026, 5, 26, 13, 36) and timestamp("GMT+0", 2026, 5, 26, 13, 36) < time_close
+    h4impact_x_229 := time
+var int h4impact_x_230 = na
+if time <= timestamp("GMT+0", 2026, 5, 27, 5, 3) and timestamp("GMT+0", 2026, 5, 27, 5, 3) < time_close
+    h4impact_x_230 := time
+var int h4impact_x_231 = na
+if time <= timestamp("GMT+0", 2026, 5, 27, 16, 58) and timestamp("GMT+0", 2026, 5, 27, 16, 58) < time_close
+    h4impact_x_231 := time
+var int h4impact_x_232 = na
+if time <= timestamp("GMT+0", 2026, 5, 28, 14, 51) and timestamp("GMT+0", 2026, 5, 28, 14, 51) < time_close
+    h4impact_x_232 := time
+var int h4impact_x_233 = na
+if time <= timestamp("GMT+0", 2026, 5, 27, 14, 18) and timestamp("GMT+0", 2026, 5, 27, 14, 18) < time_close
+    h4impact_x_233 := time
+var int h4impact_x_234 = na
+if time <= timestamp("GMT+0", 2026, 5, 28, 15, 1) and timestamp("GMT+0", 2026, 5, 28, 15, 1) < time_close
+    h4impact_x_234 := time
+var int h4impact_x_235 = na
+if time <= timestamp("GMT+0", 2026, 5, 28, 13, 0) and timestamp("GMT+0", 2026, 5, 28, 13, 0) < time_close
+    h4impact_x_235 := time
+var int h4impact_x_237 = na
+if time <= timestamp("GMT+0", 2026, 5, 29, 1, 0) and timestamp("GMT+0", 2026, 5, 29, 1, 0) < time_close
+    h4impact_x_237 := time
+var int h4impact_x_238 = na
+if time <= timestamp("GMT+0", 2026, 5, 29, 16, 49) and timestamp("GMT+0", 2026, 5, 29, 16, 49) < time_close
+    h4impact_x_238 := time
+var int h4impact_x_239 = na
+if time <= timestamp("GMT+0", 2026, 6, 1, 3, 32) and timestamp("GMT+0", 2026, 6, 1, 3, 32) < time_close
+    h4impact_x_239 := time
+var int h4impact_x_240 = na
+if time <= timestamp("GMT+0", 2026, 8, 19, 16, 21) and timestamp("GMT+0", 2026, 8, 19, 16, 21) < time_close
+    h4impact_x_240 := time
+var int h4impact_x_242 = na
+if time <= timestamp("GMT+0", 2026, 6, 2, 20, 18) and timestamp("GMT+0", 2026, 6, 2, 20, 18) < time_close
+    h4impact_x_242 := time
+var int h4impact_x_244 = na
+if time <= timestamp("GMT+0", 2026, 6, 5, 14, 53) and timestamp("GMT+0", 2026, 6, 5, 14, 53) < time_close
+    h4impact_x_244 := time
+var int h4impact_x_245 = na
+if time <= timestamp("GMT+0", 2026, 6, 4, 21, 49) and timestamp("GMT+0", 2026, 6, 4, 21, 49) < time_close
+    h4impact_x_245 := time
+var int h4impact_x_246 = na
+if time <= timestamp("GMT+0", 2026, 6, 5, 9, 31) and timestamp("GMT+0", 2026, 6, 5, 9, 31) < time_close
+    h4impact_x_246 := time
+var int h4impact_x_248 = na
+if time <= timestamp("GMT+0", 2026, 6, 8, 13, 10) and timestamp("GMT+0", 2026, 6, 8, 13, 10) < time_close
+    h4impact_x_248 := time
+var int h4impact_x_249 = na
+if time <= timestamp("GMT+0", 2026, 6, 8, 10, 41) and timestamp("GMT+0", 2026, 6, 8, 10, 41) < time_close
+    h4impact_x_249 := time
+var int h4impact_x_251 = na
+if time <= timestamp("GMT+0", 2026, 6, 9, 6, 36) and timestamp("GMT+0", 2026, 6, 9, 6, 36) < time_close
+    h4impact_x_251 := time
+var int h4impact_x_252 = na
+if time <= timestamp("GMT+0", 2026, 6, 9, 18, 39) and timestamp("GMT+0", 2026, 6, 9, 18, 39) < time_close
+    h4impact_x_252 := time
+var int h4impact_x_253 = na
+if time <= timestamp("GMT+0", 2026, 6, 10, 15, 35) and timestamp("GMT+0", 2026, 6, 10, 15, 35) < time_close
+    h4impact_x_253 := time
+var int h4impact_x_254 = na
+if time <= timestamp("GMT+0", 2026, 6, 10, 15, 35) and timestamp("GMT+0", 2026, 6, 10, 15, 35) < time_close
+    h4impact_x_254 := time
+var int h4impact_x_255 = na
+if time <= timestamp("GMT+0", 2026, 6, 10, 17, 48) and timestamp("GMT+0", 2026, 6, 10, 17, 48) < time_close
+    h4impact_x_255 := time
+var int h4impact_x_256 = na
+if time <= timestamp("GMT+0", 2026, 6, 11, 3, 12) and timestamp("GMT+0", 2026, 6, 11, 3, 12) < time_close
+    h4impact_x_256 := time
+var int h4impact_x_257 = na
+if time <= timestamp("GMT+0", 2026, 6, 11, 12, 3) and timestamp("GMT+0", 2026, 6, 11, 12, 3) < time_close
+    h4impact_x_257 := time
+var int h4impact_x_258 = na
+if time <= timestamp("GMT+0", 2026, 6, 11, 19, 33) and timestamp("GMT+0", 2026, 6, 11, 19, 33) < time_close
+    h4impact_x_258 := time
+var int h4impact_x_260 = na
+if time <= timestamp("GMT+0", 2026, 6, 12, 10, 20) and timestamp("GMT+0", 2026, 6, 12, 10, 20) < time_close
+    h4impact_x_260 := time
+var int h4impact_x_261 = na
+if time <= timestamp("GMT+0", 2026, 6, 14, 23, 3) and timestamp("GMT+0", 2026, 6, 14, 23, 3) < time_close
+    h4impact_x_261 := time
+var int h4impact_x_263 = na
+if time <= timestamp("GMT+0", 2026, 6, 15, 13, 0) and timestamp("GMT+0", 2026, 6, 15, 13, 0) < time_close
+    h4impact_x_263 := time
+var int h4impact_x_264 = na
+if time <= timestamp("GMT+0", 2026, 6, 16, 12, 21) and timestamp("GMT+0", 2026, 6, 16, 12, 21) < time_close
+    h4impact_x_264 := time
+var int h4impact_x_265 = na
+if time <= timestamp("GMT+0", 2026, 6, 17, 13, 31) and timestamp("GMT+0", 2026, 6, 17, 13, 31) < time_close
+    h4impact_x_265 := time
+var int h4impact_x_267 = na
+if time <= timestamp("GMT+0", 2026, 6, 18, 10, 16) and timestamp("GMT+0", 2026, 6, 18, 10, 16) < time_close
+    h4impact_x_267 := time
+var int h4impact_x_269 = na
+if time <= timestamp("GMT+0", 2026, 6, 22, 10, 7) and timestamp("GMT+0", 2026, 6, 22, 10, 7) < time_close
+    h4impact_x_269 := time
+var int h4impact_x_270 = na
+if time <= timestamp("GMT+0", 2026, 6, 22, 5, 32) and timestamp("GMT+0", 2026, 6, 22, 5, 32) < time_close
+    h4impact_x_270 := time
+var int h4impact_x_272 = na
+if time <= timestamp("GMT+0", 2026, 6, 23, 9, 4) and timestamp("GMT+0", 2026, 6, 23, 9, 4) < time_close
+    h4impact_x_272 := time
+var int h4impact_x_273 = na
+if time <= timestamp("GMT+0", 2026, 6, 23, 5, 8) and timestamp("GMT+0", 2026, 6, 23, 5, 8) < time_close
+    h4impact_x_273 := time
+var int h4impact_x_274 = na
+if time <= timestamp("GMT+0", 2026, 6, 26, 14, 57) and timestamp("GMT+0", 2026, 6, 26, 14, 57) < time_close
+    h4impact_x_274 := time
+var int h4impact_x_276 = na
+if time <= timestamp("GMT+0", 2026, 6, 25, 13, 23) and timestamp("GMT+0", 2026, 6, 25, 13, 23) < time_close
+    h4impact_x_276 := time
+var int h4impact_x_277 = na
+if time <= timestamp("GMT+0", 2026, 6, 25, 9, 13) and timestamp("GMT+0", 2026, 6, 25, 9, 13) < time_close
+    h4impact_x_277 := time
+var int h4impact_x_278 = na
+if time <= timestamp("GMT+0", 2026, 6, 25, 16, 3) and timestamp("GMT+0", 2026, 6, 25, 16, 3) < time_close
+    h4impact_x_278 := time
+var int h4impact_x_280 = na
+if time <= timestamp("GMT+0", 2026, 6, 26, 6, 54) and timestamp("GMT+0", 2026, 6, 26, 6, 54) < time_close
+    h4impact_x_280 := time
+var int h4impact_x_282 = na
+if time <= timestamp("GMT+0", 2026, 6, 29, 8, 50) and timestamp("GMT+0", 2026, 6, 29, 8, 50) < time_close
+    h4impact_x_282 := time
+var int h4impact_x_283 = na
+if time <= timestamp("GMT+0", 2026, 6, 29, 8, 50) and timestamp("GMT+0", 2026, 6, 29, 8, 50) < time_close
+    h4impact_x_283 := time
+var int h4impact_x_284 = na
+if time <= timestamp("GMT+0", 2026, 6, 30, 7, 1) and timestamp("GMT+0", 2026, 6, 30, 7, 1) < time_close
+    h4impact_x_284 := time
+var int h4impact_x_285 = na
+if time <= timestamp("GMT+0", 2026, 6, 30, 16, 51) and timestamp("GMT+0", 2026, 6, 30, 16, 51) < time_close
+    h4impact_x_285 := time
+var int h4impact_x_286 = na
+if time <= timestamp("GMT+0", 2026, 7, 1, 3, 53) and timestamp("GMT+0", 2026, 7, 1, 3, 53) < time_close
+    h4impact_x_286 := time
+var int h4impact_x_287 = na
+if time <= timestamp("GMT+0", 2026, 7, 2, 14, 30) and timestamp("GMT+0", 2026, 7, 2, 14, 30) < time_close
+    h4impact_x_287 := time
+var int h4impact_x_288 = na
+if time <= timestamp("GMT+0", 2026, 7, 2, 14, 30) and timestamp("GMT+0", 2026, 7, 2, 14, 30) < time_close
+    h4impact_x_288 := time
+var int h4impact_x_289 = na
+if time <= timestamp("GMT+0", 2026, 7, 1, 21, 0) and timestamp("GMT+0", 2026, 7, 1, 21, 0) < time_close
+    h4impact_x_289 := time
+var int h4impact_x_291 = na
+if time <= timestamp("GMT+0", 2026, 7, 3, 3, 24) and timestamp("GMT+0", 2026, 7, 3, 3, 24) < time_close
+    h4impact_x_291 := time
+var int h4impact_x_292 = na
+if time <= timestamp("GMT+0", 2026, 7, 10, 4, 8) and timestamp("GMT+0", 2026, 7, 10, 4, 8) < time_close
+    h4impact_x_292 := time
+var int h4impact_x_293 = na
+if time <= timestamp("GMT+0", 2026, 7, 6, 19, 23) and timestamp("GMT+0", 2026, 7, 6, 19, 23) < time_close
+    h4impact_x_293 := time
+var int h4impact_x_295 = na
+if time <= timestamp("GMT+0", 2026, 7, 9, 8, 24) and timestamp("GMT+0", 2026, 7, 9, 8, 24) < time_close
+    h4impact_x_295 := time
+var int h4impact_x_297 = na
+if time <= timestamp("GMT+0", 2026, 7, 8, 19, 13) and timestamp("GMT+0", 2026, 7, 8, 19, 13) < time_close
+    h4impact_x_297 := time
+var int h4impact_x_299 = na
+if time <= timestamp("GMT+0", 2026, 7, 9, 16, 0) and timestamp("GMT+0", 2026, 7, 9, 16, 0) < time_close
+    h4impact_x_299 := time
+var int h4impact_x_300 = na
+if time <= timestamp("GMT+0", 2026, 7, 10, 1, 0) and timestamp("GMT+0", 2026, 7, 10, 1, 0) < time_close
+    h4impact_x_300 := time
+var int h4impact_x_301 = na
+if time <= timestamp("GMT+0", 2026, 7, 10, 10, 21) and timestamp("GMT+0", 2026, 7, 10, 10, 21) < time_close
+    h4impact_x_301 := time
+var int h4impact_x_303 = na
+if time <= timestamp("GMT+0", 2026, 7, 13, 18, 27) and timestamp("GMT+0", 2026, 7, 13, 18, 27) < time_close
+    h4impact_x_303 := time
+var int h4impact_x_305 = na
+if time <= timestamp("GMT+0", 2026, 7, 23, 14, 37) and timestamp("GMT+0", 2026, 7, 23, 14, 37) < time_close
+    h4impact_x_305 := time
+var int h4impact_x_307 = na
+if time <= timestamp("GMT+0", 2026, 7, 15, 19, 0) and timestamp("GMT+0", 2026, 7, 15, 19, 0) < time_close
+    h4impact_x_307 := time
+var int h4impact_x_309 = na
+if time <= timestamp("GMT+0", 2026, 7, 29, 21, 18) and timestamp("GMT+0", 2026, 7, 29, 21, 18) < time_close
+    h4impact_x_309 := time
+var int h4impact_x_310 = na
+if time <= timestamp("GMT+0", 2026, 7, 29, 21, 18) and timestamp("GMT+0", 2026, 7, 29, 21, 18) < time_close
+    h4impact_x_310 := time
+var int h4impact_x_311 = na
+if time <= timestamp("GMT+0", 2026, 7, 17, 12, 23) and timestamp("GMT+0", 2026, 7, 17, 12, 23) < time_close
+    h4impact_x_311 := time
+var int h4impact_x_313 = na
+if time <= timestamp("GMT+0", 2026, 7, 19, 21, 57) and timestamp("GMT+0", 2026, 7, 19, 21, 57) < time_close
+    h4impact_x_313 := time
+var int h4impact_x_314 = na
+if time <= timestamp("GMT+0", 2026, 7, 20, 4, 39) and timestamp("GMT+0", 2026, 7, 20, 4, 39) < time_close
+    h4impact_x_314 := time
+var int h4impact_x_315 = na
+if time <= timestamp("GMT+0", 2026, 7, 20, 14, 2) and timestamp("GMT+0", 2026, 7, 20, 14, 2) < time_close
+    h4impact_x_315 := time
+var int h4impact_x_317 = na
+if time <= timestamp("GMT+0", 2026, 7, 21, 15, 37) and timestamp("GMT+0", 2026, 7, 21, 15, 37) < time_close
+    h4impact_x_317 := time
+var int h4impact_x_318 = na
+if time <= timestamp("GMT+0", 2026, 7, 21, 15, 23) and timestamp("GMT+0", 2026, 7, 21, 15, 23) < time_close
+    h4impact_x_318 := time
+var int h4impact_x_320 = na
+if time <= timestamp("GMT+0", 2026, 7, 23, 13, 24) and timestamp("GMT+0", 2026, 7, 23, 13, 24) < time_close
+    h4impact_x_320 := time
+var int h4impact_x_322 = na
+if time <= timestamp("GMT+0", 2026, 7, 23, 1, 13) and timestamp("GMT+0", 2026, 7, 23, 1, 13) < time_close
+    h4impact_x_322 := time
+var int h4impact_x_323 = na
+if time <= timestamp("GMT+0", 2026, 7, 23, 10, 42) and timestamp("GMT+0", 2026, 7, 23, 10, 42) < time_close
+    h4impact_x_323 := time
+var int h4impact_x_325 = na
+if time <= timestamp("GMT+0", 2026, 7, 24, 13, 57) and timestamp("GMT+0", 2026, 7, 24, 13, 57) < time_close
+    h4impact_x_325 := time
+var int h4impact_x_326 = na
+if time <= timestamp("GMT+0", 2026, 7, 27, 14, 39) and timestamp("GMT+0", 2026, 7, 27, 14, 39) < time_close
+    h4impact_x_326 := time
+var int h4impact_x_328 = na
+if time <= timestamp("GMT+0", 2026, 7, 28, 16, 26) and timestamp("GMT+0", 2026, 7, 28, 16, 26) < time_close
+    h4impact_x_328 := time
+var int h4impact_x_330 = na
+if time <= timestamp("GMT+0", 2026, 7, 29, 19, 49) and timestamp("GMT+0", 2026, 7, 29, 19, 49) < time_close
+    h4impact_x_330 := time
+var int h4impact_x_333 = na
+if time <= timestamp("GMT+0", 2026, 7, 31, 9, 0) and timestamp("GMT+0", 2026, 7, 31, 9, 0) < time_close
+    h4impact_x_333 := time
+var int h4impact_x_334 = na
+if time <= timestamp("GMT+0", 2026, 7, 31, 17, 54) and timestamp("GMT+0", 2026, 7, 31, 17, 54) < time_close
+    h4impact_x_334 := time
+var int h4impact_x_336 = na
+if time <= timestamp("GMT+0", 2026, 8, 5, 13, 20) and timestamp("GMT+0", 2026, 8, 5, 13, 20) < time_close
+    h4impact_x_336 := time
+var int h4impact_x_338 = na
+if time <= timestamp("GMT+0", 2026, 8, 4, 1, 0) and timestamp("GMT+0", 2026, 8, 4, 1, 0) < time_close
+    h4impact_x_338 := time
+var int h4impact_x_340 = na
+if time <= timestamp("GMT+0", 2026, 8, 5, 13, 12) and timestamp("GMT+0", 2026, 8, 5, 13, 12) < time_close
+    h4impact_x_340 := time
+var int h4impact_x_341 = na
+if time <= timestamp("GMT+0", 2026, 8, 6, 10, 1) and timestamp("GMT+0", 2026, 8, 6, 10, 1) < time_close
+    h4impact_x_341 := time
+var int h4impact_x_342 = na
+if time <= timestamp("GMT+0", 2026, 8, 7, 14, 30) and timestamp("GMT+0", 2026, 8, 7, 14, 30) < time_close
+    h4impact_x_342 := time
+var int h4impact_x_343 = na
+if time <= timestamp("GMT+0", 2026, 8, 7, 14, 30) and timestamp("GMT+0", 2026, 8, 7, 14, 30) < time_close
+    h4impact_x_343 := time
+var int h4impact_x_345 = na
+if time <= timestamp("GMT+0", 2026, 8, 10, 9, 0) and timestamp("GMT+0", 2026, 8, 10, 9, 0) < time_close
+    h4impact_x_345 := time
+var int h4impact_x_347 = na
+if time <= timestamp("GMT+0", 2026, 8, 11, 14, 57) and timestamp("GMT+0", 2026, 8, 11, 14, 57) < time_close
+    h4impact_x_347 := time
+var int h4impact_x_348 = na
+if time <= timestamp("GMT+0", 2026, 8, 12, 4, 15) and timestamp("GMT+0", 2026, 8, 12, 4, 15) < time_close
+    h4impact_x_348 := time
+var int h4impact_x_349 = na
+if time <= timestamp("GMT+0", 2026, 8, 12, 18, 19) and timestamp("GMT+0", 2026, 8, 12, 18, 19) < time_close
+    h4impact_x_349 := time
+var int h4impact_x_351 = na
+if time <= timestamp("GMT+0", 2026, 8, 13, 9, 55) and timestamp("GMT+0", 2026, 8, 13, 9, 55) < time_close
+    h4impact_x_351 := time
+var int h4impact_x_353 = na
+if time <= timestamp("GMT+0", 2026, 8, 14, 8, 6) and timestamp("GMT+0", 2026, 8, 14, 8, 6) < time_close
+    h4impact_x_353 := time
+var int h4impact_x_356 = na
+if time <= timestamp("GMT+0", 2026, 8, 19, 8, 22) and timestamp("GMT+0", 2026, 8, 19, 8, 22) < time_close
+    h4impact_x_356 := time
+var int h4impact_x_357 = na
+if time <= timestamp("GMT+0", 2026, 8, 18, 15, 34) and timestamp("GMT+0", 2026, 8, 18, 15, 34) < time_close
+    h4impact_x_357 := time
+var int h4impact_x_358 = na
+if time <= timestamp("GMT+0", 2026, 8, 18, 22, 5) and timestamp("GMT+0", 2026, 8, 18, 22, 5) < time_close
+    h4impact_x_358 := time
+var int h4impact_x_359 = na
+if time <= timestamp("GMT+0", 2026, 8, 19, 2, 7) and timestamp("GMT+0", 2026, 8, 19, 2, 7) < time_close
+    h4impact_x_359 := time
+var int h4impact_x_361 = na
+if time <= timestamp("GMT+0", 2026, 8, 21, 4, 45) and timestamp("GMT+0", 2026, 8, 21, 4, 45) < time_close
+    h4impact_x_361 := time
+var int h4impact_x_362 = na
+if time <= timestamp("GMT+0", 2026, 8, 21, 14, 39) and timestamp("GMT+0", 2026, 8, 21, 14, 39) < time_close
+    h4impact_x_362 := time
+var int h4impact_x_364 = na
+if time <= timestamp("GMT+0", 2026, 8, 24, 8, 27) and timestamp("GMT+0", 2026, 8, 24, 8, 27) < time_close
+    h4impact_x_364 := time
+var int h4impact_x_366 = na
+if time <= timestamp("GMT+0", 2026, 8, 25, 5, 0) and timestamp("GMT+0", 2026, 8, 25, 5, 0) < time_close
+    h4impact_x_366 := time
+var int h4impact_x_367 = na
+if time <= timestamp("GMT+0", 2026, 8, 25, 10, 24) and timestamp("GMT+0", 2026, 8, 25, 10, 24) < time_close
+    h4impact_x_367 := time
+var int h4impact_x_369 = na
+if time <= timestamp("GMT+0", 2026, 8, 26, 10, 29) and timestamp("GMT+0", 2026, 8, 26, 10, 29) < time_close
+    h4impact_x_369 := time
+var int h4impact_x_371 = na
+if time <= timestamp("GMT+0", 2026, 8, 27, 11, 3) and timestamp("GMT+0", 2026, 8, 27, 11, 3) < time_close
+    h4impact_x_371 := time
+var int h4impact_x_372 = na
+if time <= timestamp("GMT+0", 2026, 8, 27, 15, 23) and timestamp("GMT+0", 2026, 8, 27, 15, 23) < time_close
+    h4impact_x_372 := time
+var int h4impact_x_373 = na
+if time <= timestamp("GMT+0", 2026, 8, 28, 11, 58) and timestamp("GMT+0", 2026, 8, 28, 11, 58) < time_close
+    h4impact_x_373 := time
+var int h4impact_x_374 = na
+if time <= timestamp("GMT+0", 2026, 8, 28, 13, 0) and timestamp("GMT+0", 2026, 8, 28, 13, 0) < time_close
+    h4impact_x_374 := time
+var int h4impact_x_376 = na
+if time <= timestamp("GMT+0", 2026, 9, 2, 3, 36) and timestamp("GMT+0", 2026, 9, 2, 3, 36) < time_close
+    h4impact_x_376 := time
+var int h4impact_x_377 = na
+if time <= timestamp("GMT+0", 2026, 9, 1, 17, 24) and timestamp("GMT+0", 2026, 9, 1, 17, 24) < time_close
+    h4impact_x_377 := time
+var int h4impact_x_378 = na
+if time <= timestamp("GMT+0", 2026, 9, 2, 15, 25) and timestamp("GMT+0", 2026, 9, 2, 15, 25) < time_close
+    h4impact_x_378 := time
+var int h4impact_x_380 = na
+if time <= timestamp("GMT+0", 2026, 9, 3, 3, 32) and timestamp("GMT+0", 2026, 9, 3, 3, 32) < time_close
+    h4impact_x_380 := time
+var int h4impact_x_381 = na
+if time <= timestamp("GMT+0", 2026, 9, 4, 14, 31) and timestamp("GMT+0", 2026, 9, 4, 14, 31) < time_close
+    h4impact_x_381 := time
+var int h4impact_x_382 = na
+if time <= timestamp("GMT+0", 2026, 9, 7, 10, 20) and timestamp("GMT+0", 2026, 9, 7, 10, 20) < time_close
+    h4impact_x_382 := time
+var int h4impact_x_383 = na
+if time <= timestamp("GMT+0", 2026, 9, 8, 1, 0) and timestamp("GMT+0", 2026, 9, 8, 1, 0) < time_close
+    h4impact_x_383 := time
+var int h4impact_x_384 = na
+if time <= timestamp("GMT+0", 2026, 9, 8, 15, 7) and timestamp("GMT+0", 2026, 9, 8, 15, 7) < time_close
+    h4impact_x_384 := time
+var int h4impact_x_386 = na
+if time <= timestamp("GMT+0", 2026, 9, 9, 13, 20) and timestamp("GMT+0", 2026, 9, 9, 13, 20) < time_close
+    h4impact_x_386 := time
+var int h4impact_x_387 = na
+if time <= timestamp("GMT+0", 2026, 9, 9, 17, 7) and timestamp("GMT+0", 2026, 9, 9, 17, 7) < time_close
+    h4impact_x_387 := time
+var int h4impact_x_389 = na
+if time <= timestamp("GMT+0", 2026, 9, 10, 12, 31) and timestamp("GMT+0", 2026, 9, 10, 12, 31) < time_close
+    h4impact_x_389 := time
+var int h4impact_x_391 = na
+if time <= timestamp("GMT+0", 2026, 9, 10, 21, 0) and timestamp("GMT+0", 2026, 9, 10, 21, 0) < time_close
+    h4impact_x_391 := time
+var int h4impact_x_392 = na
+if time <= timestamp("GMT+0", 2026, 9, 11, 15, 58) and timestamp("GMT+0", 2026, 9, 11, 15, 58) < time_close
+    h4impact_x_392 := time
+var int h4impact_x_393 = na
+if time <= timestamp("GMT+0", 2026, 9, 11, 5, 0) and timestamp("GMT+0", 2026, 9, 11, 5, 0) < time_close
+    h4impact_x_393 := time
+if barstate.islast
+    if onH4 or onFive
+        array<int> h4Right = array.from((na(h4impact_x_194) ? timestamp("GMT+0", 2026, 5, 1, 19, 34) : h4impact_x_194), (na(h4impact_x_196) ? timestamp("GMT+0", 2026, 5, 4, 9, 42) : h4impact_x_196), (na(h4impact_x_198) ? timestamp("GMT+0", 2026, 5, 14, 15, 42) : h4impact_x_198), (na(h4impact_x_200) ? timestamp("GMT+0", 2026, 5, 10, 21, 20) : h4impact_x_200), (na(h4impact_x_201) ? timestamp("GMT+0", 2026, 5, 7, 9, 5) : h4impact_x_201), (na(h4impact_x_202) ? timestamp("GMT+0", 2026, 5, 7, 19, 29) : h4impact_x_202), (na(h4impact_x_203) ? timestamp("GMT+0", 2026, 5, 8, 11, 1) : h4impact_x_203), (na(h4impact_x_205) ? timestamp("GMT+0", 2026, 5, 11, 15, 12) : h4impact_x_205), (na(h4impact_x_206) ? timestamp("GMT+0", 2026, 5, 11, 15, 12) : h4impact_x_206), (na(h4impact_x_207) ? timestamp("GMT+0", 2026, 5, 12, 2, 54) : h4impact_x_207), (na(h4impact_x_209) ? timestamp("GMT+0", 2026, 5, 13, 5, 3) : h4impact_x_209), (na(h4impact_x_211) ? timestamp("GMT+0", 2026, 5, 14, 5, 0) : h4impact_x_211), (na(h4impact_x_212) ? timestamp("GMT+0", 2026, 5, 14, 9, 59) : h4impact_x_212), (na(h4impact_x_214) ? timestamp("GMT+0", 2026, 5, 15, 17, 0) : h4impact_x_214), (na(h4impact_x_215) ? timestamp("GMT+0", 2026, 5, 18, 13, 41) : h4impact_x_215), (na(h4impact_x_216) ? timestamp("GMT+0", 2026, 5, 19, 11, 19) : h4impact_x_216), (na(h4impact_x_218) ? timestamp("GMT+0", 2026, 5, 20, 16, 16) : h4impact_x_218), (na(h4impact_x_219) ? timestamp("GMT+0", 2026, 5, 21, 9, 19) : h4impact_x_219), (na(h4impact_x_220) ? timestamp("GMT+0", 2026, 5, 21, 10, 15) : h4impact_x_220), (na(h4impact_x_221) ? timestamp("GMT+0", 2026, 5, 21, 19, 17) : h4impact_x_221), (na(h4impact_x_222) ? timestamp("GMT+0", 2026, 5, 22, 16, 1) : h4impact_x_222), (na(h4impact_x_223) ? timestamp("GMT+0", 2026, 5, 22, 16, 1) : h4impact_x_223), (na(h4impact_x_224) ? timestamp("GMT+0", 2026, 5, 22, 19, 30) : h4impact_x_224), (na(h4impact_x_226) ? timestamp("GMT+0", 2026, 5, 25, 18, 12) : h4impact_x_226), (na(h4impact_x_227) ? timestamp("GMT+0", 2026, 5, 25, 13, 0) : h4impact_x_227), (na(h4impact_x_228) ? timestamp("GMT+0", 2026, 5, 26, 11, 33) : h4impact_x_228), (na(h4impact_x_229) ? timestamp("GMT+0", 2026, 5, 26, 13, 36) : h4impact_x_229), (na(h4impact_x_230) ? timestamp("GMT+0", 2026, 5, 27, 5, 3) : h4impact_x_230), (na(h4impact_x_231) ? timestamp("GMT+0", 2026, 5, 27, 16, 58) : h4impact_x_231), (na(h4impact_x_232) ? timestamp("GMT+0", 2026, 5, 28, 14, 51) : h4impact_x_232), (na(h4impact_x_233) ? timestamp("GMT+0", 2026, 5, 27, 14, 18) : h4impact_x_233), (na(h4impact_x_234) ? timestamp("GMT+0", 2026, 5, 28, 15, 1) : h4impact_x_234), (na(h4impact_x_235) ? timestamp("GMT+0", 2026, 5, 28, 13, 0) : h4impact_x_235), (na(h4impact_x_237) ? timestamp("GMT+0", 2026, 5, 29, 1, 0) : h4impact_x_237), (na(h4impact_x_238) ? timestamp("GMT+0", 2026, 5, 29, 16, 49) : h4impact_x_238), (na(h4impact_x_239) ? timestamp("GMT+0", 2026, 6, 1, 3, 32) : h4impact_x_239), (na(h4impact_x_240) ? timestamp("GMT+0", 2026, 8, 19, 16, 21) : h4impact_x_240), (na(h4impact_x_242) ? timestamp("GMT+0", 2026, 6, 2, 20, 18) : h4impact_x_242), (na(h4impact_x_244) ? timestamp("GMT+0", 2026, 6, 5, 14, 53) : h4impact_x_244), (na(h4impact_x_245) ? timestamp("GMT+0", 2026, 6, 4, 21, 49) : h4impact_x_245), (na(h4impact_x_246) ? timestamp("GMT+0", 2026, 6, 5, 9, 31) : h4impact_x_246), (na(h4impact_x_248) ? timestamp("GMT+0", 2026, 6, 8, 13, 10) : h4impact_x_248), (na(h4impact_x_249) ? timestamp("GMT+0", 2026, 6, 8, 10, 41) : h4impact_x_249), (na(h4impact_x_251) ? timestamp("GMT+0", 2026, 6, 9, 6, 36) : h4impact_x_251), (na(h4impact_x_252) ? timestamp("GMT+0", 2026, 6, 9, 18, 39) : h4impact_x_252), (na(h4impact_x_253) ? timestamp("GMT+0", 2026, 6, 10, 15, 35) : h4impact_x_253), (na(h4impact_x_254) ? timestamp("GMT+0", 2026, 6, 10, 15, 35) : h4impact_x_254), (na(h4impact_x_255) ? timestamp("GMT+0", 2026, 6, 10, 17, 48) : h4impact_x_255), (na(h4impact_x_256) ? timestamp("GMT+0", 2026, 6, 11, 3, 12) : h4impact_x_256), (na(h4impact_x_257) ? timestamp("GMT+0", 2026, 6, 11, 12, 3) : h4impact_x_257), (na(h4impact_x_258) ? timestamp("GMT+0", 2026, 6, 11, 19, 33) : h4impact_x_258), (na(h4impact_x_260) ? timestamp("GMT+0", 2026, 6, 12, 10, 20) : h4impact_x_260), (na(h4impact_x_261) ? timestamp("GMT+0", 2026, 6, 14, 23, 3) : h4impact_x_261), (na(h4impact_x_263) ? timestamp("GMT+0", 2026, 6, 15, 13, 0) : h4impact_x_263), (na(h4impact_x_264) ? timestamp("GMT+0", 2026, 6, 16, 12, 21) : h4impact_x_264), (na(h4impact_x_265) ? timestamp("GMT+0", 2026, 6, 17, 13, 31) : h4impact_x_265), (na(h4impact_x_267) ? timestamp("GMT+0", 2026, 6, 18, 10, 16) : h4impact_x_267), (na(h4impact_x_269) ? timestamp("GMT+0", 2026, 6, 22, 10, 7) : h4impact_x_269), (na(h4impact_x_270) ? timestamp("GMT+0", 2026, 6, 22, 5, 32) : h4impact_x_270), (na(h4impact_x_272) ? timestamp("GMT+0", 2026, 6, 23, 9, 4) : h4impact_x_272), (na(h4impact_x_273) ? timestamp("GMT+0", 2026, 6, 23, 5, 8) : h4impact_x_273), (na(h4impact_x_274) ? timestamp("GMT+0", 2026, 6, 26, 14, 57) : h4impact_x_274), (na(h4impact_x_276) ? timestamp("GMT+0", 2026, 6, 25, 13, 23) : h4impact_x_276), (na(h4impact_x_277) ? timestamp("GMT+0", 2026, 6, 25, 9, 13) : h4impact_x_277), (na(h4impact_x_278) ? timestamp("GMT+0", 2026, 6, 25, 16, 3) : h4impact_x_278), (na(h4impact_x_280) ? timestamp("GMT+0", 2026, 6, 26, 6, 54) : h4impact_x_280), (na(h4impact_x_282) ? timestamp("GMT+0", 2026, 6, 29, 8, 50) : h4impact_x_282), (na(h4impact_x_283) ? timestamp("GMT+0", 2026, 6, 29, 8, 50) : h4impact_x_283), (na(h4impact_x_284) ? timestamp("GMT+0", 2026, 6, 30, 7, 1) : h4impact_x_284), (na(h4impact_x_285) ? timestamp("GMT+0", 2026, 6, 30, 16, 51) : h4impact_x_285), (na(h4impact_x_286) ? timestamp("GMT+0", 2026, 7, 1, 3, 53) : h4impact_x_286), (na(h4impact_x_287) ? timestamp("GMT+0", 2026, 7, 2, 14, 30) : h4impact_x_287), (na(h4impact_x_288) ? timestamp("GMT+0", 2026, 7, 2, 14, 30) : h4impact_x_288), (na(h4impact_x_289) ? timestamp("GMT+0", 2026, 7, 1, 21, 0) : h4impact_x_289), (na(h4impact_x_291) ? timestamp("GMT+0", 2026, 7, 3, 3, 24) : h4impact_x_291), (na(h4impact_x_292) ? timestamp("GMT+0", 2026, 7, 10, 4, 8) : h4impact_x_292), (na(h4impact_x_293) ? timestamp("GMT+0", 2026, 7, 6, 19, 23) : h4impact_x_293), (na(h4impact_x_295) ? timestamp("GMT+0", 2026, 7, 9, 8, 24) : h4impact_x_295), (na(h4impact_x_297) ? timestamp("GMT+0", 2026, 7, 8, 19, 13) : h4impact_x_297), (na(h4impact_x_299) ? timestamp("GMT+0", 2026, 7, 9, 16, 0) : h4impact_x_299), (na(h4impact_x_300) ? timestamp("GMT+0", 2026, 7, 10, 1, 0) : h4impact_x_300), (na(h4impact_x_301) ? timestamp("GMT+0", 2026, 7, 10, 10, 21) : h4impact_x_301), (na(h4impact_x_303) ? timestamp("GMT+0", 2026, 7, 13, 18, 27) : h4impact_x_303), (na(h4impact_x_305) ? timestamp("GMT+0", 2026, 7, 23, 14, 37) : h4impact_x_305), (na(h4impact_x_307) ? timestamp("GMT+0", 2026, 7, 15, 19, 0) : h4impact_x_307), (na(h4impact_x_309) ? timestamp("GMT+0", 2026, 7, 29, 21, 18) : h4impact_x_309), (na(h4impact_x_310) ? timestamp("GMT+0", 2026, 7, 29, 21, 18) : h4impact_x_310), (na(h4impact_x_311) ? timestamp("GMT+0", 2026, 7, 17, 12, 23) : h4impact_x_311), (na(h4impact_x_313) ? timestamp("GMT+0", 2026, 7, 19, 21, 57) : h4impact_x_313), (na(h4impact_x_314) ? timestamp("GMT+0", 2026, 7, 20, 4, 39) : h4impact_x_314), (na(h4impact_x_315) ? timestamp("GMT+0", 2026, 7, 20, 14, 2) : h4impact_x_315), (na(h4impact_x_317) ? timestamp("GMT+0", 2026, 7, 21, 15, 37) : h4impact_x_317), (na(h4impact_x_318) ? timestamp("GMT+0", 2026, 7, 21, 15, 23) : h4impact_x_318), (na(h4impact_x_320) ? timestamp("GMT+0", 2026, 7, 23, 13, 24) : h4impact_x_320), (na(h4impact_x_322) ? timestamp("GMT+0", 2026, 7, 23, 1, 13) : h4impact_x_322), (na(h4impact_x_323) ? timestamp("GMT+0", 2026, 7, 23, 10, 42) : h4impact_x_323), (na(h4impact_x_325) ? timestamp("GMT+0", 2026, 7, 24, 13, 57) : h4impact_x_325), (na(h4impact_x_326) ? timestamp("GMT+0", 2026, 7, 27, 14, 39) : h4impact_x_326), (na(h4impact_x_328) ? timestamp("GMT+0", 2026, 7, 28, 16, 26) : h4impact_x_328), (na(h4impact_x_330) ? timestamp("GMT+0", 2026, 7, 29, 19, 49) : h4impact_x_330), (na(h4impact_x_333) ? timestamp("GMT+0", 2026, 7, 31, 9, 0) : h4impact_x_333), (na(h4impact_x_334) ? timestamp("GMT+0", 2026, 7, 31, 17, 54) : h4impact_x_334), (na(h4impact_x_336) ? timestamp("GMT+0", 2026, 8, 5, 13, 20) : h4impact_x_336), (na(h4impact_x_338) ? timestamp("GMT+0", 2026, 8, 4, 1, 0) : h4impact_x_338), (na(h4impact_x_340) ? timestamp("GMT+0", 2026, 8, 5, 13, 12) : h4impact_x_340), (na(h4impact_x_341) ? timestamp("GMT+0", 2026, 8, 6, 10, 1) : h4impact_x_341), (na(h4impact_x_342) ? timestamp("GMT+0", 2026, 8, 7, 14, 30) : h4impact_x_342), (na(h4impact_x_343) ? timestamp("GMT+0", 2026, 8, 7, 14, 30) : h4impact_x_343), (na(h4impact_x_345) ? timestamp("GMT+0", 2026, 8, 10, 9, 0) : h4impact_x_345), (na(h4impact_x_347) ? timestamp("GMT+0", 2026, 8, 11, 14, 57) : h4impact_x_347), (na(h4impact_x_348) ? timestamp("GMT+0", 2026, 8, 12, 4, 15) : h4impact_x_348), (na(h4impact_x_349) ? timestamp("GMT+0", 2026, 8, 12, 18, 19) : h4impact_x_349), (na(h4impact_x_351) ? timestamp("GMT+0", 2026, 8, 13, 9, 55) : h4impact_x_351), (na(h4impact_x_353) ? timestamp("GMT+0", 2026, 8, 14, 8, 6) : h4impact_x_353), (na(h4impact_x_356) ? timestamp("GMT+0", 2026, 8, 19, 8, 22) : h4impact_x_356), (na(h4impact_x_357) ? timestamp("GMT+0", 2026, 8, 18, 15, 34) : h4impact_x_357), (na(h4impact_x_358) ? timestamp("GMT+0", 2026, 8, 18, 22, 5) : h4impact_x_358), (na(h4impact_x_359) ? timestamp("GMT+0", 2026, 8, 19, 2, 7) : h4impact_x_359), (na(h4impact_x_361) ? timestamp("GMT+0", 2026, 8, 21, 4, 45) : h4impact_x_361), (na(h4impact_x_362) ? timestamp("GMT+0", 2026, 8, 21, 14, 39) : h4impact_x_362), (na(h4impact_x_364) ? timestamp("GMT+0", 2026, 8, 24, 8, 27) : h4impact_x_364), (na(h4impact_x_366) ? timestamp("GMT+0", 2026, 8, 25, 5, 0) : h4impact_x_366), (na(h4impact_x_367) ? timestamp("GMT+0", 2026, 8, 25, 10, 24) : h4impact_x_367), (na(h4impact_x_369) ? timestamp("GMT+0", 2026, 8, 26, 10, 29) : h4impact_x_369), (na(h4impact_x_371) ? timestamp("GMT+0", 2026, 8, 27, 11, 3) : h4impact_x_371), (na(h4impact_x_372) ? timestamp("GMT+0", 2026, 8, 27, 15, 23) : h4impact_x_372), (na(h4impact_x_373) ? timestamp("GMT+0", 2026, 8, 28, 11, 58) : h4impact_x_373), (na(h4impact_x_374) ? timestamp("GMT+0", 2026, 8, 28, 13, 0) : h4impact_x_374), (na(h4impact_x_376) ? timestamp("GMT+0", 2026, 9, 2, 3, 36) : h4impact_x_376), (na(h4impact_x_377) ? timestamp("GMT+0", 2026, 9, 1, 17, 24) : h4impact_x_377), (na(h4impact_x_378) ? timestamp("GMT+0", 2026, 9, 2, 15, 25) : h4impact_x_378), (na(h4impact_x_380) ? timestamp("GMT+0", 2026, 9, 3, 3, 32) : h4impact_x_380), (na(h4impact_x_381) ? timestamp("GMT+0", 2026, 9, 4, 14, 31) : h4impact_x_381), (na(h4impact_x_382) ? timestamp("GMT+0", 2026, 9, 7, 10, 20) : h4impact_x_382), (na(h4impact_x_383) ? timestamp("GMT+0", 2026, 9, 8, 1, 0) : h4impact_x_383), (na(h4impact_x_384) ? timestamp("GMT+0", 2026, 9, 8, 15, 7) : h4impact_x_384), (na(h4impact_x_386) ? timestamp("GMT+0", 2026, 9, 9, 13, 20) : h4impact_x_386), (na(h4impact_x_387) ? timestamp("GMT+0", 2026, 9, 9, 17, 7) : h4impact_x_387), (na(h4impact_x_389) ? timestamp("GMT+0", 2026, 9, 10, 12, 31) : h4impact_x_389), (na(h4impact_x_391) ? timestamp("GMT+0", 2026, 9, 10, 21, 0) : h4impact_x_391), (na(h4impact_x_392) ? timestamp("GMT+0", 2026, 9, 11, 15, 58) : h4impact_x_392), (na(h4impact_x_393) ? timestamp("GMT+0", 2026, 9, 11, 5, 0) : h4impact_x_393))
+        for i = 0 to array.size(h4Left) - 1
+            rCol = array.get(h4Col, i)
+            box.new(array.get(h4Left, i), array.get(h4Top, i), array.get(h4Right, i), array.get(h4Bottom, i), border_color=rCol, border_width=1, border_style=line.style_dashed, bgcolor=na, xloc=xloc.bar_time)
+            label.new(array.get(h4Left, i), array.get(h4Top, i), array.get(h4Label, i), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_down, color=color.new(rCol,85), textcolor=rCol, size=size.tiny)
+var table h4Ledger = table.new(position.top_right, 9, 21, border_width=1)
+var array<string> h4TId = array.from("#393", "#392", "#391", "#390", "#389", "#388", "#387", "#386", "#385", "#384", "#383", "#382", "#381", "#380", "#379", "#378", "#377", "#376", "#375", "#374")
+var array<string> h4TType = array.from("ARB", "IRB", "ARB", "ORB", "ARB", "ORB", "IRB", "ARB", "ORB", "IRB", "ARB", "ARB", "IRB", "ARB", "ORB", "IRB", "ARB", "ARB", "ORB", "ARB")
+var array<string> h4TSide = array.from("BUY", "SELL", "BUY", "SELL", "BUY", "SELL", "BUY", "SELL", "BUY", "SELL", "SELL", "SELL", "BUY", "SELL", "BUY", "SELL", "BUY", "BUY", "SELL", "SELL")
+var array<string> h4TBottom = array.from("1.16050", "1.16098", "1.15918", "1.16395", "1.16198", "1.16477", "1.16215", "1.16378", "1.16075", "1.16235", "1.16241", "1.16343", "1.15823", "1.15930", "1.15659", "1.15960", "1.15875", "1.15741", "1.16487", "1.16444")
+var array<string> h4TTop = array.from("1.16098", "1.16171", "1.16272", "1.16415", "1.16291", "1.16538", "1.16300", "1.16489", "1.16121", "1.16355", "1.16355", "1.16409", "1.15854", "1.16088", "1.15673", "1.16078", "1.15918", "1.15778", "1.16590", "1.16596")
+var array<string> h4TOrigin = array.from("2026-09-11 00:00:00", "2026-09-11 04:00:00", "2026-09-10 16:00:00", "2026-09-10 12:00:00", "2026-09-09 20:00:00", "2026-09-09 16:00:00", "2026-09-09 12:00:00", "2026-09-09 12:00:00", "2026-09-08 16:00:00", "2026-09-08 08:00:00", "2026-09-07 12:00:00", "2026-09-03 20:00:00", "2026-09-03 00:00:00", "2026-09-02 16:00:00", "2026-09-02 12:00:00", "2026-09-01 16:00:00", "2026-09-01 12:00:00", "2026-08-31 00:00:00", "2026-08-28 16:00:00", "2026-08-27 16:00:00")
+var array<string> h4TTrigger = array.from("2026-09-11 08:00:00", "2026-09-11 08:00:00", "2026-09-11 00:00:00", "2026-09-10 16:00:00", "2026-09-10 12:00:00", "2026-09-09 20:00:00", "2026-09-09 16:00:00", "2026-09-09 16:00:00", "2026-09-09 08:00:00", "2026-09-08 12:00:00", "2026-09-08 04:00:00", "2026-09-07 04:00:00", "2026-09-03 12:00:00", "2026-09-03 04:00:00", "2026-09-02 16:00:00", "2026-09-01 20:00:00", "2026-09-01 20:00:00", "2026-09-01 04:00:00", "2026-08-28 16:00:00", "2026-08-28 16:00:00")
+var array<string> h4TEligible = array.from("2026-09-11 08:00:00", "2026-09-11 18:58:00", "2026-09-11 00:00:00", "2026-09-10 20:00:00", "2026-09-10 12:00:00", "2026-09-10 06:55:00", "2026-09-09 20:07:00", "2026-09-09 16:00:00", "2026-09-09 14:48:00", "2026-09-08 18:07:00", "2026-09-08 04:00:00", "2026-09-07 04:00:00", "2026-09-04 08:47:00", "2026-09-03 04:00:00", "2026-09-03 00:12:00", "2026-09-02 17:20:00", "2026-09-01 20:00:00", "2026-09-01 04:00:00", "2026-08-31 04:00:00", "2026-08-28 16:00:00")
+var array<string> h4TImpact = array.from("2026-09-11 08:00:00", "2026-09-11 18:58:00", "2026-09-11 00:00:00", "", "2026-09-10 15:31:00", "", "2026-09-09 20:07:00", "2026-09-09 16:20:00", "2026-09-10 17:16:00", "2026-09-08 18:07:00", "2026-09-08 04:00:00", "2026-09-07 13:20:00", "2026-09-04 17:31:00", "2026-09-03 06:32:00", "", "2026-09-02 18:25:00", "2026-09-01 20:24:00", "2026-09-02 06:36:00", "2026-09-09 12:46:00", "2026-08-28 16:00:00")
+var array<color> h4TBg = array.from(color.new(color.green, 80), color.new(color.black, 80), color.new(color.green, 80), color.new(color.red, 80), color.new(color.green, 80), color.new(color.red, 80), color.new(color.blue, 80), color.new(color.green, 80), color.new(color.red, 80), color.new(color.black, 80), color.new(color.green, 80), color.new(color.green, 80), color.new(color.blue, 80), color.new(color.green, 80), color.new(color.red, 80), color.new(color.black, 80), color.new(color.green, 80), color.new(color.green, 80), color.new(color.red, 80), color.new(color.green, 80))
+    if onH4
+        table.cell(h4Ledger, 0, 0, "RB", text_color=color.white, bgcolor=color.new(color.green,15))
+        table.cell(h4Ledger, 1, 0, "Type", text_color=color.white, bgcolor=color.new(color.green,15))
+        table.cell(h4Ledger, 2, 0, "Side", text_color=color.white, bgcolor=color.new(color.green,15))
+        table.cell(h4Ledger, 3, 0, "Bottom", text_color=color.white, bgcolor=color.new(color.green,15))
+        table.cell(h4Ledger, 4, 0, "Top", text_color=color.white, bgcolor=color.new(color.green,15))
+        table.cell(h4Ledger, 5, 0, "Origin (RYD)", text_color=color.white, bgcolor=color.new(color.green,15))
+        table.cell(h4Ledger, 6, 0, "Trigger (RYD)", text_color=color.white, bgcolor=color.new(color.green,15))
+        table.cell(h4Ledger, 7, 0, "Eligible (RYD)", text_color=color.white, bgcolor=color.new(color.green,15))
+        table.cell(h4Ledger, 8, 0, "Impact (RYD)", text_color=color.white, bgcolor=color.new(color.green,15))
+        for i = 0 to array.size(h4TId) - 1
+            row = i + 1
+            table.cell(h4Ledger, 0, row, array.get(h4TId, i), text_color=color.black, bgcolor=array.get(h4TBg, i))
+            table.cell(h4Ledger, 1, row, array.get(h4TType, i), text_color=color.black, bgcolor=na)
+            table.cell(h4Ledger, 2, row, array.get(h4TSide, i), text_color=color.black, bgcolor=na)
+            table.cell(h4Ledger, 3, row, array.get(h4TBottom, i), text_color=color.black, bgcolor=na)
+            table.cell(h4Ledger, 4, row, array.get(h4TTop, i), text_color=color.black, bgcolor=na)
+            table.cell(h4Ledger, 5, row, array.get(h4TOrigin, i), text_color=color.black, bgcolor=na)
+            table.cell(h4Ledger, 6, row, array.get(h4TTrigger, i), text_color=color.black, bgcolor=na)
+            table.cell(h4Ledger, 7, row, array.get(h4TEligible, i), text_color=color.black, bgcolor=na)
+            table.cell(h4Ledger, 8, row, array.get(h4TImpact, i), text_color=color.black, bgcolor=na)
