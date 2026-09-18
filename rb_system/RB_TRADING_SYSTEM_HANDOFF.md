@@ -319,6 +319,56 @@ Files added: `rb_system/reference/h4_rb_engine.py`,
 `rb_system/data/h4_rb_swings.csv`, `h4_rb_ledger.csv`, `h4_rb_report.txt`
 (1133 H4 bars, 499 swings, 150 MSS, 393 RB zones).
 
+## 5c. 5m BSO entries for RB (this session, continuation, 2026-09-18)
+
+**Checked `five_bso_engine.py`'s actual code rather than assuming either
+way (per the task's explicit question).** Finding: `run_bso()`,
+`structural_invalid_at()`, `run_bso_chain()`, `ledger_row()` and
+`aggregate_5m()` are already POI-type-agnostic -- they only ever read a
+zone through `z.id`/`z.bullish`/`z.zb`/`z.zt` (present with identical
+meaning on both `wob.Zone` and `wrb.RbZone`) and a swing event through
+`kind`/`swing`/`at`/`price`/`confirm` (structurally identical dataclass in
+both engines). None of that logic touches any OB-specific field (`state`
+value family, `pre_spent_state`, `rejected`). Built
+`rb_system/reference/five_rb_bso_engine.py`, importing those five functions
+UNCHANGED from `ob_reference/five_bso_engine.py` (not copied) -- only
+`main()` needed a replacement, because the ORIGINAL `main()` is genuinely
+OB-specific: it hard-gates targets through `weekly_control_engine.py`'s
+permission ledger and OB's `pre_spent_state in (0,1,4)` state family. Per
+§5b's finding (RB has no control-ledger analog), the new `main()` instead
+targets every H4 RB zone that was **impacted** (`state==3`) and **never
+stranded before that impact** (`pre_spent_state in (0,1)` -- IRB or ARB;
+excludes 2/ORB, RB's direct analog of OB's OOB-exclusion rule).
+
+Result: 273 impacted, never-stranded H4 RB zones fed into the BSO search;
+199 `ENTERED`, 152 `H4_OB_BREACHED` (no re-entries reported beyond attempt 1
+in this run -- consistent with `run_bso_chain`'s own "only report a
+re-entry that became a trade" rule, reused verbatim).
+
+**Hand-traced 2 records against raw M1 data**:
+- `rb_id=1` (SELL, H4 RB record 1 from §5b) -- `H4_OB_BREACHED`,
+  `invalidation_reason=swing_break` at `2026-01-02 17:55:00 UTC`. Consistent
+  with record 1 being impacted, then price continuing straight through
+  (the same M1 rows scanned in §5b for the impact trace show price still
+  climbing past 17:55), invalidating any resting-swing search before one
+  could form.
+- `rb_id=2` (BUY, H4 RB record 2, `zb=1.17128, zt=1.17207`, impact
+  `2026-01-02 21:07:00`). Ledger: `entry_time=2026-01-02 21:51:00,
+  entry_price=1.17181`; `sl_price=1.17139`; `result=SL,
+  exit_time=2026-01-05 00:56:00, exit_price=1.17139`. Checked raw M1 rows
+  directly: at `21:50:00` H=1.17179 (candidate price 1.17181 not yet
+  broken); at `21:51:00` H=1.17194 > 1.17181 -- **entry fires at exactly
+  this minute**, matching the ledger. For the SL exit: at `00:55:00` on
+  2026-01-05, L=1.17182 (SL 1.17139 not yet touched); at `00:56:00`,
+  L=1.17112 <= 1.17139 -- **SL fires at exactly this minute**, matching the
+  ledger's exit time and price exactly.
+
+No bugs found; the reused core behaved identically on RB zones as it does
+on OB zones, as expected from the POI-agnostic finding above.
+
+Files added: `rb_system/reference/five_rb_bso_engine.py`,
+`rb_system/data/five_rb_bso_ledger.csv`.
+
 ## 6. Files
 
 - `rb_system/reference/weekly_rb_generator.py` — Weekly RB engine (this
