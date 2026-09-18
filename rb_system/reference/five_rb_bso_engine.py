@@ -16,19 +16,29 @@ task's own question anticipated. Those five functions are imported and
 reused UNCHANGED from `ob_reference/five_bso_engine.py` below -- not
 copied, not re-derived.
 
-What is NOT reusable is `five_bso_engine.py`'s `main()`: it hard-gates
-target H4 OBs through `weekly_control_engine.py`'s BUY_ONLY/SELL_ONLY/BOTH
-permission ledger and OB's own state family (`pre_spent_state in (0,1,4)`).
-Per `h4_rb_engine.py`'s own resolved finding, RB has no control-ledger
-analog (`RB_Indicator_v1.pine` never mentions control/permission), so this
-script's `main()` instead targets every H4 RB zone that was genuinely
-impacted (`status()` reads `state==3`) AND was never stranded before that
-impact (`pre_spent_state in (0, 1)` -- IRB or ARB, RB's two "still a live
-POI" states; state 2/ORB is RB's stranded-and-dead state, the direct analog
-of OB's OOB, correctly excluded the same way `pre_spent_ok` excludes OOB
-for OB).
+What is NOT reusable is `five_bso_engine.py`'s `main()` -- it is
+OB-specific glue, not because control-gating itself doesn't apply to RB
+(see below), but because it reads OB's own zone fields directly. This
+script's own `main()` is written fresh but now applies the SAME control
+gate OB's `main()` does.
 
-Run order: h4_rb_engine.py -> this script. Requires the same CSV/args.
+SUPERSEDED (2026-09-18, later this same day, per explicit user decision):
+`h4_rb_engine.py`'s original finding that RB's pine spec has no control
+concept of its own is still true and is not being overridden. What changed
+is the user's choice: rather than run RB's 5m BSO stage on every impacted,
+never-stranded H4 RB zone unconditionally (this script's earlier
+behavior), it now also requires that the SAME Weekly control permission
+that gates OB's 5m BSO (`weekly_control_engine.py`, unmodified, run on OB
+zones) permits that zone's direction at its impact time -- i.e. it reads
+the `authorized` column `h4_rb_engine.py` now writes into `h4_rb_ledger.csv`
+(computed there via the same `load_control_by_week`/`permits`/`control_at`
+interface `h4_ob_engine.py` uses), and targets only rows where
+`authorized == True`. See `RB_TRADING_SYSTEM_HANDOFF.md` SS8 for the
+decision and verification evidence.
+
+Run order: weekly_control_engine.py -> h4_rb_engine.py -> this script.
+Requires the same CSV/args (plus h4_rb_engine.py's --control-ledger/
+--week-close-zone/--week-close-hour if they differ from the defaults).
 """
 from __future__ import annotations
 
@@ -43,19 +53,24 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "ob_reference"))
 import weekly_rb_generator as wrb          # noqa: E402  (verified RB engine)
-import h4_rb_engine as h4rb                # noqa: E402
+import weekly_ob_generator as wob          # noqa: E402  (only for aggregate_weeks -- same week grid weekly_control_engine.py used)
+import h4_rb_engine as h4rb                # noqa: E402  (also provides load_control_by_week/permits, identical to h4_ob_engine.py's)
 from five_bso_engine import (               # noqa: E402  (reused verbatim, POI-agnostic)
     run_bso_chain, structural_invalid_at, ledger_row, aggregate_5m, LEDGER_FIELDS,
 )
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="5m BSO engine for RB zones (reuses OB's POI-agnostic core)")
+    p = argparse.ArgumentParser(description="5m BSO engine for RB zones (reuses OB's POI-agnostic core), "
+                                             "gated by the same Weekly control permission that gates OB's 5m BSO")
     p.add_argument("csv_file", nargs="?", default="EURUSD_m1_BidAndAsk.csv")
     p.add_argument("--input-tz", default="Etc/GMT+2")
     p.add_argument("--price-side", choices=("bid", "ask"), default="bid")
     p.add_argument("--display-tz", default="Asia/Riyadh")
     p.add_argument("--h4-anchor-hour", type=int, default=1, choices=range(4))
+    p.add_argument("--week-close-zone", default="America/New_York", help="must match the run that produced --control-ledger")
+    p.add_argument("--week-close-hour", type=int, default=17, choices=range(24), help="must match the run that produced --control-ledger")
+    p.add_argument("--control-ledger", default=None, help="path to weekly_control_ledger.csv; default: alongside input CSV")
     p.add_argument("--out-dir", default=None)
     return p.parse_args()
 
@@ -71,24 +86,52 @@ def main() -> int:
         print("WARNING:", w, file=sys.stderr)
     mt = [m.t for m in minutes]
 
+    base = csv_path.resolve().parent
+    control_path = Path(args.control_ledger) if args.control_ledger else base / "weekly_control_ledger.csv"
+    if not control_path.exists():
+        print("weekly_control_ledger.csv not found. Run weekly_control_engine.py first (same CSV, same "
+              "--week-close-zone/--week-close-hour), or pass --control-ledger.", file=sys.stderr)
+        return 2
+    control_by_week = h4rb.load_control_by_week(control_path)
+    close_tz = ZoneInfo(args.week_close_zone)
+    weeks = wob.aggregate_weeks(minutes, close_tz, args.week_close_hour)
+    week_starts = [w.start for w in weeks]
+
+    def control_at(t) -> str:
+        if t is None:
+            return ""
+        idx = bisect_left(week_starts, t)
+        if idx >= len(week_starts) or week_starts[idx] != t:
+            idx -= 1
+        idx = max(0, min(idx, len(week_starts) - 1))
+        return control_by_week.get(idx, "NONE")
+
     h4_bars = h4rb.aggregate_h4(minutes, args.h4_anchor_hour)
     h4_engine = wrb.WeeklyRBEngine(minutes, h4_bars)
     h4_engine.run()
     h4_bar_starts = [b.start for b in h4_bars]
 
-    # RB-specific target gate (see module docstring): impacted, and never
-    # stranded (ORB) before that impact. No control-permission layer -- RB
-    # has none (h4_rb_engine.py's own finding).
+    # RB target gate: impacted, never stranded (ORB) before that impact,
+    # AND the same Weekly control permission that gates OB's 5m BSO permits
+    # this zone's direction at its impact time (see module docstring / SS8
+    # of the handoff for the decision -- this mirrors h4_ob_engine.py's own
+    # `authorized` computation exactly, just applied to RB zones).
     targets = []
+    n_impacted_never_stranded = 0
     for z in h4_engine.rbs:
         impacted = z.state == 3
         if not impacted or z.impact_time is None:
             continue
         if z.pre_spent_state not in (0, 1):
             continue  # was already ORB (stranded) before this impact -- dead POI, same as OB's OOB exclusion
-        targets.append((z, z.impact_time, ""))  # no parent_weekly_id concept for RB (no control layer)
+        n_impacted_never_stranded += 1
+        ctrl = control_at(z.impact_time)
+        if not h4rb.permits(ctrl, z.bullish):
+            continue  # Weekly control did not permit this direction at impact time -- gated out
+        targets.append((z, z.impact_time, ""))  # no parent_weekly_id concept for RB (no control-zone ancestry)
 
-    print(f"{len(targets)} impacted, never-stranded H4 RB zones to run BSO on")
+    print(f"{n_impacted_never_stranded} impacted, never-stranded H4 RB zones; "
+          f"{len(targets)} also control-authorized -> BSO run on those")
 
     five_bars = aggregate_5m(minutes)
     five_bar_starts = [b.start for b in five_bars]

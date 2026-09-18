@@ -438,6 +438,113 @@ verification that was not actually done.
 Files added: `rb_system/reference/full_viewer_rb.py`,
 `rb_system/data/full_viewer_rb.pine`.
 
+## 8. RB wired to OB's existing Weekly control signal (this session, 2026-09-18, continuation 2)
+
+**Decision (user's explicit choice, overriding nothing in §5d's reasoning,
+only its conclusion about what to DO):** §5d correctly found that RB's own
+pine spec (`RB_Indicator_v1.pine`) has no control/permission concept at
+all, and that inventing an RB-native control rule would be guessing. Given
+that, the user chose: do not invent one. Instead, run `weekly_control_engine.py`
+exactly as before (OB-specific, unmodified, driven on OB zones) and have
+RB's H4/5m engines OBEY that same Weekly permission timeline as an external
+gate -- i.e. RB now reacts only to whichever direction (BUY_ONLY/SELL_ONLY/
+BOTH/NONE) OB's own control state machine currently permits, rather than
+reacting to every RB opportunity unconditionally (the previous behavior,
+per §5b/§5d).
+
+**Exact wiring (mirrors `h4_ob_engine.py`'s own interface, not reinvented):**
+- `h4_ob_engine.py` consumes control via: `load_control_by_week(path)` (reads
+  `weekly_control_ledger.csv`'s `week_index`/`control` columns into a dict),
+  `permits(control, bullish)` (`BUY_ONLY`/`BOTH` permit bullish,
+  `SELL_ONLY`/`BOTH` permit bearish), and a local `control_at(t)` closure
+  that bisects `t` into the Weekly week-start grid built from
+  `wob.aggregate_weeks(minutes, close_tz, week_close_hour)`.
+- `rb_system/reference/h4_rb_engine.py` now defines byte-identical
+  `load_control_by_week`/`permits` helpers, takes the same
+  `--control-ledger`/`--week-close-zone`/`--week-close-hour` CLI flags,
+  rebuilds the same Weekly week-start grid (via `weekly_ob_generator.
+  aggregate_weeks`, imported alongside `weekly_rb_generator`, since the
+  control ledger's week index is OB's Weekly grid, not RB's -- they must be
+  the identical grid for the bisect to line up, and they are: both call
+  `aggregate_weeks` with the same default `America/New_York`/17
+  close convention), and for every H4 RB zone computes
+  `ctrl = control_at(z.impact_time)` and
+  `authorized = impacted and pre_spent_state in (0,1) and permits(ctrl, z.bullish)`
+  -- `pre_spent_state in (0,1)` (IRB/ARB, never-stranded-before-impact) is
+  RB's own pre-existing exclusion rule from §5c, kept unchanged; only the
+  `permits(...)` clause is new. `h4_rb_ledger.csv` gained two columns,
+  `control_at_impact` and `authorized`, exactly mirroring `h4_ob_ledger.csv`'s
+  own columns of the same name. Every H4 RB zone is still written to the
+  ledger for audit (ungated rows kept, same as OB); only `authorized` says
+  whether it would be actioned.
+- `rb_system/reference/five_rb_bso_engine.py`'s `main()` previously targeted
+  every impacted, never-stranded H4 RB zone unconditionally (§5c). It now
+  additionally requires `h4rb.permits(control_at(z.impact_time), z.bullish)`
+  before adding a zone to `targets` -- same `load_control_by_week`/`permits`
+  functions (imported from `h4_rb_engine`, not duplicated), same
+  `control_at` bisect logic, same CLI flags. A zone that fails this check is
+  never even passed to `run_bso_chain`, so it produces zero rows in
+  `five_rb_bso_ledger.csv` (not merely marked unauthorized) -- consistent
+  with OB's own `five_bso_engine.py`, which does the identical thing (only
+  `authorized` targets ever reach `run_bso_chain`).
+- Both scripts fail loudly (exit 2, explicit stderr message) if
+  `weekly_control_ledger.csv` is missing, exactly like `h4_ob_engine.py`/
+  `five_bso_engine.py` do -- RB's H4/5m stages now have the same hard
+  dependency on `weekly_control_engine.py` having been run first that OB's
+  own H4/5m stages have. Run order is now:
+  `weekly_control_engine.py -> weekly_rb_generator.py -> h4_rb_engine.py -> five_rb_bso_engine.py`.
+
+**Checked the interface was clean, not entangled, before wiring (per the
+task's own stop-condition):** `load_control_by_week`/`permits`/the
+`control_at` bisect pattern read only `week_index`/`control` from the CSV
+and a zone's `bullish`/`impact_time` -- nothing OB-zone-specific (no
+`rejected`, `pre_spent_state` value family, `origin_state`, or any
+AOB/IFOB/AIFOB concept leaks into that interface). It was a clean external
+signal to consume, exactly as the task anticipated; no blocker was hit.
+
+**Verification (hand-traced against real data, record IDs cited):**
+
+`weekly_control_ledger.csv` week 15 (`week_index=15`, `week_start_utc=
+2026-04-12 21:00:00`) has `control=SELL_ONLY` (confirmed directly from the
+CSV row: `15,2026-04-12 21:00:00,2026-04-13 00:00:00,BULLISH,SELL_ONLY,,3`),
+and week 16 (`2026-04-19 21:00:00`) is also `SELL_ONLY` -- so the whole span
+`2026-04-12 21:00:00` to `2026-04-26 21:00:00` is a single continuous
+SELL_ONLY period.
+
+- **Suppressed (previously would have fired unconditionally, now correctly
+  gated out):** H4 RB record `id=166` (BUY, IRB, `bottom=1.16771,
+  top=1.16838`, `impact_time_utc=2026-04-12 21:00:00` -- inside the
+  SELL_ONLY week). `pre_spent_state` is IRB (never stranded), so before
+  this change it was one of the 273 "impacted, never-stranded" zones fed
+  unconditionally into the 5m BSO stage. After the gate:
+  `h4_rb_ledger.csv` row 166 now reads `control_at_impact=SELL_ONLY,
+  authorized=False` (BUY direction, SELL_ONLY control -> `permits()`
+  returns False). Confirmed it produces **zero rows** in
+  `five_rb_bso_ledger.csv` (`grep '^166,' five_rb_bso_ledger.csv` -> no
+  match) -- the suppression propagates all the way through the 5m stage,
+  not just the H4 ledger's audit column.
+- **Still fires (permitted direction, same control period):** H4 RB record
+  `id=171` (SELL, IRB, `bottom=1.17948, top=1.18015`,
+  `impact_time_utc=2026-04-15 15:28:00` -- same SELL_ONLY week).
+  `h4_rb_ledger.csv` row 171 reads `control_at_impact=SELL_ONLY,
+  authorized=True` (SELL direction, SELL_ONLY control -> permitted).
+  Confirmed `five_rb_bso_ledger.csv` has a row for `rb_id=171`
+  (`stage=ENTERED`, `entry_utc=2026-04-15 18:35:00`, `result=SL,
+  exit_utc=2026-04-15 19:27:00`) -- fires exactly as it would have before
+  this change, since it was already control-permitted.
+- **Aggregate consistency check:** `h4_rb_engine.py` reports
+  `RB zones: 393 ... Authorized: 44`; `five_rb_bso_engine.py` independently
+  recomputes the same gate from scratch (does not read
+  `h4_rb_ledger.csv`'s `authorized` column, recomputes via its own
+  `control_at`/`permits` call) and reports
+  `273 impacted, never-stranded H4 RB zones; 44 also control-authorized` --
+  the two independent computations agree exactly (44 == 44), confirming the
+  duplicated gate logic in the two scripts is consistent, not diverged.
+
+No bugs found; the OB control interface was cleanly reusable exactly as
+anticipated, and both suppression and permission cases traced to real
+ledger rows with matching timestamps/control state.
+
 ## 6. Files
 
 - `rb_system/reference/weekly_rb_generator.py` — Weekly RB engine (this
@@ -498,3 +605,23 @@ Files added: `rb_system/reference/full_viewer_rb.py`,
   question the task asked ("does X need an RB variant or is it reusable
   as-is") was answered by reading the actual code, with the reasoning
   recorded in §5b/§5c/§5d, not assumed either way.
+- **Control wiring (§8, this session, continuation 2): RB's H4/5m engines
+  now obey OB's existing Weekly control permission as an external gate.**
+  `h4_rb_engine.py` and `five_rb_bso_engine.py` both require
+  `weekly_control_ledger.csv` (from `weekly_control_engine.py`, run
+  unmodified on OB zones) and gate every H4 RB opportunity through the same
+  `load_control_by_week`/`permits`/`control_at` interface `h4_ob_engine.py`
+  uses. `h4_rb_ledger.csv` gained `control_at_impact`/`authorized` columns.
+  393 H4 RB zones computed, 44 control-authorized (down from 273
+  impacted-never-stranded pre-gate); the 5m BSO stage independently
+  recomputes the same gate and agrees (44 == 44). Hand-verified with a
+  paired example in the same SELL_ONLY control week (`week_index=15`,
+  2026-04-12 to 2026-04-19): record `id=166` (BUY) correctly suppressed
+  (zero rows in `five_rb_bso_ledger.csv`), record `id=171` (SELL) correctly
+  still fires (`ENTERED`, exits `SL`). No blocker hit; the OB control
+  interface was cleanly reusable, not entangled with OB-specific zone
+  state, exactly as `h4_ob_engine.py`'s own code showed before wiring
+  began. Weekly RB and the combined Pine viewer (`full_viewer_rb.py`) were
+  NOT touched by this change (not in the task's scope for this pass) -- the
+  Pine viewer still draws every H4 RB zone regardless of `authorized`, an
+  intentional scope boundary, not an oversight.
