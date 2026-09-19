@@ -249,7 +249,25 @@ class WeeklyRBEngine:
             dest.append(swing)
 
     # -- RB construction, translated from RB_Indicator_v1.pine --
-    def add_rb_from_swing(self, idx: int, is_high: bool, trigger_k: int, st: int) -> int:
+    def cross_time(self, k: int, level: float, above: bool) -> Optional[datetime]:
+        """Exact M1 minute, within week k, that price first crosses `level`.
+
+        `above`=True looks for the first minute whose HIGH exceeds `level`
+        (a bullish break); False looks for the first minute whose LOW falls
+        below `level` (a bearish break). Mirrors the inline scan
+        `weekly_ob_generator.py`'s `add_ifob`/`set_promoted_ifob_trigger`
+        use to find the real trigger minute (lines ~429-433/450-454) --
+        NOT `event_time()`, whose threshold is hard-coded to the PREVIOUS
+        week's high/low and is only equivalent when the armed swing's own
+        price happens to equal that boundary.
+        """
+        wk = self.w[k]
+        for m in self.m[wk.first:wk.last]:
+            if (m.h > level) if above else (m.l < level):
+                return m.t
+        return None
+
+    def add_rb_from_swing(self, idx: int, is_high: bool, trigger_k: int, st: int, trigger_time: Optional[datetime]) -> int:
         wk = self.w[idx]
         if is_high:
             zb, zt, bull = max(wk.o, wk.c), wk.h, False
@@ -257,28 +275,31 @@ class WeeklyRBEngine:
             zb, zt, bull = wk.l, min(wk.o, wk.c), True
         eligible = trigger_k if st == 1 else -1
         z = RbZone(len(self.rbs) + 1, idx, zb, zt, bull, trigger_k, eligible, -1, st, st, st)
-        z.trigger_time = self.w[trigger_k].start
+        z.trigger_time = trigger_time
         if eligible >= 0:
-            z.eligible_time = z.trigger_time
+            # ARB: eligibility is immediate, the same real moment as the
+            # trigger itself (per the RB spec) -- not a copy of the week
+            # boundary this used to be derived from.
+            z.eligible_time = trigger_time
         self.rbs.append(z)
         return len(self.rbs) - 1
 
-    def try_bull_arb(self, preg: int, aob_swh_i: int, new_swl_i: int, k: int) -> None:
+    def try_bull_arb(self, preg: int, aob_swh_i: int, new_swl_i: int, k: int, ev_at: Optional[datetime]) -> None:
         # mirrors tryBullAOB's guard exactly (RB_Indicator_v1.pine tryBullARB)
         if preg != 1 or aob_swh_i < 0:
             return
         armed_h_price = self.w[aob_swh_i].h
         if any(self.w[v].h >= armed_h_price for v in range(aob_swh_i + 1, new_swl_i + 1)):
             return
-        self.add_rb_from_swing(aob_swh_i, True, k, 1)
+        self.add_rb_from_swing(aob_swh_i, True, k, 1, ev_at)
 
-    def try_bear_arb(self, preg: int, aob_swl_i: int, new_swh_i: int, k: int) -> None:
+    def try_bear_arb(self, preg: int, aob_swl_i: int, new_swh_i: int, k: int, ev_at: Optional[datetime]) -> None:
         if preg != 2 or aob_swl_i < 0:
             return
         armed_l_price = self.w[aob_swl_i].l
         if any(self.w[v].l <= armed_l_price for v in range(aob_swl_i + 1, new_swh_i + 1)):
             return
-        self.add_rb_from_swing(aob_swl_i, False, k, 1)
+        self.add_rb_from_swing(aob_swl_i, False, k, 1, ev_at)
 
     def consume_break(self, bull: bool, k: int) -> bool:
         if bull:
@@ -288,7 +309,11 @@ class WeeklyRBEngine:
                 self.msses.append(MSS(k, self.h_idx, self.h_price, True))
             self.regime = 1
             if self.last_l >= 0:
-                self.add_rb_from_swing(self.last_l, False, k, 0)  # IRB, bullish (swing-low wick)
+                # IRB trigger = exact M1 minute this break (of the armed
+                # swing-high price self.h_price) actually happens, not
+                # week k's own open (RB_Indicator_v1.pine: IFOB's break-
+                # confirmation moment).
+                self.add_rb_from_swing(self.last_l, False, k, 0, self.cross_time(k, self.h_price, True))  # IRB, bullish (swing-low wick)
             self.have_h = False
             return True
         if not self.have_l or self.w[k].l >= self.l_price:
@@ -297,7 +322,7 @@ class WeeklyRBEngine:
             self.msses.append(MSS(k, self.l_idx, self.l_price, False))
         self.regime = 2
         if self.last_h >= 0:
-            self.add_rb_from_swing(self.last_h, True, k, 0)  # IRB, bearish (swing-high wick)
+            self.add_rb_from_swing(self.last_h, True, k, 0, self.cross_time(k, self.l_price, False))  # IRB, bearish (swing-high wick)
         self.have_l = False
         return True
 
@@ -307,12 +332,12 @@ class WeeklyRBEngine:
                 self.have_h = True
                 self.h_price = ev.price
                 self.h_idx = ev.swing
-                self.try_bear_arb(preg, armed_l, ev.swing, k)
+                self.try_bear_arb(preg, armed_l, ev.swing, k, ev.at)
             else:
                 self.have_l = True
                 self.l_price = ev.price
                 self.l_idx = ev.swing
-                self.try_bull_arb(preg, armed_h, ev.swing, k)
+                self.try_bull_arb(preg, armed_h, ev.swing, k, ev.at)
 
     def finish_events_and_lifecycle(self, k: int, before: int, total: int, consumed_h: bool, consumed_l: bool) -> None:
         # STEP 2: arm swings + IRB delayed eligibility (k > triggerK).

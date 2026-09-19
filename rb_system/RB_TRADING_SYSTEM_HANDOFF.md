@@ -1122,3 +1122,221 @@ TradingView, which remains unavailable in this environment as before).
 Files changed: `rb_system/reference/full_viewer_rb.py` (extended, not
 replaced), `rb_system/data/full_viewer_rb.pine` (regenerated, 651 lines,
 17 gates baked into `gateStart`/`gateEnd`).
+
+## 11. Bug found and fixed this session: `add_rb_from_swing` trigger_time was a fake week-boundary timestamp, not a real M1 minute
+
+**Root cause.** `rb_system/reference/weekly_rb_generator.py`'s
+`add_rb_from_swing(self, idx, is_high, trigger_k, st)` set:
+```python
+z.trigger_time = self.w[trigger_k].start   # the WEEK'S OPEN, not a real event
+```
+for every RB zone, both IRB (`st=0`) and ARB (`st=1`). This is a real
+regression introduced during the RB port, not a pre-existing OB
+limitation (an earlier session in this conversation wrongly told the user
+it was inherited from OB; that has already been retracted). OB's own
+`add_zone()`/`add_ifob()`/`set_promoted_ifob_trigger()` always assign
+`trigger_time` from an exact M1 minute (`event.at`, or an inline per-minute
+scan for the real break/crossing) — never a week-boundary timestamp.
+
+**Concrete proof used to find it (RB zone id=2, ARB SELL,
+origin `[1.18649, 1.20825]`):** before the fix, the ledger recorded
+`trigger_time_utc = eligible_time_utc = 2026-02-08 22:00:00` — exactly
+week 6's open, a placeholder. The real M1-precise moment the underlying
+swing low confirms (price crosses above week 5's high) is
+`engine.event_time(1, 6) = 2026-02-09 14:07:00 UTC` (`17:07 Riyadh`). The
+recorded `impact_time_utc` was `2026-02-09 11:01:00` — chronologically
+*before* the real trigger, an impossible effect-before-cause ordering that
+only existed because the stored trigger_time was fake (the impact search
+started from the fake, too-early eligible_time and so found a "touch"
+before the zone's real triggering swing had even confirmed).
+
+**The fix — two call paths, two different real-M1-minute sources, per the
+RB spec's own distinction between IRB and ARB triggers:**
+
+1. **New helper `WeeklyRBEngine.cross_time(k, level, above)`** — scans week
+   `k`'s minutes for the first minute whose high exceeds `level` (a
+   bullish break, `above=True`) or whose low falls below `level` (a
+   bearish break). This mirrors the inline per-minute scan
+   `weekly_ob_generator.py`'s `add_ifob` (lines ~429-433) and
+   `set_promoted_ifob_trigger` (lines ~450-454) already use to find OB's
+   real trigger minute — **not** `event_time()`, whose threshold is
+   hard-coded to the *previous week's* high/low and is only equivalent to
+   the real armed-swing break level when that armed swing happens to be
+   exactly one week old. Confirmed this non-equivalence directly: for RB
+   #12 (see below), the armed swing-high price actually broken was
+   `1.14822`, not `w[29].h = 1.14492` (the previous week's own high) —
+   `event_time(1, 30)` would have returned `2026-07-29 20:53:00 UTC`, a
+   different (wrong) minute than the real break at `2026-07-30 12:43:00
+   UTC`. `cross_time` uses the real armed price (`self.h_price`/
+   `self.l_price`), so it is correct in both cases; `event_time` is only
+   coincidentally correct for RB #2 because that swing happened to be
+   confirmed against exactly the prior week's high.
+2. **IRB path (`st=0`, from `consume_break`)**: the trigger is the exact
+   M1 minute the swing high/low BREAK itself occurs. `consume_break`
+   already holds the armed price being broken (`self.h_price` for a bull
+   break, `self.l_price` for a bear break) at the moment it calls
+   `add_rb_from_swing` — passed straight to `cross_time(k, self.h_price,
+   True)` / `cross_time(k, self.l_price, False)`.
+3. **ARB path (`st=1`, from `try_bull_arb`/`try_bear_arb`, themselves
+   called from `mid_arm`)**: `mid_arm`'s loop already holds the exact
+   confirming `Event` (`ev`), whose `.at` field is the real M1 minute
+   (computed once in `add_event()` via `event_time()`, which — for a
+   fresh swing confirmation, not a break of an old armed swing — is exact
+   by construction). `ev.at` is now threaded through
+   `try_bull_arb`/`try_bear_arb` into `add_rb_from_swing` as an explicit
+   `trigger_time` parameter, instead of anything derived from
+   `trigger_k`/`self.w[trigger_k]`.
+
+`add_rb_from_swing` now takes `trigger_time` as an explicit parameter and
+sets `z.trigger_time = trigger_time` directly. For ARB (`st=1`),
+`z.eligible_time` is also set to the same `trigger_time` (eligibility is
+immediate for ARB, per spec — same real moment as the trigger, not a copy
+of the old fake week-boundary value). For IRB (`st=0`), `z.eligible_time`
+is untouched by this change — it was already correctly set elsewhere in
+`finish_events_and_lifecycle` from `ev.at` (lines ~330/340) and continues
+to be.
+
+**Kind-mapping check (done before trusting any of the above):** confirmed
+from `add_event` call sites in this same file — `h_action()` calls
+`add_event(k, 1, self.trough, ...)` after a break of the previous week's
+high (registers a swing LOW, kind=1), `l_action()` calls
+`add_event(k, 0, self.peak, ...)` after a break of the previous week's low
+(registers a swing HIGH, kind=0). Identical to OB's own kind numbering
+(`weekly_ob_generator.py` uses the same convention), as the port's header
+comment already claims.
+
+### Verification against RB #2 and RB #12 (re-derived fresh after the fix, not hardcoded)
+
+**RB #2 (ARB SELL, origin `[1.18649, 1.20825]`), after the fix:**
+- `event_time(1, 6)` (independently re-derived on the live post-fix
+  engine) = `2026-02-09 14:07:00 UTC` = **17:07 Riyadh**.
+- `z.trigger_time` = `z.eligible_time` = `2026-02-09 14:07:00 UTC` =
+  **17:07 Riyadh** — matches the independent `event_time` re-derivation
+  exactly (this case is one where `cross_time`'s armed price and
+  `event_time`'s previous-week-boundary threshold coincide, confirmed
+  directly, not assumed).
+- `impact_time` is now **also** `2026-02-09 14:07:00 UTC` (**17:07
+  Riyadh**) — the same minute as the trigger/eligible time, not before it.
+  This is real, not a bug: raw M1 row at `2026-02-09 12:07:00` local
+  (`Etc/GMT+2`) = `14:07:00 UTC` has `HighBid=1.18746`, `LowBid=1.18738`,
+  both inside the zone `[1.18649, 1.20825]`, so the very minute the ARB
+  zone becomes eligible already satisfies the impact/touch condition
+  (`first_touch` starts scanning at `eligible_time` and finds a hit
+  immediately). The previously reported "impact at 11:01 UTC, before the
+  real 14:07 trigger" is now gone — that 11:01 finding was itself an
+  artifact of the old fake (too-early) eligible_time; `first_touch` is
+  bounded below by `eligible_time`, so impact can no longer precede
+  trigger/eligible by construction.
+
+**RB #12 (IRB BUY, origin week 30, `[1.13529, 1.13689]`), after the fix:**
+- `z.trigger_time` = `2026-07-30 12:43:00 UTC` = **15:43 Riyadh** — a real
+  M1 minute, not a round week-boundary hour.
+- Independently confirmed against the raw CSV: the armed swing-high price
+  broken was `1.14822` (captured directly off the live engine at the
+  moment `consume_break(bull=True, k=30)` fired, `!= w[29].h = 1.14492`,
+  proving `event_time(1, 30)` would NOT have been equivalent here — it
+  returns `2026-07-29 20:53:00 UTC`, the wrong minute). Raw M1 rows
+  (`Etc/GMT+2` local, `= UTC-2`) around the real break: `07/30/2026
+  10:42:00` local has `HighBid=1.14796` (still below `1.14822`), `07/30/2026
+  10:43:00` local has `HighBid=1.14840` (first minute above `1.14822`) —
+  `10:43:00` local `= 12:43:00 UTC`, exactly matching the engine's
+  `trigger_time`. Zone remains state `ORB` (stranded before ever reaching
+  eligibility+impact), so `impact_time` is empty — unaffected by this
+  check.
+
+**Spot-checked all 13 Weekly RB zones (not just 3-5), all trigger times
+changed from the old fake week-boundary stamps to real M1 minutes, none of
+the new values are round week-open timestamps (`21:00:00`/`22:00:00`
+UTC):**
+```
+id  old trigger_time_utc     new trigger_time_utc     new trigger_time (Riyadh)
+1   2026-01-18 22:00:00  ->  2026-01-20 15:34:00   -> 2026-01-20 18:34 Riyadh
+2   2026-02-08 22:00:00  ->  2026-02-09 14:07:00   -> 2026-02-09 17:07 Riyadh
+3   2026-02-15 22:00:00  ->  2026-02-19 15:01:00   -> 2026-02-19 18:01 Riyadh
+4   2026-03-29 21:00:00  ->  2026-03-30 11:17:00   -> 2026-03-30 14:17 Riyadh
+5   2026-04-05 21:00:00  ->  2026-04-08 00:36:00   -> 2026-04-08 03:36 Riyadh
+6   2026-05-03 21:00:00  ->  2026-05-06 12:45:00   -> 2026-05-06 15:45 Riyadh
+7   2026-05-10 21:00:00  ->  2026-05-15 02:38:00   -> 2026-05-15 05:38 Riyadh
+8   2026-05-31 21:00:00  ->  2026-06-05 15:00:00   -> 2026-06-05 18:00 Riyadh
+9   2026-05-31 21:00:00  ->  2026-06-05 15:51:00   -> 2026-06-05 18:51 Riyadh
+10  2026-06-14 21:00:00  ->  2026-06-17 21:24:00   -> 2026-06-18 00:24 Riyadh
+11  2026-07-19 21:00:00  ->  2026-07-23 14:43:00   -> 2026-07-23 17:43 Riyadh
+12  2026-07-26 21:00:00  ->  2026-07-30 12:43:00   -> 2026-07-30 15:43 Riyadh
+13  2026-09-06 21:00:00  ->  2026-09-09 08:15:00   -> 2026-09-09 11:15 Riyadh
+```
+(Values taken directly from `diff` of `weekly_rb_ledger.csv` before/after
+the fix, full pipeline rerun on the same input CSV.)
+
+### H4 engine inherits the fix automatically (confirmed, not assumed)
+
+`h4_rb_engine.py` reuses `WeeklyRBEngine` unmodified on an H4 bar grid, so
+fixing `add_rb_from_swing` in the shared class fixes H4 RB zones with no
+H4-specific code change. Confirmed directly: `h4_rb_ledger.csv`
+regenerated with 393 total RB zones, 60 authorized (unchanged count from
+before this fix — the fix does not change which zones get authorized,
+only the timestamp attached to each). 380 of 392 non-header rows changed
+their `trigger_time_utc` value; spot-checked before/after examples:
+```
+id  old trigger_time_utc     new trigger_time_utc
+1   2026-01-02 09:00:00  ->  2026-01-02 09:30:00
+2   2026-01-02 17:00:00  ->  2026-01-02 17:55:00
+3   2026-01-04 17:00:00  ->  2026-01-04 20:17:00
+4   2026-01-04 21:00:00  ->  2026-01-05 00:56:00
+```
+Before the fix, H4 trigger times were frequently exact H4-bar-open stamps
+(e.g. `09:00:00`, `17:00:00`) — the H4 analogue of the weekly bug (H4
+"week start" = the H4 bar's own open time instead of a real M1 crossing
+minute inside that bar). After the fix, spot-checked H4 rows show real,
+non-round-hour M1 minutes.
+
+### Downstream rerun — what changed, with before/after evidence
+
+Full pipeline rerun in order: `weekly_rb_generator.py` ->
+`weekly_control_engine_rb.py` -> `h4_rb_engine.py` ->
+`build_control_gates.py` / `five_rb_bso_engine.py` -> `full_viewer_rb.py`.
+
+- **`weekly_control_events_rb.csv`**: still 28 events (unchanged count).
+  Only the 3 `CAMPAIGN_START_COUNTERTREND` rows whose timestamp comes from
+  an RB zone's `impact_time` shifted, exactly tracking each zone's
+  corrected impact time (RB #2: `11:01`->`14:07` UTC; RB #6:
+  `10:51`->`12:45` UTC; RB #8: `14:33`->`15:00` UTC). `weekly_control_
+  ledger_rb.csv` itself (the per-week control-state column) is byte-
+  identical before/after — the control STATE sequence did not change, only
+  the exact moment 3 transitions are timestamped at.
+- **`rb_control_gates.csv`**: still **17 gates** (unchanged count). Gate
+  boundaries that depend on the 3 shifted `CAMPAIGN_START_COUNTERTREND`
+  timestamps moved by the same amounts (e.g. gate #1 now starts
+  `2026-02-09 17:07 Riyadh` instead of `14:01 Riyadh`); every other gate
+  field (`control` value, `reason`, zone ids) is unchanged.
+- **`h4_rb_ledger.csv`**: 393 total zones, **60 authorized** — same count
+  as before this session's fix, confirming the fix does not change
+  authorization outcomes, only timestamps.
+- **`five_rb_bso_ledger.csv`**: stage counts moved from 52 `ENTERED` / 30
+  `H4_OB_BREACHED` to **49 `ENTERED` / 31 `H4_OB_BREACHED`** — a real,
+  substantive change, not just cosmetic. Root cause: an H4 RB zone's
+  `impact_time` (which the 5m BSO engine uses as the hunt-window's real
+  start) shifted for most zones along with `trigger_time`, so a handful of
+  zones' 5m entry-hunt windows now open at a different, more accurate
+  minute than before, changing whether/when a 5m entry fires for those
+  specific zones (e.g. zone 338: two `SL` entries before the fix, `H4_OB_
+  BREACHED`/no entry after; zone 289: 3 attempts before, 2 after, second
+  attempt's outcome changed). This is flagged explicitly, not glossed
+  over: the fix changes which zones get real entries, because it changes
+  when the zone's real hunt window legitimately opens, and the entry/exit
+  price and SL/TP mechanics for zones whose window didn't shift stay byte-
+  identical (e.g. zone 116, 105 keep the same entry/exit prices, only the
+  window-open timestamp before the first attempt differs).
+- **`full_viewer_rb.pine`**: regenerated at the same 651 lines; re-ran the
+  same automated `if barstate.islast` indentation-nesting scan (0
+  anomalies), plus quote-count parity and paren-balance checks (both
+  clean) — no Pine-generation code was touched by this fix, this is a
+  confirmation the regenerated output stayed well-formed, not a new
+  check.
+
+Files changed this entry: `rb_system/reference/weekly_rb_generator.py`
+(`add_rb_from_swing`/`try_bull_arb`/`try_bear_arb`/`consume_break`/
+`mid_arm` signatures, new `cross_time` helper), `rb_system/data/
+weekly_rb_ledger.csv`, `rb_system/data/weekly_control_events_rb.csv`,
+`rb_system/data/h4_rb_ledger.csv`, `rb_system/data/rb_control_gates.csv`,
+`rb_system/data/five_rb_bso_ledger.csv`, `rb_system/data/
+full_viewer_rb.pine` (all regenerated end to end from the same input CSV).
