@@ -23,4 +23,4 @@ SUBSTITUTIONS MADE (verify against RB_Indicator_v1.pine):
    OPPOSING_LOSES_CONTROL.
 
 Weeks processed: 37
-Control-relevant events: 27
+Control-relevant events: 28

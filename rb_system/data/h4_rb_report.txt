@@ -7,5 +7,5 @@ RB zones: 393
   ARB: 148
   IRB: 127
   ORB: 118
-Authorized (impacted + pre-eligible, not ORB-before-impact + control-permits direction at impact): 76
+Authorized (impacted + pre-eligible, not ORB-before-impact + control-permits direction at impact): 60
 Every row is kept for audit even when not authorized; 'authorized' is False for: never impacted, was stranded (ORB) before impact, or impacted while the Weekly control state did not permit that direction.

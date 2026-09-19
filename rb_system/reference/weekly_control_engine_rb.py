@@ -229,6 +229,15 @@ def run(args: argparse.Namespace) -> int:
     controlling_opp: Optional[int] = None
     controlling_zone_id: Optional[int] = None
     paused_bull: Optional[bool] = None
+    # body_zone_id: the zone whose IMPACT most recently gave the current side
+    # control, persisted through SWING_PAUSE/SWING_RESUME (unlike
+    # controlling_zone_id, which the existing swing-pause code clears to None
+    # -- see the new CONTROL-LAYER body-close-violation check below, which
+    # needs to keep pointing at "the zone this side's thesis rests on" across
+    # a pause/resume cycle, not just while a swing-pause hasn't fired yet).
+    # Cleared whenever control fully drops to NONE with no side, or escalates
+    # to BOTH (no single zone identity to check at that point).
+    body_zone_id: Optional[int] = None
     events: List[ControlEvent] = []
     weekly_rows = []
 
@@ -280,6 +289,7 @@ def run(args: argparse.Namespace) -> int:
                     controlling_zone_id = z.id
                     log_kind = "CAMPAIGN_START" if is_pro(z, trend_at[k]) else "CAMPAIGN_START_COUNTERTREND"
                     log(k, log_kind, f"RB zone {z.id} impacted (direction={'BUY' if z.bullish else 'SELL'}, trend={trend})", z.id, at_override=at)
+                    body_zone_id = z.id
             elif kind_ in ("swing_high", "swing_low"):
                 pauses_sell = kind_ == "swing_low"
                 pauses_buy = kind_ == "swing_high"
@@ -332,6 +342,7 @@ def run(args: argparse.Namespace) -> int:
                 if old_side_alive:
                     control = "BOTH"
                     controlling_zone_id = None
+                    body_zone_id = None
                     for z in opp_impacts:
                         log(k, "OPPOSING_ENCOUNTER", f"Opposing RB zone {z.id} impacted, old side still active -> BOTH", z.id)
                 else:
@@ -339,6 +350,7 @@ def run(args: argparse.Namespace) -> int:
                     control = "BUY_ONLY" if new_zone.bullish else "SELL_ONLY"
                     control_bull = new_zone.bullish
                     controlling_zone_id = new_zone.id
+                    body_zone_id = new_zone.id
                     log(k, "CONTROL_SWITCHED", f"Old side exhausted; RB zone {new_zone.id} impacted -> {control}", new_zone.id)
 
         if control == "BOTH" and controlling_opp is None:
@@ -364,6 +376,7 @@ def run(args: argparse.Namespace) -> int:
                     control = "BUY_ONLY" if candidate_bull else "SELL_ONLY"
                     control_bull = candidate_bull
                     controlling_zone_id = z.id
+                    body_zone_id = z.id
                     log(k, "OPPOSING_GAINS_CONTROL", f"RB zone {z.id} confirmed swing at week {confirmed_after[0]}, other side exhausted", z.id)
                     break
                 if controlling_opp is not None:
@@ -385,12 +398,59 @@ def run(args: argparse.Namespace) -> int:
                 )
                 if other_opp_alive:
                     control = "BOTH"
+                    body_zone_id = None
                 elif pro_alive:
                     control = "BUY_ONLY" if control_bull else "SELL_ONLY"
                     log(k, "RETURN_TO_PRO_TREND", f"No opposing RB zone remains active -> {control}", None)
+                    # No specific zone id is tracked for the "pro" side at
+                    # this branch either (controlling_zone_id is left None
+                    # here too, an existing quirk of this port -- see
+                    # controlling_zone_id above), so body_zone_id follows
+                    # suit rather than guessing which pro zone to attribute
+                    # this to.
+                    body_zone_id = None
                 else:
                     control = "NONE"
+                    body_zone_id = None
                     log(k, "NO_CONTROL", "No active RB zone on either side", None)
+
+        # --- NEW CONTROL-LAYER CHECK (independent of all the event-based
+        # transitions above): a zone that gained sole BUY_ONLY/SELL_ONLY
+        # control dies a SECOND way if a later Weekly candle's own CLOSE
+        # lands back inside that zone's [bottom, top] range -- "especially
+        # the first one, two, or few candles" reacting to it (user's own
+        # framing). This is a NEW rule at the CONTROL state-machine layer
+        # only; RB's own zone lifecycle (impact + stranding only, no
+        # close-through) is unchanged -- see substitution #4 above, which
+        # still stands unmodified for zone lifecycle. Checked every week
+        # from the zone's own impact week onward (inclusive: the impact
+        # week's own close is the first candle that can react, since impact
+        # can land mid-week before that week's candle has closed), using the
+        # engine's own already-aggregated Weekly OHLC (weeks[k].c), not a
+        # hand-rolled recomputation.
+        # Deliberately NOT gated on `control != "NONE"`: this check must run
+        # independently of whatever the event-based transitions above did to
+        # `control` THIS SAME week (e.g. a same-week SWING_PAUSE can already
+        # have dropped control to NONE by the time this runs, as happens for
+        # RB zone 2's own impact week -- see RB_TRADING_SYSTEM_HANDOFF.md).
+        # The body-close check still evaluates and, if it independently
+        # confirms a violation, logs it (a no-op on `control` if already
+        # NONE, but the event record itself is the point -- it documents
+        # THIS reason, distinct from whatever else already zeroed control).
+        if body_zone_id is not None:
+            bz = next((zz for zz in engine.rbs if zz.id == body_zone_id), None)
+            if bz is not None and bz.stop is not None and k >= bz.stop:
+                close_k = weeks[k].c
+                if bz.zb <= close_k <= bz.zt:
+                    log(k, "BODY_CLOSE_VIOLATION",
+                        f"Week {k} close {close_k} falls inside controlling RB zone {bz.id}'s "
+                        f"range [{bz.zb},{bz.zt}] -> NONE", bz.id, at_override=weeks[k].end)
+                    control = "NONE"
+                    control_bull = False
+                    controlling_zone_id = None
+                    controlling_opp = None
+                    paused_bull = None
+                    body_zone_id = None
 
         weekly_rows.append((k, trend, control, str(controlling_opp) if controlling_opp else "", str(controlling_zone_id) if controlling_zone_id else ""))
 
