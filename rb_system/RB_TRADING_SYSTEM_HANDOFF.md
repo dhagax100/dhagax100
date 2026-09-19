@@ -873,3 +873,252 @@ correction) -- kept for the record, not for continued use.
 - **Conclusion (not yet acted on):** this CSV's timestamps cannot be trusted as a single coherent timezone source. Re-sourcing the M1 data (TradingView's own export for a small trusted window, or FXCM's documented-UTC historical API) was recommended over continuing to patch offsets, but is deferred -- neither route is trivially available here (TradingView export caps are far below what's needed for bulk data; FXCM's API needs live account credentials this session cannot obtain or use).
 - This sits alongside Issues A and B above as a third, independent symptom of the same underlying "this CSV cannot be fully trusted" finding -- not a new root cause, and not fixed here.
 - **Working-assumption note for the rest of this session's Task 2-5 work:** per the user's own explicit instruction, the 14:01 Riyadh (11:01 UTC) reading is used as a deliberate placeholder for the exercise below, WITHOUT this issue being considered resolved.
+
+## Session update — 2026-09-19, continuation (body-close hypothesis verified; new CONTROL-LAYER check implemented; gates rebuilt)
+
+### 10a. Body-close hypothesis (Task 2) — VERIFIED against real engine output, not hand-computed
+
+Question: does the Weekly candle for the week containing RB zone id=2's impact
+(`trigger_week_idx=6`, week starting `2026-02-08 22:00:00 UTC`) close with its
+body inside zone id=2's range `[1.18649, 1.20825]`?
+
+Checked `weekly_control_engine.py`'s own `body_close_dead()` first, since the
+task named it as the closest existing analog: it is a **close-only** check
+(not open-and-close) -- `(week.c >= z.zb) if not z.bullish else (week.c <=
+z.zt)` -- i.e. for a SELL zone (approached from below, as id=2 is), the
+condition is simply `close >= bottom`. There is no "body" in the sense of
+requiring both Open and Close inside; only Close matters, tested against the
+NEAR boundary.
+
+Pulled week 6's OHLC directly from `wob.aggregate_weeks()` (the same
+aggregation `weekly_rb_generator.py`/`weekly_control_engine_rb.py` already
+use, not a hand recomputation):
+```
+week 6 (2026-02-08 22:00:00 -> 2026-02-15 22:00:00 UTC):
+  O=1.18126  H=1.19283  L=1.18086  C=1.18664
+```
+- `body_close_dead` convention (close only, near boundary): `1.18664 >=
+  1.18649` -- **True**, by 1.5 pips.
+- Full-range convention (Close anywhere inside `[bottom, top]`, the literal
+  wording the user's own Task 3 instruction used): `1.18649 <= 1.18664 <=
+  1.20825` -- **also True** (irrelevant here which convention is used, since
+  the actual Close sits right at the near edge, inside by both readings).
+
+**Verdict: YES.** Week 6's Close (1.18664) falls inside zone id=2's range by
+both the strict `body_close_dead` convention and the plain full-range
+reading. This is not a marginal or ambiguous case in either direction --
+confirmed directly from the engine's own aggregated Weekly bar, not a manual
+CSV scan.
+
+### 10b. New CONTROL-LAYER check implemented (Task 3) — `weekly_control_engine_rb.py`
+
+Per the task's explicit framing: this is a NEW rule at the CONTROL
+state-machine layer only. RB's own zone lifecycle (impact + stranding only,
+no close-through rule) is UNCHANGED -- substitution #4 in SS9a above still
+stands, unmodified, for zone lifecycle. This is a different layer (the
+control state machine's own transition rules), which is allowed its own
+violation-detection logic even though RB zones themselves don't have one.
+
+**Implementation** (`weekly_control_engine_rb.py`):
+- New persistent variable `body_zone_id`: tracks "the zone whose impact most
+  recently gave the CURRENT side control", set at every point
+  `controlling_zone_id` is set for a fresh CAMPAIGN_START/
+  CAMPAIGN_START_COUNTERTREND/CONTROL_SWITCHED/OPPOSING_GAINS_CONTROL, but
+  -- unlike `controlling_zone_id` -- **persisted through SWING_PAUSE/
+  SWING_RESUME** (the existing swing-pause code clears `controlling_zone_id`
+  to `None`, but the zone whose thesis the side rests on doesn't stop being
+  that zone just because a swing paused it). Cleared on NO_CONTROL, BOTH
+  escalation, or RETURN_TO_PRO_TREND (no single zone id tracked there
+  either, an existing quirk of the port, not newly introduced).
+- New check, run every week, independent of (in addition to, not instead
+  of) all the event-based transitions: if `body_zone_id` is set and that
+  zone's own impact week has been reached (`k >= z.stop`), test the WEEK'S
+  OWN CLOSE (`weeks[k].c`, from the engine's already-aggregated Weekly OHLC,
+  not hand-recomputed) against `[z.zb, z.zt]`. If inside, log a new event
+  kind `BODY_CLOSE_VIOLATION` (distinct from `TREND_FLIP`/`SWING_PAUSE`/etc)
+  at that week's own CLOSE timestamp (`weeks[k].end`), and force
+  `control = NONE`.
+- **Deliberately NOT gated on `control != NONE`**: RB zone id=2's own case
+  needed this. Its impact (11:01 UTC) and a same-week SWING_PAUSE (14:07
+  UTC) both land in week 6, and the pause already drops `control` to NONE
+  hours before week 6's own candle actually closes (2026-02-15 22:00 UTC).
+  The body-close check must still independently evaluate and log its own
+  reason at the candle's real close time even though `control` was already
+  NONE by then for a different, earlier reason -- the check documents THIS
+  violation, not just re-derives a `control` value that's already correct.
+  Confirmed via instrumented run this fires (see below) whereas gating it
+  on `control != NONE` silently swallowed it (caught and fixed during this
+  same session, not shipped).
+
+**Verification against RB zone id=2 (the case Task 2 confirmed):**
+`weekly_control_events_rb.csv` now contains:
+```
+6,2026-02-15 22:00:00,2026-02-16 01:00:00,BODY_CLOSE_VIOLATION,"Week 6 close 1.18664 falls inside controlling RB zone 2's range [1.18649,1.20825] -> NONE",2,BULLISH,NONE
+```
+Matches Task 2's exact numbers (week 6, close 1.18664, zone 2's
+`[1.18649,1.20825]`) at week 6's real close timestamp. Confirmed by running
+`weekly_control_engine_rb.py` end to end (not just a scratch snippet) --
+27 events before this change, 28 after, with this new row the only addition
+for zone 2's own episode.
+
+**Two more real firings found in the same dataset (asked for "at least one
+other zone" -- found two):**
+```
+18,2026-05-10 21:00:00,2026-05-11 00:00:00,BODY_CLOSE_VIOLATION,"Week 18 close 1.17841 falls inside controlling RB zone 6's range [1.17621,1.18488] -> NONE",6,BULLISH,NONE
+24,2026-06-21 21:00:00,2026-06-22 00:00:00,BODY_CLOSE_VIOLATION,"Week 24 close 1.14647 falls inside controlling RB zone 5's range [1.14427,1.15054] -> NONE",5,BEARISH,NONE
+```
+Both taken directly from the regenerated `weekly_control_events_rb.csv`, not
+constructed examples -- the rule is not a one-off match to the motivating
+case, it fires on real, independent zones elsewhere in the same dataset.
+
+**Downstream rerun (`h4_rb_engine.py` / `five_rb_bso_engine.py` /
+`build_control_gates.py`):** H4 RB authorized zones dropped from **76** (SS9b's
+count, before this check) to **60** out of 393 total / 273 impacted-never-
+stranded candidates, since the new check closes several control windows
+earlier than the old event set did. 5m BSO stage: 52 `ENTERED` / 30
+`H4_OB_BREACHED` (down from 61/40). Both engines' independently-recomputed
+authorized counts still agree with each other (60 == 60), confirming the
+duplicated gate logic stayed consistent after the change, same
+cross-check discipline as SS9b.
+
+**Gate rebuild -- gate #1's boundaries changed, exactly as expected:**
+`build_control_gates.py` now produces **17** gates (up from 13). Gate #1
+(`gate_index=1`, the first real control gate, per the CSV's own indexing):
+```
+gate_index=1: SELL_ONLY, starts 2026-02-09 14:01:00 Riyadh (CAMPAIGN_START_COUNTERTREND,
+  zone 2), ends 2026-02-16 01:00:00 Riyadh (BODY_CLOSE_VIOLATION, zone 2,
+  "Week 6 close 1.18664 falls inside controlling RB zone 2's range
+  [1.18649,1.20825] -> NONE")
+```
+Confirmed this end reason is the NEW check firing, not a pre-existing one --
+`grep BODY_CLOSE_VIOLATION` on the pre-this-session events file returns
+nothing; it only exists after this change.
+
+**One pre-existing bug surfaced (not introduced by this change, flagged for
+visibility, NOT fixed -- out of this task's scope):** `weekly_control_
+engine_rb.py`'s `log()` calls for `SWING_PAUSE`/`SWING_RESUME`/etc are
+written BEFORE the `control = ...` reassignment that follows them, so the
+`ControlEvent.control` field (written to `weekly_control_events_rb.csv` as
+`control_after`) actually records the PRE-transition value, not the
+post-transition one -- an existing off-by-one in the ORIGINAL (unmodified)
+code, not something this session touched. `build_control_gates.py` trusts
+that `control_after` column to detect gate boundaries, so it MISSES the real
+SWING_PAUSE transition inside week 6 (control genuinely drops SELL_ONLY ->
+NONE at 14:07 UTC / 17:07 Riyadh, only ~6 minutes after CAMPAIGN_START) and
+instead shows gate #1 running the whole week, ending only at the new
+BODY_CLOSE_VIOLATION event -- which happens to show the correct NEW value
+only because ITS OWN log() call also captured the (by-then-already-NONE)
+pre-transition value, which coincidentally differs from the gate builder's
+stale internal tracker. In short: **gate #1's true real-time control history
+is SELL_ONLY for ~6 minutes (14:01-14:07 Riyadh), then NONE for the rest of
+the week and beyond until week 9's OPPOSING_GAINS_CONTROL** -- the CSV's
+"gate #1 = SELL_ONLY the whole week" framing is an artifact of this
+pre-existing logging-order bug, not a real second week of SELL_ONLY control.
+This does NOT change Task 4's answer below (0 authorized H4 zones / 0 five
+entries in gate #1 either way, since the whole window is control-active for
+under 10 minutes in reality) but is flagged here explicitly so a future
+session doesn't take `rb_control_gates.csv`'s per-gate `control` column at
+face value for duration/boundary claims without checking this. Fixing it
+would require re-verifying every historical gate row's stated control value
+against the real event sequence, which is out of this task's scope -- raised
+here as a genuine finding, not silently patched.
+
+Files changed: `rb_system/reference/weekly_control_engine_rb.py` (new
+`body_zone_id` tracking + `BODY_CLOSE_VIOLATION` check),
+`rb_system/data/weekly_control_ledger_rb.csv`/`weekly_control_events_rb.csv`/
+`weekly_control_report_rb.txt` (regenerated), `rb_system/data/
+h4_rb_ledger.csv`/`h4_rb_swings.csv`/`h4_rb_report.txt`/
+`five_rb_bso_ledger.csv` (regenerated), `rb_system/data/rb_control_gates.csv`
+(regenerated, 17 gates).
+
+**Caution for future runs, recorded per this project's own earlier
+caution note (SS3a):** `weekly_control_engine_rb.py`'s default `--out-dir`
+is the INPUT CSV's own parent directory (`ob_reference_data/`), NOT
+`rb_system/data/` -- discovered mid-session when a run without `--out-dir
+../data` silently wrote 3 new files into `ob_reference_data/` instead
+(caught via `git status` immediately, confirmed untracked/harmless, deleted
+before commit). Always pass `--out-dir ../data` explicitly when running this
+script from `rb_system/reference/`, exactly as the existing `h4_rb_engine.py`
+already defaults correctly to `../data` on its own.
+
+### 10c. Gate #1 detail — H4 zones + 5m entries (Task 4)
+
+Directly queried the regenerated `h4_rb_ledger.csv` (`authorized=True` rows
+with `impact_time_utc` inside gate #1's window, `2026-02-09 11:01:00` to
+`2026-02-15 22:00:00 UTC`) and `five_rb_bso_ledger.csv` (`stage=ENTERED` rows
+with `entry_utc` inside the same window):
+
+**Result: ZERO H4 RB zones became `authorized=True` inside gate #1's window,
+and ZERO 5m entries occurred from it.** Same "0" finding as an earlier
+session reported for the old (44-authorized, pre-body-close-check) gate #1 --
+unchanged by this session's corrections, and for the reason the pre-existing
+bug above makes explicit: gate #1's real control-open window is only ~6
+minutes long (14:01-14:07 Riyadh, 2026-02-09) before SWING_PAUSE (real-time)
+drops it to NONE, and `h4_rb_engine.py`'s own `control_at(t)` bisects by
+WHOLE-WEEK granularity (SS9c's already-documented granularity caveat) --
+even if a zone's impact fell later that same week while the ledger's
+week-level snapshot still nominally reads a stale value, none did in this
+specific 6-minute-to-week-end span. Cross-checked directly against
+`rb_control_gates.csv`'s own row 1: `h4_rb_authorized_count=0,
+h4_rb_authorized_ids=(empty), five_entries_count=0` -- consistent with the
+direct CSV query above, not just the summary row's own arithmetic.
+
+### 10d. Pine viewer: `focusGateNum` runtime toggle (Task 5)
+
+Read `full_viewer.py`'s `--focus-weekly-id`/`--manual-gates` mechanism: both
+are Python CLI flags evaluated at GENERATION time (they restrict which
+zones are even written into the generated `.pine` file, requiring a
+regenerate per selection). Task 5 asked for a Pine INPUT instead -- a
+runtime toggle the viewer can flip on an already-generated chart, matching
+this file's own existing `inspectOneRB`/`inspectOneH4RB`/`inspectOne5mBSO`
+pattern, not `full_viewer.py`'s generation-time one. Implemented that way
+deliberately, flagged here as a considered difference, not an oversight.
+
+**Implementation** (`full_viewer_rb.py`):
+- New `load_gates(path)`: reads `rb_control_gates.csv` into an ordered list
+  of `(start_utc, end_utc)` pairs (end = next gate's start; last gate
+  open-ended, using the same `right_edge` fallback the rest of the file
+  already uses for open-ended zones).
+- New Pine input `focusGateNum = input.int(0, ...)`, 0 = off, plus
+  `var array<int> gateStart`/`gateEnd` baked from `load_gates()`'s output at
+  generation time via the existing `pine_time()` helper (same `timestamp()`
+  literal technique already used everywhere else in this file). Gate
+  numbering matches `rb_control_gates.csv`'s own `gate_index` column
+  exactly (no off-by-one remap) -- `gate_index=0` (the trivial NONE
+  dataset-start gate) doubles as "off", which loses nothing since that gate
+  never has any authorized zones or entries to show anyway.
+- `build_rb_block()` gained a `gate_filter: bool` param (only passed `True`
+  for the H4 call, not the Weekly one, per the task's "H4 and 5m layers
+  only, not Weekly" instruction) and a new per-zone `{prefix}ImpactT` array
+  (each zone's own impact time as a literal Pine timestamp, `na` for a
+  never-impacted zone). Both the box-drawing loop and the table loop now AND
+  the existing `inspectOneH4RB`/rank condition together with a
+  `focusGateNum == 0 or (impact time falls inside gate[focusGateNum]'s
+  window)` condition -- both filters combine when both are set, independent
+  toggles as the task asked.
+- `build_bso_extra_lines_rb()` gained the same `gate_filter` param and a
+  parallel `bso5EntryT` array (each BSO attempt's own entry time, `na` for
+  an attempt that never entered), ANDed into the existing
+  `inspectOne5mBSO`/rank condition the same way.
+- **Pine syntax re-checked carefully, per this file's own history of two
+  real indentation bugs already fixed here.** Ran the same automated
+  indentation-nesting scan as previous sessions (every `if barstate.islast`
+  immediately followed by a more-indented line, checked over all 652 lines
+  of the regenerated file) -- zero anomalies. Also checked quote-count
+  parity and paren balance across the whole generated file (both clean) as
+  an extra automated check beyond the manual read-through previous sessions
+  used alone.
+
+**Confirmed `focusGateNum=1` reproduces exactly Task 4's empty gate #1
+list**, by construction: gate #1's window (`gate_index=1`,
+`2026-02-09 11:01:00` to `2026-02-15 22:00:00 UTC`) has zero H4 zones with
+`impact_time` inside it and zero 5m entries with `entry_time` inside it (SS10c)
+-- so `focusGateNum=1` on the regenerated Pine file draws nothing on the H4/5m
+layers for that gate, matching the direct CSV query exactly (not separately
+re-derived; same underlying data, same window, checked by construction of
+the array contents themselves rather than by loading the file into
+TradingView, which remains unavailable in this environment as before).
+
+Files changed: `rb_system/reference/full_viewer_rb.py` (extended, not
+replaced), `rb_system/data/full_viewer_rb.pine` (regenerated, 651 lines,
+17 gates baked into `gateStart`/`gateEnd`).
