@@ -123,6 +123,54 @@ def arr(kind: str, values: List[str]) -> str:
 _wrap_counter = [0]
 
 
+def split_long_ifs(block_lines: List[str], max_children: int = 6) -> List[str]:
+    """Splits every `if barstate.islast` / `    if <flag>` body in this
+    block into several repeated `    if <flag>` chunks of at most
+    `max_children` TOP-LEVEL statements each, instead of one giant `if`
+    holding everything (a `for` loop counts as ONE top-level statement --
+    its own nested body isn't split further). Pine v6 rejects an
+    overlong single `if` body ("The if statement is too long", CE10205),
+    separately from the whole-script CE10295 limit `wrap_as_function`
+    already handles -- this fixes the other one. Splitting into repeated
+    `if <flag>` blocks with the same condition, run in sequence, is
+    behaviorally identical to one block, since every statement inside is
+    an independent drawing side effect (box.new/label.new/table.cell/a
+    `for` loop over an already-built array), never something that carries
+    state across statements within the same `if`."""
+    out: List[str] = []
+    i = 0
+    n = len(block_lines)
+    while i < n:
+        line = block_lines[i]
+        if line == "if barstate.islast" and i + 1 < n and block_lines[i + 1].startswith("    if "):
+            flag_line = block_lines[i + 1]
+            body: List[str] = []
+            j = i + 2
+            while j < n and (block_lines[j].startswith("        ") or block_lines[j] == ""):
+                body.append(block_lines[j])
+                j += 1
+            # Group body lines into top-level (indent==8) statements, each
+            # possibly followed by its own more-deeply-indented sub-body.
+            groups: List[List[str]] = []
+            for bl in body:
+                if bl.startswith("        ") and not bl.startswith("            "):
+                    groups.append([bl])
+                elif groups:
+                    groups[-1].append(bl)
+                else:
+                    groups.append([bl])  # shouldn't happen, but don't drop lines
+            out.append("if barstate.islast")
+            for k in range(0, len(groups), max_children):
+                out.append(flag_line)
+                for g in groups[k:k + max_children]:
+                    out.extend(g)
+            i = j
+        else:
+            out.append(line)
+            i += 1
+    return out
+
+
 def wrap_as_function(block_lines: List[str]) -> List[str]:
     """Wraps one block's lines (var decls + its own `if barstate.islast`
     drawing code) inside a Pine user-defined function, called once right
@@ -625,16 +673,16 @@ def main() -> int:
         f"var array<int> gateEnd = {arr('int', gate_ends_pine)}",
     ]
 
-    lines += wrap_as_function(build_struct_block("w", weekly_engine, weeks, args.label_cap, "onWeekly"))
-    lines += wrap_as_function(build_rb_block("w", weekly_engine, weeks, weekly_shown, weekly_table, display_tz,
+    lines += wrap_as_function(split_long_ifs(build_struct_block("w", weekly_engine, weeks, args.label_cap, "onWeekly")))
+    lines += wrap_as_function(split_long_ifs(build_rb_block("w", weekly_engine, weeks, weekly_shown, weekly_table, display_tz,
                              draw_flag_expr="onWeekly", hide_orb=False, right_edge=right_edge, with_table=True,
-                             inspect_flag_expr="inspectOneRB", from_last_expr="rbFromLast", draw_impact_line=True))
-    lines += wrap_as_function(build_rb_block("h4", h4_engine, h4_bars, h4_shown, h4_table, display_tz,
+                             inspect_flag_expr="inspectOneRB", from_last_expr="rbFromLast", draw_impact_line=True)))
+    lines += wrap_as_function(split_long_ifs(build_rb_block("h4", h4_engine, h4_bars, h4_shown, h4_table, display_tz,
                              draw_flag_expr="onH4 or onFive", hide_orb=True, right_edge=right_edge,
                              with_table=True, table_flag_expr="onH4",
                              inspect_flag_expr="inspectOneH4RB", from_last_expr="h4RbFromLast", draw_impact_line=True,
-                             gate_filter=gate_filter_on))
-    lines += wrap_as_function(build_bso_extra_lines_rb(bso_results, display_tz, gate_filter=gate_filter_on))
+                             gate_filter=gate_filter_on)))
+    lines += wrap_as_function(split_long_ifs(build_bso_extra_lines_rb(bso_results, display_tz, gate_filter=gate_filter_on)))
 
     out_dir = Path(args.out_dir) if args.out_dir else Path(__file__).resolve().parent.parent / "data"
     out_dir.mkdir(parents=True, exist_ok=True)
