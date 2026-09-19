@@ -31,7 +31,7 @@ UTC = timezone.utc
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Weekly-only swing/MSS/RB Pine viewer")
     p.add_argument("csv_file", nargs="?", default="EURUSD_m1_BidAndAsk.csv")
-    p.add_argument("--input-tz", default="Etc/GMT+2")
+    p.add_argument("--input-tz", default="UTC")
     p.add_argument("--price-side", choices=("bid", "ask"), default="bid")
     p.add_argument("--display-tz", default="Asia/Riyadh")
     p.add_argument("--label-cap", type=int, default=150, choices=range(1, 161))

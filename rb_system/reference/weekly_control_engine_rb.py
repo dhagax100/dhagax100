@@ -140,7 +140,7 @@ TREND = {0: "UNDEFINED", 1: "BULLISH", 2: "BEARISH"}
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="RB-native weekly direction-control state machine")
     p.add_argument("csv_file", nargs="?", default="EURUSD_m1_BidAndAsk.csv")
-    p.add_argument("--input-tz", default="Etc/GMT+2")
+    p.add_argument("--input-tz", default="UTC")
     p.add_argument("--price-side", choices=("bid", "ask"), default="bid")
     p.add_argument("--week-close-zone", default="America/New_York")
     p.add_argument("--week-close-hour", type=int, default=17, choices=range(24))

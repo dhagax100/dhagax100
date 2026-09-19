@@ -74,7 +74,7 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="4H RB engine (WeeklyRBEngine reused on a native 4H bar grid), "
                                              "gated by the same Weekly control permission that gates OB's H4/5m")
     p.add_argument("csv_file", nargs="?", default="EURUSD_m1_BidAndAsk.csv")
-    p.add_argument("--input-tz", default="Etc/GMT+2")
+    p.add_argument("--input-tz", default="UTC")
     p.add_argument("--price-side", choices=("bid", "ask"), default="bid")
     p.add_argument("--display-tz", default="Asia/Riyadh")
     p.add_argument("--h4-anchor-hour", type=int, default=1, choices=range(4),

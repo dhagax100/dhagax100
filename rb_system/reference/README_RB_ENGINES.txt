@@ -37,23 +37,23 @@ RUN ORDER AND EXACT COMMANDS
    python3 weekly_control_engine.py EURUSD_m1_BidAndAsk.csv --input-tz Etc/GMT+2
 
 3. Weekly RB:
-   python3 weekly_rb_generator.py EURUSD_m1_BidAndAsk.csv --input-tz Etc/GMT+2
+   python3 weekly_rb_generator.py EURUSD_m1_BidAndAsk.csv --input-tz UTC
    -> weekly_rb_swings.csv, weekly_rb_ledger.csv, weekly_rb_report.txt
 
 4. H4 RB (requires weekly_control_ledger.csv next to the CSV, or pass
    --control-ledger):
-   python3 h4_rb_engine.py EURUSD_m1_BidAndAsk.csv --input-tz Etc/GMT+2
+   python3 h4_rb_engine.py EURUSD_m1_BidAndAsk.csv --input-tz UTC
    -> h4_rb_swings.csv, h4_rb_ledger.csv, h4_rb_report.txt
 
 5. 5m BSO for RB (requires the same control ledger; run after step 4,
    though it recomputes the H4 RB pass itself rather than reading
    h4_rb_ledger.csv):
-   python3 five_rb_bso_engine.py EURUSD_m1_BidAndAsk.csv --input-tz Etc/GMT+2
+   python3 five_rb_bso_engine.py EURUSD_m1_BidAndAsk.csv --input-tz UTC
    -> five_rb_bso_ledger.csv
 
 6. Combined Pine viewer (no control-ledger dependency — draws everything,
    see CAVEATS):
-   python3 full_viewer_rb.py EURUSD_m1_BidAndAsk.csv --input-tz Etc/GMT+2
+   python3 full_viewer_rb.py EURUSD_m1_BidAndAsk.csv --input-tz UTC
    -> full_viewer_rb.pine
    Open in Notepad, copy all, paste into TradingView Pine Editor, Add to
    chart. Attach to EURUSD. Weekly chart shows Weekly RB zones + swing/MSS
@@ -61,10 +61,13 @@ RUN ORDER AND EXACT COMMANDS
    shows the same H4 RB boxes (no table), matching full_viewer.py's own
    OB convention.
 
-   All commands above default to --input-tz Etc/GMT+2, which is the
-   timezone flag verified to reproduce the committed OB reference ledgers
-   byte-for-byte (see docs/RB_TRADING_SYSTEM_HANDOFF.md SS3a) — use it
-   whenever comparing against this export's own data/ files.
+   All RB commands above (steps 3-6) default to --input-tz UTC as of the
+   2026-09-19 session: the raw CSV Date/Time columns are now treated as
+   already being UTC wall-clock, per the user's explicit decision (see
+   docs/RB_TRADING_SYSTEM_HANDOFF.md, "raw = UTC directly" entry). This is
+   a deliberate change from the RB port's earlier Etc/GMT+2 default and is
+   NOT the same flag the OB pipeline (step 2, weekly_control_engine.py)
+   uses — that script is unchanged and still defaults to Etc/GMT+2.
 
 CONTROL GATING (added 2026-09-18, see docs/RB_TRADING_SYSTEM_HANDOFF.md SS8)
 
