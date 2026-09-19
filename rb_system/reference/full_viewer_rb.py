@@ -159,6 +159,41 @@ def split_long_ifs(block_lines: List[str], max_children: int = 6) -> List[str]:
                     groups[-1].append(bl)
                 else:
                     groups.append([bl])  # shouldn't happen, but don't drop lines
+            # Guard against reintroducing the exact bug this function's
+            # docstring warns about: a LOCAL (non-`var`) array declared as
+            # one top-level statement here needs to stay in the same `if`
+            # chunk as whatever consumes it. Two cases:
+            #  - It's a pure literal (no runtime time/time_close dependency)
+            #    -> should have been hoisted to a top-level `var array<...>`
+            #    instead, same as every other data array (the bso5BLeft fix
+            #    did this) -- fail loudly so that's caught at the generator,
+            #    not silently mis-split.
+            #  - It genuinely needs runtime freshness (e.g. `{prefix}Right`,
+            #    whose na(wimpact_x_N) ? fallback : wimpact_x_N ternaries
+            #    must re-read those `var` watcher vars on the actual last
+            #    bar, not bake a bar-0 snapshot) -- these always look like
+            #    "GMT+0" `timestamp(...)` fallback literals alongside a
+            #    `wimpact_x_`/`impact_x_` watcher reference, and are always
+            #    immediately followed by their one sole consumer (a single
+            #    `for` loop) with nothing else after -- safe to detect by
+            #    that watcher-variable naming convention and handle by NOT
+            #    splitting from this group to the end of the body at all.
+            first_local_idx = next(
+                (idx for idx, g in enumerate(groups)
+                 if g[0].strip().startswith("array<") and not g[0].strip().startswith("var ")),
+                None,
+            )
+            if first_local_idx is not None:
+                if "impact_x_" not in groups[first_local_idx][0]:
+                    raise ValueError(
+                        "split_long_ifs: found a LOCAL (non-var) array declaration "
+                        f"inside an if-block ({groups[first_local_idx][0].strip()!r}) "
+                        "that isn't the known runtime-watcher pattern. This must be "
+                        "hoisted to a top-level `var array<...>` (if it's a pure "
+                        "literal) before this block, same as every other data array "
+                        "-- see the bso5BLeft fix for the pattern to follow."
+                    )
+                groups[first_local_idx:] = [[l for g in groups[first_local_idx:] for l in g]]
             out.append("if barstate.islast")
             for k in range(0, len(groups), max_children):
                 out.append(flag_line)
@@ -498,23 +533,33 @@ def build_bso_extra_lines_rb(bso_results: list, display_tz: ZoneInfo, gate_filte
         f"var array<string> bso5Exit = {arr_generic('string', exits)}",
         f"var array<string> bso5Excursion = {arr_generic('string', excursions)}",
         f"var array<int> bso5EntryT = {arr_generic('int', entry_stamps)}",
+        # These 15 are pure precomputed literals (no runtime time/time_close
+        # dependency, unlike build_rb_block's `{prefix}Right`) -- hoisted to
+        # top-level `var array` alongside bso5Id etc., NOT declared locally
+        # inside `if onFive` like before. That local-declaration pattern is
+        # exactly what let split_long_ifs (needed to fix CE10205, "if
+        # statement is too long") separate a declaration from the single
+        # `for` loop that consumes it into two different `if onFive` chunks
+        # -- each `if` is its own scope, so the loop's chunk couldn't see
+        # the array, giving CE10272 ("undeclared identifier"). Root-caused
+        # and fixed at the generator, not patched in the generated file.
+        f"var array<int> bso5BLeft = {arr_generic('int', blefts)}",
+        f"var array<int> bso5BRight = {arr_generic('int', brights)}",
+        f"var array<float> bso5BY = {arr_generic('float', bys)}",
+        f"var array<int> bso5CLeft = {arr_generic('int', clefts)}",
+        f"var array<int> bso5CRight = {arr_generic('int', crights)}",
+        f"var array<float> bso5CY = {arr_generic('float', cys)}",
+        f"var array<color> bso5CCol = {arr_generic('color', ccols)}",
+        f"var array<int> bso5GLeft = {arr_generic('int', gleft)}",
+        f"var array<int> bso5GRight = {arr_generic('int', gright)}",
+        f"var array<float> bso5GTop = {arr_generic('float', gtop)}",
+        f"var array<float> bso5GBottom = {arr_generic('float', gbottom)}",
+        f"var array<int> bso5RLeft = {arr_generic('int', rleft)}",
+        f"var array<int> bso5RRight = {arr_generic('int', rright)}",
+        f"var array<float> bso5RTop = {arr_generic('float', rtop)}",
+        f"var array<float> bso5RBottom = {arr_generic('float', rbottom)}",
         "if barstate.islast",
         "    if onFive",
-        f"        array<int> bso5BLeft = {arr_generic('int', blefts)}",
-        f"        array<int> bso5BRight = {arr_generic('int', brights)}",
-        f"        array<float> bso5BY = {arr_generic('float', bys)}",
-        f"        array<int> bso5CLeft = {arr_generic('int', clefts)}",
-        f"        array<int> bso5CRight = {arr_generic('int', crights)}",
-        f"        array<float> bso5CY = {arr_generic('float', cys)}",
-        f"        array<color> bso5CCol = {arr_generic('color', ccols)}",
-        f"        array<int> bso5GLeft = {arr_generic('int', gleft)}",
-        f"        array<int> bso5GRight = {arr_generic('int', gright)}",
-        f"        array<float> bso5GTop = {arr_generic('float', gtop)}",
-        f"        array<float> bso5GBottom = {arr_generic('float', gbottom)}",
-        f"        array<int> bso5RLeft = {arr_generic('int', rleft)}",
-        f"        array<int> bso5RRight = {arr_generic('int', rright)}",
-        f"        array<float> bso5RTop = {arr_generic('float', rtop)}",
-        f"        array<float> bso5RBottom = {arr_generic('float', rbottom)}",
         "        table.cell(bso5Ledger, 0, 0, \"RB\", text_color=color.white, bgcolor=color.new(color.purple,15))",
         "        table.cell(bso5Ledger, 1, 0, \"Side\", text_color=color.white, bgcolor=color.new(color.purple,15))",
         "        table.cell(bso5Ledger, 2, 0, \"Resting (RYD)\", text_color=color.white, bgcolor=color.new(color.purple,15))",
