@@ -124,6 +124,85 @@ def arr(kind: str, values: List[str]) -> str:
 _wrap_counter = [0]
 
 
+def _parse_if_block_chunks(flag_line: str, body: List[str], max_children: int) -> List[List[str]]:
+    """Groups `body` (the lines under one `if barstate.islast` / `if <flag>`
+    pair) into top-level statements, splits them into chunks of at most
+    `max_children`, and returns each chunk as its own complete, self-
+    contained `["if barstate.islast", flag_line, *chunk_lines]` unit --
+    ready to become its own separate small Pine function. Handles the same
+    local-array-declaration cases `split_long_ifs` used to (see below)."""
+    groups: List[List[str]] = []
+    for bl in body:
+        if bl.startswith("        ") and not bl.startswith("            "):
+            groups.append([bl])
+        elif groups:
+            groups[-1].append(bl)
+        else:
+            groups.append([bl])
+    first_local_idx = next(
+        (idx for idx, g in enumerate(groups)
+         if g[0].strip().startswith("array<") and not g[0].strip().startswith("var ")),
+        None,
+    )
+    if first_local_idx is not None:
+        if "impact_x_" not in groups[first_local_idx][0]:
+            raise ValueError(
+                "_parse_if_block_chunks: found a LOCAL (non-var) array declaration "
+                f"inside an if-block ({groups[first_local_idx][0].strip()!r}) that "
+                "isn't the known runtime-watcher pattern. This must be hoisted to a "
+                "top-level `var array<...>` (if it's a pure literal) before this "
+                "block, same as every other data array."
+            )
+        groups[first_local_idx:] = [[l for g in groups[first_local_idx:] for l in g]]
+    chunks: List[List[str]] = []
+    for k in range(0, len(groups), max_children):
+        chunk_body = [l for g in groups[k:k + max_children] for l in g]
+        chunks.append(["if barstate.islast", flag_line, *chunk_body])
+    return chunks or [["if barstate.islast", flag_line]]
+
+
+def emit_block(block_lines: List[str], max_children: int = 6) -> List[str]:
+    """Keeps every `var
+    array<...>` (and any other) DECLARATION at the script's true top level
+    (global scope, outside any function -- so it's a small, fixed number of
+    statements there, never the thing that blew CE10295), and wraps ONLY
+    each small `if barstate.islast` chunk in its OWN separate function
+    (rather than one function holding a whole block's worth of chunks).
+
+    Why: the previous `wrap_as_function(split_long_ifs(...))` fixed CE10295 (main body
+    too long) and CE10205 (a single if too long), but RB's larger dataset
+    (398 H4 zones, 248 5m BSO attempts) still blew CE10296 (one FUNCTION's
+    total body too long) once split_long_ifs's many small chunks were all
+    still stuffed into that one function. Splitting further -- many small
+    functions instead of one big one -- is the only version of this that
+    scales with dataset size instead of hitting a new wall at the next
+    size increase. Each small function can still freely reference the
+    global `var` arrays (Pine functions close over outer scope), so moving
+    declarations back out doesn't break anything the chunks need."""
+    out: List[str] = []
+    i, n = 0, len(block_lines)
+    decls: List[str] = []
+    while i < n:
+        line = block_lines[i]
+        if line == "if barstate.islast" and i + 1 < n and block_lines[i + 1].startswith("    if "):
+            out.extend(decls)
+            decls = []
+            flag_line = block_lines[i + 1]
+            body: List[str] = []
+            j = i + 2
+            while j < n and (block_lines[j].startswith("        ") or block_lines[j] == ""):
+                body.append(block_lines[j])
+                j += 1
+            for chunk in _parse_if_block_chunks(flag_line, body, max_children):
+                out.extend(wrap_as_function(chunk))
+            i = j
+        else:
+            decls.append(line)
+            i += 1
+    out.extend(decls)
+    return out
+
+
 def split_long_ifs(block_lines: List[str], max_children: int = 6) -> List[str]:
     """Splits every `if barstate.islast` / `    if <flag>` body in this
     block into several repeated `    if <flag>` chunks of at most
@@ -342,7 +421,8 @@ def build_rb_block(prefix: str, engine, bars, shown, table_zones, display_tz: Zo
                     draw_flag_expr: str, hide_orb: bool, right_edge, with_table: bool,
                     table_flag_expr: str = None, inspect_flag_expr: str = None,
                     from_last_expr: str = None, draw_impact_line: bool = False,
-                    gate_filter: bool = False) -> List[str]:
+                    gate_filter: bool = False, rank_total: Optional[int] = None,
+                    rank_offset: int = 0) -> List[str]:
     if table_flag_expr is None:
         table_flag_expr = draw_flag_expr
     """One RB layer's worth of packed arrays + a single runtime draw loop,
@@ -407,7 +487,16 @@ def build_rb_block(prefix: str, engine, bars, shown, table_zones, display_tz: Zo
         f"array.get({prefix}ImpactT, i) < array.get(gateEnd, focusGateNum)))"
     ) if gate_filter else None
     if inspect_flag_expr is not None:
-        lines.append(f"            {prefix}Rank = array.size({prefix}Left) - i")
+        # rank 1 = the single most recently created zone across the WHOLE
+        # (possibly batched -- see emit_batched_rb_layer) dataset, not just
+        # this call's own `shown` slice. `array.size({prefix}Left)` would
+        # give the wrong answer once a layer is split across several
+        # batches/functions for Pine's 1000-variables-per-function limit,
+        # since each batch's array only holds its own slice -- baking in
+        # the TRUE total and this batch's own offset (both known in Python
+        # at generation time) keeps rank correct regardless of batching.
+        total = rank_total if rank_total is not None else f"array.size({prefix}Left)"
+        lines.append(f"            {prefix}Rank = {total} - {rank_offset} - i")
         cond = f"not {inspect_flag_expr} or {prefix}Rank == {from_last_expr}"
         if gate_ok_expr is not None:
             cond = f"({cond}) and {gate_ok_expr}"
@@ -525,7 +614,9 @@ def arr_generic(kind: str, values: List[str]) -> str:
     return f"array.from({', '.join(values)})" if values else f"array.new<{kind}>()"
 
 
-def build_bso_extra_lines_rb(bso_results: list, display_tz: ZoneInfo, gate_filter: bool = False) -> List[str]:
+def build_bso_extra_lines_rb(bso_results: list, display_tz: ZoneInfo, gate_filter: bool = False,
+                              batch_suffix: str = "", batch_offset: int = 0, total_n: Optional[int] = None,
+                              emit_header: bool = True) -> List[str]:
     """RB analog of `full_viewer.py`'s `build_bso_extra_lines` (~lines
     440-580 there): entry/SL/TP lines, the fixed-R green/red boxes, and a
     ledger table, on the 5m chart only (`onFive`). Reuses the SAME
@@ -602,87 +693,91 @@ def build_bso_extra_lines_rb(bso_results: list, display_tz: ZoneInfo, gate_filte
             gleft.append("na"); gright.append("na"); gtop.append("na"); gbottom.append("na")
             rleft.append("na"); rright.append("na"); rtop.append("na"); rbottom.append("na")
 
+    total = total_n if total_n is not None else n
+    nm = f"bso5{batch_suffix}"  # per-batch array names; table/inputs stay
+                                # unsuffixed and global, shared across batches
+                                # (see emit_batched_bso_layer).
     bso_gate_ok_expr = (
-        "(focusGateNum == 0 or (not na(array.get(bso5EntryT, i)) and "
-        "array.get(bso5EntryT, i) >= array.get(gateStart, focusGateNum) and "
-        "array.get(bso5EntryT, i) < array.get(gateEnd, focusGateNum)))"
+        f"(focusGateNum == 0 or (not na(array.get({nm}EntryT, i)) and "
+        f"array.get({nm}EntryT, i) >= array.get(gateStart, focusGateNum) and "
+        f"array.get({nm}EntryT, i) < array.get(gateEnd, focusGateNum)))"
     ) if gate_filter else None
-    bso_cond = "not inspectOne5mBSO or bRank == bso5FromLast"
+    bso_cond = f"not inspectOne5mBSO or bRank == bso5FromLast"
     if bso_gate_ok_expr is not None:
         bso_cond = f"({bso_cond}) and {bso_gate_ok_expr}"
 
-    return [
-        "bool inspectOne5mBSO = input.bool(false, \"Inspect one 5m BSO only\", group=\"5m BSO inspection\")",
-        f"int bso5FromLast = input.int(1, \"5m BSO from last\", minval=1, maxval={max(1, n)}, group=\"5m BSO inspection\", tooltip=\"1 = most recent 5m BSO attempt, 2 = the one before it, and so on.\")",
-        f"var table bso5Ledger = table.new(position.top_right, 9, {n + 1}, border_width=1)",
-        f"var array<string> bso5Id = {arr_generic('string', ids)}",
-        f"var array<string> bso5Side = {arr_generic('string', sides)}",
-        f"var array<string> bso5Resting = {arr_generic('string', restings)}",
-        f"var array<string> bso5Entry = {arr_generic('string', entries)}",
-        f"var array<string> bso5Sl = {arr_generic('string', sls)}",
-        f"var array<string> bso5Tp = {arr_generic('string', tps)}",
-        f"var array<string> bso5Result = {arr_generic('string', results)}",
-        f"var array<string> bso5Exit = {arr_generic('string', exits)}",
-        f"var array<string> bso5Excursion = {arr_generic('string', excursions)}",
-        f"var array<int> bso5EntryT = {arr_generic('int', entry_stamps)}",
+    lines = [
+        f"var array<string> {nm}Id = {arr_generic('string', ids)}",
+        f"var array<string> {nm}Side = {arr_generic('string', sides)}",
+        f"var array<string> {nm}Resting = {arr_generic('string', restings)}",
+        f"var array<string> {nm}Entry = {arr_generic('string', entries)}",
+        f"var array<string> {nm}Sl = {arr_generic('string', sls)}",
+        f"var array<string> {nm}Tp = {arr_generic('string', tps)}",
+        f"var array<string> {nm}Result = {arr_generic('string', results)}",
+        f"var array<string> {nm}Exit = {arr_generic('string', exits)}",
+        f"var array<string> {nm}Excursion = {arr_generic('string', excursions)}",
+        f"var array<int> {nm}EntryT = {arr_generic('int', entry_stamps)}",
         # These 15 are pure precomputed literals (no runtime time/time_close
-        # dependency, unlike build_rb_block's `{prefix}Right`) -- hoisted to
-        # top-level `var array` alongside bso5Id etc., NOT declared locally
-        # inside `if onFive` like before. That local-declaration pattern is
-        # exactly what let split_long_ifs (needed to fix CE10205, "if
-        # statement is too long") separate a declaration from the single
-        # `for` loop that consumes it into two different `if onFive` chunks
-        # -- each `if` is its own scope, so the loop's chunk couldn't see
-        # the array, giving CE10272 ("undeclared identifier"). Root-caused
-        # and fixed at the generator, not patched in the generated file.
-        f"var array<int> bso5BLeft = {arr_generic('int', blefts)}",
-        f"var array<int> bso5BRight = {arr_generic('int', brights)}",
-        f"var array<float> bso5BY = {arr_generic('float', bys)}",
-        f"var array<int> bso5CLeft = {arr_generic('int', clefts)}",
-        f"var array<int> bso5CRight = {arr_generic('int', crights)}",
-        f"var array<float> bso5CY = {arr_generic('float', cys)}",
-        f"var array<color> bso5CCol = {arr_generic('color', ccols)}",
-        f"var array<int> bso5GLeft = {arr_generic('int', gleft)}",
-        f"var array<int> bso5GRight = {arr_generic('int', gright)}",
-        f"var array<float> bso5GTop = {arr_generic('float', gtop)}",
-        f"var array<float> bso5GBottom = {arr_generic('float', gbottom)}",
-        f"var array<int> bso5RLeft = {arr_generic('int', rleft)}",
-        f"var array<int> bso5RRight = {arr_generic('int', rright)}",
-        f"var array<float> bso5RTop = {arr_generic('float', rtop)}",
-        f"var array<float> bso5RBottom = {arr_generic('float', rbottom)}",
+        # dependency, unlike build_rb_block's `{prefix}Right`) -- top-level
+        # `var array`, not declared locally inside `if onFive` (that pattern
+        # is exactly what let split_long_ifs separate a declaration from
+        # its consuming `for` loop into two different `if onFive` scopes,
+        # giving CE10272, "undeclared identifier" -- root-caused and fixed
+        # at the generator once, kept fixed here).
+        f"var array<int> {nm}BLeft = {arr_generic('int', blefts)}",
+        f"var array<int> {nm}BRight = {arr_generic('int', brights)}",
+        f"var array<float> {nm}BY = {arr_generic('float', bys)}",
+        f"var array<int> {nm}CLeft = {arr_generic('int', clefts)}",
+        f"var array<int> {nm}CRight = {arr_generic('int', crights)}",
+        f"var array<float> {nm}CY = {arr_generic('float', cys)}",
+        f"var array<color> {nm}CCol = {arr_generic('color', ccols)}",
+        f"var array<int> {nm}GLeft = {arr_generic('int', gleft)}",
+        f"var array<int> {nm}GRight = {arr_generic('int', gright)}",
+        f"var array<float> {nm}GTop = {arr_generic('float', gtop)}",
+        f"var array<float> {nm}GBottom = {arr_generic('float', gbottom)}",
+        f"var array<int> {nm}RLeft = {arr_generic('int', rleft)}",
+        f"var array<int> {nm}RRight = {arr_generic('int', rright)}",
+        f"var array<float> {nm}RTop = {arr_generic('float', rtop)}",
+        f"var array<float> {nm}RBottom = {arr_generic('float', rbottom)}",
         "if barstate.islast",
         "    if onFive",
-        "        table.cell(bso5Ledger, 0, 0, \"RB\", text_color=color.white, bgcolor=color.new(color.purple,15))",
-        "        table.cell(bso5Ledger, 1, 0, \"Side\", text_color=color.white, bgcolor=color.new(color.purple,15))",
-        "        table.cell(bso5Ledger, 2, 0, \"Resting (RYD)\", text_color=color.white, bgcolor=color.new(color.purple,15))",
-        "        table.cell(bso5Ledger, 3, 0, \"Entry (RYD / px)\", text_color=color.white, bgcolor=color.new(color.purple,15))",
-        "        table.cell(bso5Ledger, 4, 0, \"SL\", text_color=color.white, bgcolor=color.new(color.purple,15))",
-        "        table.cell(bso5Ledger, 5, 0, \"TP\", text_color=color.white, bgcolor=color.new(color.purple,15))",
-        "        table.cell(bso5Ledger, 6, 0, \"Result\", text_color=color.white, bgcolor=color.new(color.purple,15))",
-        "        table.cell(bso5Ledger, 7, 0, \"Exit (RYD / px)\", text_color=color.white, bgcolor=color.new(color.purple,15))",
-        "        table.cell(bso5Ledger, 8, 0, \"MFE/MAE (pips)\", text_color=color.white, bgcolor=color.new(color.purple,15))",
-        "        for i = 0 to array.size(bso5Id) - 1",
-        "            bRank = array.size(bso5Id) - i",
-    ] + [f"            if {bso_cond}"] + [
-        "                bRow = inspectOne5mBSO ? 1 : i + 1",
-        "                table.cell(bso5Ledger, 0, bRow, array.get(bso5Id, i), text_color=color.black, bgcolor=na)",
-        "                table.cell(bso5Ledger, 1, bRow, array.get(bso5Side, i), text_color=color.black, bgcolor=na)",
-        "                table.cell(bso5Ledger, 2, bRow, array.get(bso5Resting, i), text_color=color.black, bgcolor=na)",
-        "                table.cell(bso5Ledger, 3, bRow, array.get(bso5Entry, i), text_color=color.black, bgcolor=na)",
-        "                table.cell(bso5Ledger, 4, bRow, array.get(bso5Sl, i), text_color=color.black, bgcolor=na)",
-        "                table.cell(bso5Ledger, 5, bRow, array.get(bso5Tp, i), text_color=color.black, bgcolor=na)",
-        "                table.cell(bso5Ledger, 6, bRow, array.get(bso5Result, i), text_color=color.black, bgcolor=na)",
-        "                table.cell(bso5Ledger, 7, bRow, array.get(bso5Exit, i), text_color=color.black, bgcolor=na)",
-        "                table.cell(bso5Ledger, 8, bRow, array.get(bso5Excursion, i), text_color=color.black, bgcolor=na)",
-        "                if not na(array.get(bso5BLeft, i))",
-        "                    line.new(array.get(bso5BLeft, i), array.get(bso5BY, i), array.get(bso5BRight, i), array.get(bso5BY, i), xloc=xloc.bar_time, extend=extend.none, color=color.blue, width=2)",
-        "                if not na(array.get(bso5CLeft, i))",
-        "                    line.new(array.get(bso5CLeft, i), array.get(bso5CY, i), array.get(bso5CRight, i), array.get(bso5CY, i), xloc=xloc.bar_time, extend=extend.none, color=array.get(bso5CCol, i), width=2)",
-        "                if not na(array.get(bso5GLeft, i))",
-        "                    box.new(array.get(bso5GLeft, i), array.get(bso5GTop, i), array.get(bso5GRight, i), array.get(bso5GBottom, i), border_color=color.green, bgcolor=color.new(color.green, 80), xloc=xloc.bar_time)",
-        "                if not na(array.get(bso5RLeft, i))",
-        "                    box.new(array.get(bso5RLeft, i), array.get(bso5RTop, i), array.get(bso5RRight, i), array.get(bso5RBottom, i), border_color=color.red, bgcolor=color.new(color.red, 80), xloc=xloc.bar_time)",
     ]
+    if emit_header:
+        lines += [
+            "        table.cell(bso5Ledger, 0, 0, \"RB\", text_color=color.white, bgcolor=color.new(color.purple,15))",
+            "        table.cell(bso5Ledger, 1, 0, \"Side\", text_color=color.white, bgcolor=color.new(color.purple,15))",
+            "        table.cell(bso5Ledger, 2, 0, \"Resting (RYD)\", text_color=color.white, bgcolor=color.new(color.purple,15))",
+            "        table.cell(bso5Ledger, 3, 0, \"Entry (RYD / px)\", text_color=color.white, bgcolor=color.new(color.purple,15))",
+            "        table.cell(bso5Ledger, 4, 0, \"SL\", text_color=color.white, bgcolor=color.new(color.purple,15))",
+            "        table.cell(bso5Ledger, 5, 0, \"TP\", text_color=color.white, bgcolor=color.new(color.purple,15))",
+            "        table.cell(bso5Ledger, 6, 0, \"Result\", text_color=color.white, bgcolor=color.new(color.purple,15))",
+            "        table.cell(bso5Ledger, 7, 0, \"Exit (RYD / px)\", text_color=color.white, bgcolor=color.new(color.purple,15))",
+            "        table.cell(bso5Ledger, 8, 0, \"MFE/MAE (pips)\", text_color=color.white, bgcolor=color.new(color.purple,15))",
+        ]
+    lines += [
+        f"        for i = 0 to array.size({nm}Id) - 1",
+        f"            bRank = {total} - {batch_offset} - i",
+        f"            if {bso_cond}",
+        f"                bRow = inspectOne5mBSO ? 1 : {batch_offset} + i + 1",
+        f"                table.cell(bso5Ledger, 0, bRow, array.get({nm}Id, i), text_color=color.black, bgcolor=na)",
+        f"                table.cell(bso5Ledger, 1, bRow, array.get({nm}Side, i), text_color=color.black, bgcolor=na)",
+        f"                table.cell(bso5Ledger, 2, bRow, array.get({nm}Resting, i), text_color=color.black, bgcolor=na)",
+        f"                table.cell(bso5Ledger, 3, bRow, array.get({nm}Entry, i), text_color=color.black, bgcolor=na)",
+        f"                table.cell(bso5Ledger, 4, bRow, array.get({nm}Sl, i), text_color=color.black, bgcolor=na)",
+        f"                table.cell(bso5Ledger, 5, bRow, array.get({nm}Tp, i), text_color=color.black, bgcolor=na)",
+        f"                table.cell(bso5Ledger, 6, bRow, array.get({nm}Result, i), text_color=color.black, bgcolor=na)",
+        f"                table.cell(bso5Ledger, 7, bRow, array.get({nm}Exit, i), text_color=color.black, bgcolor=na)",
+        f"                table.cell(bso5Ledger, 8, bRow, array.get({nm}Excursion, i), text_color=color.black, bgcolor=na)",
+        f"                if not na(array.get({nm}BLeft, i))",
+        f"                    line.new(array.get({nm}BLeft, i), array.get({nm}BY, i), array.get({nm}BRight, i), array.get({nm}BY, i), xloc=xloc.bar_time, extend=extend.none, color=color.blue, width=2)",
+        f"                if not na(array.get({nm}CLeft, i))",
+        f"                    line.new(array.get({nm}CLeft, i), array.get({nm}CY, i), array.get({nm}CRight, i), array.get({nm}CY, i), xloc=xloc.bar_time, extend=extend.none, color=array.get({nm}CCol, i), width=2)",
+        f"                if not na(array.get({nm}GLeft, i))",
+        f"                    box.new(array.get({nm}GLeft, i), array.get({nm}GTop, i), array.get({nm}GRight, i), array.get({nm}GBottom, i), border_color=color.green, bgcolor=color.new(color.green, 80), xloc=xloc.bar_time)",
+        f"                if not na(array.get({nm}RLeft, i))",
+        f"                    box.new(array.get({nm}RLeft, i), array.get({nm}RTop, i), array.get({nm}RRight, i), array.get({nm}RBottom, i), border_color=color.red, bgcolor=color.new(color.red, 80), xloc=xloc.bar_time)",
+    ]
+    return lines
 
 
 def main() -> int:
@@ -810,16 +905,54 @@ def main() -> int:
         f"var array<int> gateEnd = {arr('int', gate_ends_pine)}",
     ]
 
-    lines += wrap_as_function(split_long_ifs(build_struct_block("w", weekly_engine, weeks, args.label_cap, "onWeekly")))
-    lines += wrap_as_function(split_long_ifs(build_rb_block("w", weekly_engine, weeks, weekly_shown, weekly_table, display_tz,
+    lines += emit_block((build_struct_block("w", weekly_engine, weeks, args.label_cap, "onWeekly")))
+    lines += emit_block((build_rb_block("w", weekly_engine, weeks, weekly_shown, weekly_table, display_tz,
                              draw_flag_expr="onWeekly", hide_orb=False, right_edge=right_edge, with_table=True,
                              inspect_flag_expr="inspectOneRB", from_last_expr="rbFromLast", draw_impact_line=True)))
-    lines += wrap_as_function(split_long_ifs(build_rb_block("h4", h4_engine, h4_bars, h4_shown, h4_table, display_tz,
+    # H4 RB and 5m BSO are batched (not routed through emit_block) because
+    # RB's dataset (398 H4 zones, 248 BSO attempts) is large enough that
+    # even ONE small-ish function can still exceed Pine's real limit --
+    # 1000 variables per function/scope, INCLUDING the global scope (it's
+    # implicitly wrapped in its own "main function") and implicit
+    # variables auxiliary to each array.from(...) element -- confirmed via
+    # TradingView's own documented CE10295/CE10296 behavior, not guessed.
+    # Splitting into several self-contained functions, each covering a
+    # SLICE of the data (declarations + drawing kept together, not
+    # separated like emit_block's global-scope hoist did), is the only
+    # version of this that scales with dataset size. `hide_orb` items are
+    # already filtered out of `h4_shown` by the time it reaches here? No
+    # -- build_rb_block does that filtering itself per item, so slicing
+    # `h4_shown` into batches here and letting each batched call re-run
+    # that same per-item hide_orb check is correct and matches the
+    # unbatched behavior exactly.
+    H4_BATCH = 15
+    for k in range(0, max(1, len(h4_shown)), H4_BATCH):
+        batch = h4_shown[k:k + H4_BATCH]
+        block = build_rb_block(f"h4b{k}", h4_engine, h4_bars, batch, [], display_tz,
+                                draw_flag_expr="onH4 or onFive", hide_orb=True, right_edge=right_edge,
+                                with_table=False,
+                                inspect_flag_expr="inspectOneH4RB", from_last_expr="h4RbFromLast",
+                                draw_impact_line=True, gate_filter=gate_filter_on,
+                                rank_total=len(h4_shown), rank_offset=k)
+        lines += wrap_as_function(block)
+    lines += wrap_as_function(build_rb_block("h4", h4_engine, h4_bars, [], h4_table, display_tz,
                              draw_flag_expr="onH4 or onFive", hide_orb=True, right_edge=right_edge,
                              with_table=True, table_flag_expr="onH4",
                              inspect_flag_expr="inspectOneH4RB", from_last_expr="h4RbFromLast", draw_impact_line=True,
-                             gate_filter=gate_filter_on)))
-    lines += wrap_as_function(split_long_ifs(build_bso_extra_lines_rb(bso_results, display_tz, gate_filter=gate_filter_on)))
+                             gate_filter=gate_filter_on))
+
+    lines += [
+        "bool inspectOne5mBSO = input.bool(false, \"Inspect one 5m BSO only\", group=\"5m BSO inspection\")",
+        f"int bso5FromLast = input.int(1, \"5m BSO from last\", minval=1, maxval={max(1, len(bso_results))}, group=\"5m BSO inspection\", tooltip=\"1 = most recent 5m BSO attempt, 2 = the one before it, and so on.\")",
+        f"var table bso5Ledger = table.new(position.top_right, 9, {len(bso_results) + 1}, border_width=1)",
+    ]
+    BSO_BATCH = 15
+    for k in range(0, max(1, len(bso_results)), BSO_BATCH):
+        batch = bso_results[k:k + BSO_BATCH]
+        block = build_bso_extra_lines_rb(batch, display_tz, gate_filter=gate_filter_on,
+                                          batch_suffix=f"b{k}", batch_offset=k,
+                                          total_n=len(bso_results), emit_header=(k == 0))
+        lines += wrap_as_function(block)
 
     out_dir = Path(args.out_dir) if args.out_dir else Path(__file__).resolve().parent.parent / "data"
     out_dir.mkdir(parents=True, exist_ok=True)
