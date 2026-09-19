@@ -835,3 +835,30 @@ correction) -- kept for the record, not for continued use.
   NOT touched by this change (not in the task's scope for this pass) -- the
   Pine viewer still draws every H4 RB zone regardless of `authorized`, an
   intentional scope boundary, not an oversight.
+
+## Session update — 2026-09-19 (two open data-quality issues logged, NOT fixed — raised by user via live chart cross-check)
+
+**Status: OPEN. Do not silently fix either without the user's go-ahead — logged per their explicit request to flag, raise, and move on to control-gate work.**
+
+### Issue A — RB #1 origin candle: CSV price levels disagree with the live FXCM/TradingView chart
+
+- `weekly_rb_ledger.csv` id=1 (IRB BUY) picked week-of-12-Jan-2026 as its swing-low origin (engine low 1.15692) over week-of-19-Jan-2026 (engine low 1.15719) — a 2.7-pip call, engine-consistent given the data it has.
+- User's live chart shows the OPPOSITE ordering and materially different price levels:
+  - 12 Jan (chart): O 1.16339, H 1.16984, L 1.15843, C 1.15950 -- vs engine: O 1.16353, H 1.16981, L 1.15692, C 1.15731.
+  - 19 Jan (chart): O 1.15800, H 1.18336, L 1.15762, C 1.18265 -- vs engine: O 1.15731, H 1.18649, L 1.15719, C 1.18649.
+  - Differences run 15-38 pips depending on the field (Low ~15pip, Close ~38pip on 19 Jan) -- too large for a timezone/offset artifact; this is the underlying CSV's OWN price data disagreeing with the live chart, not a selection-logic bug. (This sits alongside the already-investigated, still-unresolved raw-timestamp-offset inconsistency from earlier the same day -- see the "1401 vs 1501 Riyadh" investigation above -- which showed the CSV's own internal offset is not even self-consistent across dates. This is a second, independent symptom of the same underlying "this CSV cannot be fully trusted" finding, not a new root cause.)
+- Reason (working hypothesis, NOT confirmed): the downloadable "FXCM Basic Historical Data" export used to build this CSV is plausibly a different/lower-fidelity feed than what TradingView's live FXCM chart renders. No proof yet -- would need a broader systematic spot-check (many candles across the file) to confirm how pervasive this is.
+- Recommended path (user-agreed, deferred for now): re-source M1 data from something that matches the live chart (TradingView export for a small trusted window, or FXCM's own documented-UTC API) rather than patch this file candle-by-candle. Not started.
+
+### Issue B — Weekly week-open falsely equals prior week's close (stale echo tick), root cause CONFIRMED
+
+- `weekly_rb_ledger.csv` id=12 (IRB BUY, origin week 26 Jul 2026): engine top = 1.13689 (= `min(open, close)` of the origin week = the week's own open, since open < close). User's chart shows the real origin candle's open is **1.13887**, ~20 pips higher -- a real, reproducible discrepancy (High/Low/Close all matched the chart to within ~0.3 pip, only Open was wrong).
+- Root cause, found and confirmed directly in the raw CSV (`EURUSD_m1_BidAndAsk.csv`): the very first M1 row after the Fri-24-Jul -> Sun-26-Jul weekend gap is
+  ```
+  07/26/2026,19:00:00  Open=1.13689  TotalTicks=4
+  ```
+  `1.13689` is an EXACT copy of the prior Friday close (`07/24/2026,20:58:00` Close=1.13689), and `TotalTicks=4` is far below the 30-50+ ticks/minute seen in normal trading -- a stale/indicative echo quote, not a real trade. Real trading resumes a few minutes later: `19:06:00` (7 ticks, still thin) then `19:07:00` (35 ticks, price already at 1.13778-1.13899) -- matching the user's chart-observed real open of 1.13887 almost exactly.
+  `weekly_ob_generator.py`'s `aggregate_weeks()` naively takes literally the first CSV row at/after the scheduled boundary as the week's open (`Week(start, end, minutes[i].o, ...)`), with no check for this kind of echoed/thin reopen tick, so it picked the fake 1.13689 instead of the real ~1.13887.
+- **This is the same root disease as the already-flagged, still-unresolved OB "phantom weekly Sunday-reopen H4 candle" finding** (see `ob_reference_docs/TRADING_SYSTEM_HANDOFF.md`, session update 2026-09-17, "MAJOR UNRESOLVED FINDING"): thin, non-representative ticks in the minutes immediately after a weekend gap, polluting aggregation. There it manufactures an extra phantom H4 bar; here it corrupts the Weekly bar's own open field. Same cause, two different symptoms, in two different aggregation granularities (H4 vs Weekly), both inherited unchanged by RB from the OB codebase it was ported from.
+- Proposed fix (NOT applied, needs user sign-off first): when selecting a week's open right after a gap, skip forward past any leading tick(s) whose Open exactly echoes the prior close AND whose tick count is abnormally low, until a genuinely-trading tick is found; use that one as the week's real open. Loop rather than skip-exactly-one, since more than one echoed minute can occur (this example: 19:00 was fake, 19:06 was still thin, 19:07 was the first solid one).
+- User's decision (2026-09-19): defer fixing this specific rule. It will most likely be resolved together with the broader Sunday/weekend-reopen data-reliability problem (Issue A above and the OB phantom-H4-bar finding) once cleaner-sourced data is in hand, rather than patched in isolation on data already known to be partially unreliable. Proceeding to control-gate work next.
