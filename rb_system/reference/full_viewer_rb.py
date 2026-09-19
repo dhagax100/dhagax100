@@ -855,8 +855,15 @@ def main() -> int:
 
     right_edge = minutes[-1].t + timedelta(days=365)
 
-    # Gate boundaries for the focusGateNum Pine input (Task 5).
-    gates_path = Path(args.gates_csv) if args.gates_csv else base / "rb_control_gates.csv"
+    # Gate boundaries for the focusGateNum Pine input (Task 5). Default
+    # matches the --gates-csv help text (script's own ../data, where
+    # build_control_gates.py always writes it -- that script has no
+    # --out-dir override, unlike every other script here) -- NOT `base`
+    # (alongside the input CSV), which was a copy-paste bug from the
+    # --control-ledger default just above it: harmless whenever the CSV
+    # happens to sit in the same folder as this script (rare in practice),
+    # but wrong as a documented default.
+    gates_path = Path(args.gates_csv) if args.gates_csv else Path(__file__).resolve().parent.parent / "data" / "rb_control_gates.csv"
     gates = load_gates(gates_path)
     gate_starts_pine = [pine_time(s) for s, _e in gates]
     gate_ends_pine = [pine_time(e) if e is not None else pine_time(right_edge) for _s, e in gates]
