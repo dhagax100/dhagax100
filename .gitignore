@@ -12,3 +12,7 @@ data/h4_ob_viewer.pine
 data/h4_ob_report.txt
 data/full_viewer.pine
 data/five_bso_ledger.csv
+data/weekly_rb_ledger.csv
+data/weekly_rb_swings.csv
+data/weekly_rb_viewer.pine
+data/weekly_rb_report.txt
