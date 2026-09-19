@@ -434,14 +434,34 @@ def write_rb_pine(base: Path, engine: WeeklyRBEngine, label_cap: int, rb_cap: in
         struct_txt.append("\"✕\""); struct_col.append("color.blue" if m.up else "color.black")
         struct_low.append("false" if m.up else "true")
 
+    # Resolve each static M1 impact into the opening time of whichever
+    # Weekly bar actually CONTAINS it -- exactly OB's impact_x_<id> watcher
+    # mechanism (write_ob_pine in weekly_ob_generator.py), ported here after
+    # a real bug: passing a raw, bar-unaligned M1 timestamp straight to
+    # box.new/line.new's xloc.bar_time lets Pine snap it to the NEXT bar's
+    # open instead of the bar the impact actually happened in -- confirmed
+    # by the user on the real chart (box/impact-line stopping one candle
+    # late). `impact_x_<id>` is a `var int`, updated once time actually
+    # reaches the impact stamp's own containing bar, so it always resolves
+    # to that bar's own open -- never a lookahead, never the next bar.
     right_edge = engine.m[-1].t + timedelta(days=365)
-    rb_left, rb_top, rb_bottom, rb_right, rb_col, rb_rank, rb_audit = [], [], [], [], [], [], []
+    impact_vars: Dict[int, str] = {}
+    impact_watchers: List[str] = []
+    for z in shown:
+        if z.impact_time is not None:
+            name = f"impact_x_{z.id}"
+            impact_vars[z.id] = name
+            stamp = wob.pine_time(z.impact_time)
+            impact_watchers += [f"var int {name} = na", f"if time <= {stamp} and {stamp} < time_close", f"    {name} := time"]
+
+    rb_left, rb_top, rb_bottom, rb_right_expr, rb_col, rb_rank, rb_audit = [], [], [], [], [], [], []
     for z in shown:
         wk = engine.w[z.candle]
-        right = z.impact_time or (engine.w[z.stop].start if 0 <= z.stop < len(engine.w) else right_edge)
+        fallback_right = z.impact_time or (engine.w[z.stop].start if 0 <= z.stop < len(engine.w) else right_edge)
+        right = f"(na({impact_vars[z.id]}) ? {wob.pine_time(fallback_right)} : {impact_vars[z.id]})" if z.impact_time is not None else wob.pine_time(fallback_right)
         rank_from_last = len(engine.zones) - z.id + 1
         rb_left.append(wob.pine_time(wk.start)); rb_top.append(f"{z.zt:.5f}"); rb_bottom.append(f"{z.zb:.5f}")
-        rb_right.append(wob.pine_time(right)); rb_col.append(rb_colour(z)); rb_rank.append(str(rank_from_last))
+        rb_right_expr.append(right); rb_col.append(rb_colour(z)); rb_rank.append(str(rank_from_last))
         rb_audit.append(f"\"#{z.id} {status(z)} {'BUY' if z.bullish else 'SELL'}\"")
 
     t_id, t_type, t_side, t_bottom, t_top, t_anchor, t_eligible, t_impact, t_status, t_bg = ([] for _ in range(10))
@@ -463,7 +483,6 @@ def write_rb_pine(base: Path, engine: WeeklyRBEngine, label_cap: int, rb_cap: in
         f"var array<color> structCol = {arr('color', struct_col)}",
         f"var array<bool> structLow = {arr('bool', struct_low)}",
         f"var array<int> rbLeft = {arr('int', rb_left)}",
-        f"var array<int> rbRight = {arr('int', rb_right)}",
         f"var array<float> rbTop = {arr('float', rb_top)}",
         f"var array<float> rbBottom = {arr('float', rb_bottom)}",
         f"var array<color> rbCol = {arr('color', rb_col)}",
@@ -479,11 +498,13 @@ def write_rb_pine(base: Path, engine: WeeklyRBEngine, label_cap: int, rb_cap: in
         f"var array<string> tImpact = {arr('string', t_impact)}",
         f"var array<string> tStatus = {arr('string', t_status)}",
         f"var array<color> tBg = {arr('color', t_bg)}",
+        *impact_watchers,
         "if barstate.islast",
         "    if onWeekly",
         "        for i = 0 to array.size(structX) - 1",
         "            structYY = array.get(structLow, i) ? array.get(structY, i) - lowGap : array.get(structY, i)",
         "            label.new(array.get(structX, i), structYY, array.get(structTxt, i), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=array.get(structCol, i), size=size.small)",
+        f"        array<int> rbRight = {arr('int', rb_right_expr)}",
         "        for i = 0 to array.size(rbLeft) - 1",
         "            if not inspectOneRB or rbFromLast == array.get(rbRank, i)",
         "                box.new(array.get(rbLeft, i), array.get(rbTop, i), array.get(rbRight, i), array.get(rbBottom, i), border_color=array.get(rbCol, i), border_width=1, border_style=line.style_dashed, bgcolor=na, xloc=xloc.bar_time)",
