@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -203,6 +204,97 @@ def split_long_ifs(block_lines: List[str], max_children: int = 6) -> List[str]:
         else:
             out.append(line)
             i += 1
+    return out
+
+
+_ARRAY_DECL_RE = re.compile(r"^(var )?array<(\w+)> (\w+) = array\.from\((.*)\)$")
+
+
+def _split_top_level_commas(s: str) -> List[str]:
+    """Splits `s` on commas that are NOT inside nested parens/brackets or a
+    quoted string (needed because each array element here can itself be a
+    `timestamp(...)` call, a ternary `na(x) ? y : z`, or a quoted string
+    containing a literal comma)."""
+    parts, depth, cur, in_str, i = [], 0, [], False, 0
+    while i < len(s):
+        c = s[i]
+        if in_str:
+            cur.append(c)
+            if c == "\\" and i + 1 < len(s):
+                cur.append(s[i + 1])
+                i += 2
+                continue
+            if c == '"':
+                in_str = False
+            i += 1
+            continue
+        if c == '"':
+            in_str = True
+            cur.append(c)
+            i += 1
+            continue
+        if c in "([":
+            depth += 1
+        elif c in ")]":
+            depth -= 1
+        if c == "," and depth == 0:
+            parts.append("".join(cur))
+            cur = []
+        else:
+            cur.append(c)
+        i += 1
+    if cur:
+        parts.append("".join(cur))
+    return [p.strip() for p in parts if p.strip() != ""]
+
+
+def chunk_large_arrays(lines: List[str], chunk: int = 20) -> List[str]:
+    """Rewrites any `var array<T> NAME = array.from(e1, e2, ..., eN)` with
+    N > `chunk` into a `var array<T> NAME = array.new<T>()` plus several
+    `array.concat(NAME, array.from(<up to `chunk` elements>))` calls inside
+    `if barstate.isfirst` (runs exactly once, on the very first bar, well
+    before `if barstate.islast`'s drawing code needs it). Applied globally
+    to the whole generated file right before it's written.
+
+    Root cause this fixes: `wrap_as_function`/`split_long_ifs` bound how
+    many STATEMENTS sit in one script/function/if scope, but RB's larger
+    dataset (398 H4 zones, 248 5m BSO attempts vs OB's smaller reference
+    scale) can make a SINGLE array.from(...) literal itself huge enough to
+    blow a function body's size limit (CE10296) even when it's the only
+    statement of its kind in that function -- chunking the literal itself,
+    not just the surrounding control flow, is the only fix that scales
+    with dataset size instead of hitting a wall again at the next size
+    increase."""
+    out: List[str] = []
+    for line in lines:
+        stripped = line.strip()
+        indent = line[: len(line) - len(line.lstrip())]
+        m = _ARRAY_DECL_RE.match(stripped)
+        if m:
+            is_var, typ, name, inner = m.groups()
+            elems = _split_top_level_commas(inner)
+            if len(elems) > chunk:
+                if is_var:
+                    # `var` -> only ever needs building once, so do it inside
+                    # `if barstate.isfirst` (the very first bar).
+                    out.append(f"{indent}var array<{typ}> {name} = array.new<{typ}>()")
+                    out.append(f"{indent}if barstate.isfirst")
+                    for k in range(0, len(elems), chunk):
+                        piece = ", ".join(elems[k:k + chunk])
+                        out.append(f"{indent}    array.concat({name}, array.from({piece}))")
+                else:
+                    # Local (non-var), e.g. `{prefix}Right` -- must stay
+                    # exactly where it was (inside `if barstate.islast`,
+                    # re-read fresh each time it runs, since its elements
+                    # reference runtime watcher variables) -- no isfirst
+                    # wrapper, just the same sequence of concat calls at the
+                    # same indent it already had.
+                    out.append(f"{indent}array<{typ}> {name} = array.new<{typ}>()")
+                    for k in range(0, len(elems), chunk):
+                        piece = ", ".join(elems[k:k + chunk])
+                        out.append(f"{indent}array.concat({name}, array.from({piece}))")
+                continue
+        out.append(line)
     return out
 
 
@@ -731,6 +823,7 @@ def main() -> int:
 
     out_dir = Path(args.out_dir) if args.out_dir else Path(__file__).resolve().parent.parent / "data"
     out_dir.mkdir(parents=True, exist_ok=True)
+    lines = chunk_large_arrays(lines)
     (out_dir / "full_viewer_rb.pine").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     print("Created: full_viewer_rb.pine")
