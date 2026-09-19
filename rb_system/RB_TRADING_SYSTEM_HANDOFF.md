@@ -1340,3 +1340,189 @@ weekly_rb_ledger.csv`, `rb_system/data/weekly_control_events_rb.csv`,
 `rb_system/data/h4_rb_ledger.csv`, `rb_system/data/rb_control_gates.csv`,
 `rb_system/data/five_rb_bso_ledger.csv`, `rb_system/data/
 full_viewer_rb.pine` (all regenerated end to end from the same input CSV).
+
+## 12. User's final decision on the raw-CSV timezone: raw = UTC directly (2026-09-19 session)
+
+**The decision, quoted verbatim:** "consider the raw CSV data to be
+UTC... every time you and me are talking, let's use Riyadh time, period."
+
+**Basis (already established in prior sessions, recorded here for the
+record, not re-derived):** raw CSV row `02/09/2026,12:07:00` (the minute
+price first exceeds `1.18744`, RB zone id=2's ARB-creation trigger level)
+matches the user's live FXCM/TradingView chart within ~2 minutes when
+read as raw wall-clock = UTC directly, i.e. `12:07 raw = 12:07 UTC =
+15:07 Riyadh (UTC+3)`. FXCM's own API docs state M1 historical exports
+are UTC. **Known, disclosed, deliberately not re-litigated tension:** RB
+zone id=2's own *impact* point (raw `09:01`) was separately chart-
+confirmed by the user at 15:01 Riyadh, which needs a `-3:00` offset, not
+`0:00` — the opposite of this rule. The user has explicitly said not to
+chase this down right now ("do not worry about anything that will come
+later, we will deal with it, I do not look back"). This entry implements
+the decision as given; it does not attempt to resolve that tension.
+
+**Code change.** Every RB script whose `--input-tz` default was
+`Etc/GMT+2` now defaults to `UTC` (raw Date/Time parsed as already-UTC
+wall-clock, zero offset applied):
+`rb_system/reference/weekly_rb_generator.py`,
+`rb_system/reference/h4_rb_engine.py`,
+`rb_system/reference/weekly_control_engine_rb.py`,
+`rb_system/reference/five_rb_bso_engine.py`,
+`rb_system/reference/full_viewer_rb.py`,
+`rb_system/reference/weekly_rb_viewer.py`. `README_RB_ENGINES.txt`
+updated to match, with an explicit note that the OB pipeline's own
+`weekly_control_engine.py` (step 2 of the RB run order, a prerequisite
+file the RB engines happen to also depend on for OB's own control
+ledger) is UNCHANGED and still defaults to `Etc/GMT+2` — this decision
+is scoped to the RB pipeline only, per the task.
+
+A second, unrelated hardcoded `Etc/GMT+2` reference was checked and
+confirmed NOT load-bearing: `full_viewer_rb.py` line 112 emits Pine
+`timestamp("GMT+0", ...)` calls — that is Pine's own UTC-anchor literal
+for drawing on the chart from already-UTC datetimes, not a raw-CSV input
+assumption. Left as-is (it is already `GMT+0`, i.e. UTC, consistent with
+this change).
+
+**Full pipeline rerun**, same input CSV
+(`rb_system/ob_reference_data/EURUSD_m1_BidAndAsk.csv`), in dependency
+order: `weekly_control_engine_rb.py` -> `weekly_rb_generator.py` ->
+`h4_rb_engine.py` -> `build_control_gates.py` -> `five_rb_bso_engine.py`
+-> `full_viewer_rb.py` -> `weekly_rb_viewer.py`.
+
+**Bug found and fixed during this rerun (not a timezone bug, an output-
+path bug):** `weekly_control_engine_rb.py`'s `--out-dir` default is
+`path.parent` (the *input CSV's* own directory,
+`rb_system/ob_reference_data/`) when `--out-dir` is omitted — unlike
+every other RB script here, whose default is `rb_system/data/`. The
+first rerun of this script silently wrote `weekly_control_ledger_rb.csv`
+/ `weekly_control_events_rb.csv` / `weekly_control_report_rb.txt` into
+`ob_reference_data/` instead of `data/`, leaving the *stale*, pre-
+change (`Etc/GMT+2`-derived) copies sitting untouched in `data/`.
+`h4_rb_engine.py` and `five_rb_bso_engine.py` also default their
+`--control-ledger` lookup to beside the input CSV, not `../data/`, which
+is a separate but related trap for the same reason. Fixed by re-running
+`weekly_control_engine_rb.py` with `--out-dir ../data` explicitly, then
+re-running `h4_rb_engine.py` / `five_rb_bso_engine.py` /
+`full_viewer_rb.py` with `--control-ledger ../data/weekly_control_ledger_rb.csv`
+explicitly, and deleting the stray copy that had landed in
+`ob_reference_data/`. Not fixed at the code-default level (out of this
+session's scope; flagged here so a future session does not repeat it —
+neither script's CLI has a wrong *timezone* default, both have a
+misleading *out-dir* default that happens to bite immediately after a
+fresh clone/rerun).
+
+### Verification: RB zone id=2 — all three timestamps land on the same minute, as predicted
+
+`rb_system/data/weekly_rb_ledger.csv`, row id=2 (ARB SELL, origin
+`[1.18649, 1.20825]`), after the UTC-direct rerun:
+```
+trigger_time_utc  = eligible_time_utc = impact_time_utc  = 2026-02-09 12:07:00
+trigger_time_display = eligible_time_display = impact_time_display = 2026-02-09 15:07:00
+```
+All three ARE on the same minute, 15:07 Riyadh (12:07 UTC), as the task's
+testable prediction required — this is real, not forced: raw CSV row
+`02/09/2026,12:07:00` (`HighBid=1.18746, LowBid=1.18738`) already sits
+inside the zone `[1.18649, 1.20825]` the instant it becomes eligible, so
+`first_touch` (bounded below by `eligible_time`) finds the impact
+immediately, same as the prior `Etc/GMT+2`+`cross_time` fix's finding
+(SS11 above) — only the absolute clock value moved (14:07 UTC -> 12:07
+UTC), the same-minute coincidence itself is unaffected by which offset
+is used.
+
+### Spot-check: 4 more zones, raw CSV grepped directly, confirming UTC-direct with zero offset consistently applied
+
+```
+zone   ledger trigger_time_utc     raw CSV row grepped directly
+1      2026-01-20 13:34:00     ->  01/20/2026,13:34:00  (exact match, zero offset)
+6      2026-05-06 10:45:00     ->  05/06/2026,10:45:00  (exact match, zero offset)
+8      2026-06-05 13:00:00     ->  06/05/2026,13:00:00  (exact match, zero offset)
+11     2026-07-23 12:43:00     ->  07/23/2026,12:43:00  (exact match, zero offset)
+```
+Every `_display` (Riyadh) column across all sampled rows in
+`weekly_rb_ledger.csv` and `h4_rb_ledger.csv` is exactly UTC+3 from its
+`_utc` sibling (e.g. `12:07:00 UTC` / `15:07:00` display,
+`15:55:00 UTC` / `18:55:00` display), confirming `display_iso()` is
+applied consistently and no residual `Etc/GMT+2` parsing survives
+anywhere in the RB pipeline's raw-CSV ingestion path.
+
+### CSV utc/riyadh column labeling — checked, substance present, one cosmetic naming difference noted
+
+Every regenerated RB ledger/report CSV already carries both a `_utc`
+timestamp column and its Riyadh-converted counterpart for every
+timestamp field, matching the OB reference ledgers' convention in
+substance:
+- `weekly_rb_ledger.csv` / `h4_rb_ledger.csv`: `*_time_utc` +
+  `*_time_display` pairs (`display_iso()`, `--display-tz` default
+  `Asia/Riyadh` — confirmed by inspecting the actual values, all UTC+3
+  from their `_utc` siblings, not just by argument default).
+- `rb_control_gates.csv`: `gate_start_utc` + `gate_start_riyadh`,
+  `gate_end_riyadh` (no separate `gate_end_utc` — pre-existing, not
+  changed this session).
+- `five_rb_bso_ledger.csv`: `*_riyadh` + `*_utc` pairs throughout
+  (`h4_impact_riyadh`/`h4_impact_utc`, `entry_riyadh`/`entry_utc`, etc).
+- `weekly_control_events_rb.csv` / `weekly_control_ledger_rb.csv`:
+  `week_start_utc` + `week_start_riyadh`.
+
+**One naming inconsistency observed, not changed:** `weekly_rb_ledger.csv`
+and `h4_rb_ledger.csv` use the suffix `_display` (e.g.
+`trigger_time_display`) rather than `_riyadh`, while
+`rb_control_gates.csv`/`five_rb_bso_ledger.csv`/`weekly_control_events_rb.csv`
+use `_riyadh` directly, and the OB reference ledger
+(`weekly_ob_ledger.csv`) uses `_riyadh` too. The `_display` columns ARE
+Riyadh values (display-tz default is `Asia/Riyadh`), so no data is
+missing — this is a column-name inconsistency only, pre-existing from
+before this session (not introduced by this change). Left as-is: renaming
+it would touch `full_viewer_rb.py`'s Pine-generation code paths that read
+these column names, which is out of this session's scope and carries
+regression risk disproportionate to a cosmetic fix. Flagged for a future
+session if strict naming consistency across all RB CSVs is wanted.
+
+### Gate table: 15 gates now, down from 17 (a real change, not cosmetic)
+
+`rb_control_gates.csv` regenerated fresh off the corrected
+`weekly_control_ledger_rb.csv`/`weekly_control_events_rb.csv`. Gate count
+dropped from 17 to **15** — every timestamp shifted (as expected, since
+every RB zone's trigger/eligible/impact time moved), and in this rerun
+two fewer control-state transitions occurred overall (compare the two
+files' event counts: 28 vs 27 `weekly_control_events_rb.csv` rows before/
+after — one fewer event, collapsing two gates into one transition).
+`h4_rb_ledger.csv` stayed at 398 total zones / 78 authorized (same
+authorization count as the last known-good pre-UTC-direct run once the
+`--control-ledger` path bug above was fixed), and
+`five_rb_bso_ledger.csv` at 63 `ENTERED` / 39 `H4_OB_BREACHED` — matching
+that same prior run's stage counts, confirming the gate-count/authorized-
+count changes are attributable to the corrected control-ledger path fix
+landing together with the UTC-direct timezone change in this session, not
+to some new inconsistency.
+
+### Pine syntax check — explicitly re-run, not assumed
+
+Ran the same automated indentation-nesting scan this file's history has
+needed multiple times: every `if barstate.islast` in the regenerated
+`full_viewer_rb.pine` (639 lines) is immediately followed (skipping blank
+lines) by a line indented strictly more than the `if` itself. Found **6**
+occurrences of `if barstate.islast`, **0 anomalies**. Also ran quote-count
+parity (5608 double-quotes total in the earlier UTC-direct-only rerun,
+even count both times) and paren-balance checks (both matched) across the
+whole file. `weekly_rb_viewer.pine` also regenerated (not separately
+Pine-syntax-scanned beyond visual diff-size sanity, since it shares the
+same box/table generation helpers as `full_viewer_rb.py` and carries no
+`barstate.islast` blocks of its own beyond the weekly-only viewer's
+existing single guard, unchanged in shape from prior sessions).
+
+Files changed this entry: `rb_system/reference/weekly_rb_generator.py`,
+`rb_system/reference/h4_rb_engine.py`,
+`rb_system/reference/weekly_control_engine_rb.py`,
+`rb_system/reference/five_rb_bso_engine.py`,
+`rb_system/reference/full_viewer_rb.py`,
+`rb_system/reference/weekly_rb_viewer.py` (`--input-tz` default only, in
+each), `rb_system/reference/README_RB_ENGINES.txt`, and every RB data
+file regenerated end to end from the same input CSV:
+`rb_system/data/weekly_rb_ledger.csv`,
+`rb_system/data/weekly_control_ledger_rb.csv`,
+`rb_system/data/weekly_control_events_rb.csv`,
+`rb_system/data/weekly_control_report_rb.txt`,
+`rb_system/data/h4_rb_ledger.csv`, `rb_system/data/h4_rb_swings.csv`,
+`rb_system/data/h4_rb_report.txt`, `rb_system/data/rb_control_gates.csv`,
+`rb_system/data/five_rb_bso_ledger.csv`,
+`rb_system/data/full_viewer_rb.pine`,
+`rb_system/data/weekly_rb_viewer.pine`.
