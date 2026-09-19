@@ -120,6 +120,30 @@ def arr(kind: str, values: List[str]) -> str:
     return f"array.from({', '.join(values)})" if values else f"array.new<{kind}>()"
 
 
+_wrap_counter = [0]
+
+
+def wrap_as_function(block_lines: List[str]) -> List[str]:
+    """Wraps one block's lines (var decls + its own `if barstate.islast`
+    drawing code) inside a Pine user-defined function, called once right
+    after its definition, instead of leaving all of it in the script's
+    global/main scope. TradingView v6 rejects an overlong main body
+    ("The main body of the script is too long", CE10295) once enough
+    zones/entries get baked into literal array.from(...) calls across
+    several blocks in the same top-level scope; moving each block into its
+    own function keeps the same runtime behavior (Pine `var` persists
+    correctly inside a function body too) while shrinking what counts
+    toward that global-scope limit. Every line just gets re-indented by 4
+    spaces (the block's own internal if/for nesting is already valid
+    relative to column 0, so a uniform shift preserves it), and a trailing
+    `true` return value keeps the function body a valid expression
+    regardless of what its last statement was."""
+    _wrap_counter[0] += 1
+    name = f"rbBlock{_wrap_counter[0]}"
+    body = ["    " + l if l.strip() else l for l in block_lines]
+    return [f"{name}() =>"] + body + ["    true", f"{name}()"]
+
+
 def rb_colour(z) -> str:
     """Per RB_Indicator_v1.pine's header: IRB blue(bull)/black(bear) by raw
     wick; ARB green fixed; ORB red fixed. `z.origin` is the permanent
@@ -601,16 +625,16 @@ def main() -> int:
         f"var array<int> gateEnd = {arr('int', gate_ends_pine)}",
     ]
 
-    lines += build_struct_block("w", weekly_engine, weeks, args.label_cap, "onWeekly")
-    lines += build_rb_block("w", weekly_engine, weeks, weekly_shown, weekly_table, display_tz,
+    lines += wrap_as_function(build_struct_block("w", weekly_engine, weeks, args.label_cap, "onWeekly"))
+    lines += wrap_as_function(build_rb_block("w", weekly_engine, weeks, weekly_shown, weekly_table, display_tz,
                              draw_flag_expr="onWeekly", hide_orb=False, right_edge=right_edge, with_table=True,
-                             inspect_flag_expr="inspectOneRB", from_last_expr="rbFromLast", draw_impact_line=True)
-    lines += build_rb_block("h4", h4_engine, h4_bars, h4_shown, h4_table, display_tz,
+                             inspect_flag_expr="inspectOneRB", from_last_expr="rbFromLast", draw_impact_line=True))
+    lines += wrap_as_function(build_rb_block("h4", h4_engine, h4_bars, h4_shown, h4_table, display_tz,
                              draw_flag_expr="onH4 or onFive", hide_orb=True, right_edge=right_edge,
                              with_table=True, table_flag_expr="onH4",
                              inspect_flag_expr="inspectOneH4RB", from_last_expr="h4RbFromLast", draw_impact_line=True,
-                             gate_filter=gate_filter_on)
-    lines += build_bso_extra_lines_rb(bso_results, display_tz, gate_filter=gate_filter_on)
+                             gate_filter=gate_filter_on))
+    lines += wrap_as_function(build_bso_extra_lines_rb(bso_results, display_tz, gate_filter=gate_filter_on))
 
     out_dir = Path(args.out_dir) if args.out_dir else Path(__file__).resolve().parent.parent / "data"
     out_dir.mkdir(parents=True, exist_ok=True)
