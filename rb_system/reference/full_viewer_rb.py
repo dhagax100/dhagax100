@@ -40,10 +40,11 @@ input CSV.
 from __future__ import annotations
 
 import argparse
+import csv
 import sys
-from datetime import timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -73,8 +74,37 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--week-close-zone", default="America/New_York")
     p.add_argument("--week-close-hour", type=int, default=17, choices=range(24))
     p.add_argument("--control-ledger", default=None, help="path to weekly_control_ledger_rb.csv; default: alongside input CSV")
+    p.add_argument("--gates-csv", default=None, help="path to rb_control_gates.csv (build_control_gates.py output); default: alongside this script's ../data. Powers the focusGateNum Pine input.")
     p.add_argument("--out-dir", default=None)
     return p.parse_args()
+
+
+def load_gates(path: Path) -> List[Tuple[datetime, Optional[datetime]]]:
+    """Reads `rb_control_gates.csv` (build_control_gates.py's output) into a
+    list of (start_utc, end_utc) pairs, ordered by gate_index, for the
+    focusGateNum Pine input (Task 5): a runtime toggle restricting the H4 RB
+    and 5m BSO layers to one gate's time window, mirroring OB's
+    `full_viewer.py` --focus-weekly-id/--manual-gates convention but as a
+    Pine input (evaluated at chart runtime) rather than a Python CLI flag
+    (evaluated at generation time) -- deliberately different mechanism
+    because the task asked for a per-gate toggle a viewer can flip without
+    regenerating the file, matching this file's own existing inspectOne*
+    toggles' own runtime-input pattern, not full_viewer.py's generation-time
+    one. Missing file -> empty list (focusGateNum then has nothing to look
+    up; callers treat that as "gate filtering unavailable", same fallback
+    style as this file's other optional-file reads)."""
+    gates: List[Tuple[datetime, Optional[datetime]]] = []
+    if not path.exists():
+        return gates
+    with path.open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    for i, row in enumerate(rows):
+        start = datetime.strptime(row["gate_start_utc"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
+        end = None
+        if i + 1 < len(rows):
+            end = datetime.strptime(rows[i + 1]["gate_start_utc"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
+        gates.append((start, end))
+    return gates
 
 
 def pine_time(t) -> str:
@@ -112,7 +142,8 @@ def is_orb(z) -> bool:
 def build_rb_block(prefix: str, engine, bars, shown, table_zones, display_tz: ZoneInfo,
                     draw_flag_expr: str, hide_orb: bool, right_edge, with_table: bool,
                     table_flag_expr: str = None, inspect_flag_expr: str = None,
-                    from_last_expr: str = None, draw_impact_line: bool = False) -> List[str]:
+                    from_last_expr: str = None, draw_impact_line: bool = False,
+                    gate_filter: bool = False) -> List[str]:
     if table_flag_expr is None:
         table_flag_expr = draw_flag_expr
     """One RB layer's worth of packed arrays + a single runtime draw loop,
@@ -131,7 +162,7 @@ def build_rb_block(prefix: str, engine, bars, shown, table_zones, display_tz: Zo
             stamp = pine_time(z.impact_time)
             impact_watchers += [f"var int {name} = na", f"if time <= {stamp} and {stamp} < time_close", f"    {name} := time"]
 
-    lefts, tops, bottoms, right_exprs, cols, statuses = [], [], [], [], [], []
+    lefts, tops, bottoms, right_exprs, cols, statuses, impact_stamps = [], [], [], [], [], [], []
     for z in shown:
         if hide_orb and is_orb(z):
             continue
@@ -146,6 +177,13 @@ def build_rb_block(prefix: str, engine, bars, shown, table_zones, display_tz: Zo
             right_exprs.append(pine_time(fallback_right))
         cols.append(rb_colour(z))
         statuses.append(f"\"#{z.id} {wrb.status(z)} {'BUY' if z.bullish else 'SELL'}\"")
+        # For the focusGateNum filter (Task 5): each zone's own impact time,
+        # baked as a literal Pine timestamp -- "na" for a zone never
+        # impacted (excluded from every gate when the filter is active,
+        # since it never became `authorized` at any gate in the first
+        # place -- gates are built from h4_rb_ledger.csv's own
+        # `impact_time_utc`, see build_control_gates.py).
+        impact_stamps.append(pine_time(z.impact_time) if z.impact_time is not None else "na")
 
     lines = [
         f"var array<int> {prefix}Left = {arr('int', lefts)}",
@@ -153,6 +191,7 @@ def build_rb_block(prefix: str, engine, bars, shown, table_zones, display_tz: Zo
         f"var array<float> {prefix}Bottom = {arr('float', bottoms)}",
         f"var array<color> {prefix}Col = {arr('color', cols)}",
         f"var array<string> {prefix}Label = {arr('string', statuses)}",
+        f"var array<int> {prefix}ImpactT = {arr('int', impact_stamps)}",
         *impact_watchers,
         "if barstate.islast",
         f"    if {draw_flag_expr}",
@@ -163,9 +202,20 @@ def build_rb_block(prefix: str, engine, bars, shown, table_zones, display_tz: Zo
     # rank 1 = most recently created zone (shown is ordered oldest..newest by
     # id, same convention full_viewer.py's OB inspection already uses:
     # hRank = array.size(h4Left) - i).
+    gate_ok_expr = (
+        f"(focusGateNum == 0 or (not na(array.get({prefix}ImpactT, i)) and "
+        f"array.get({prefix}ImpactT, i) >= array.get(gateStart, focusGateNum) and "
+        f"array.get({prefix}ImpactT, i) < array.get(gateEnd, focusGateNum)))"
+    ) if gate_filter else None
     if inspect_flag_expr is not None:
         lines.append(f"            {prefix}Rank = array.size({prefix}Left) - i")
-        lines.append(f"            if not {inspect_flag_expr} or {prefix}Rank == {from_last_expr}")
+        cond = f"not {inspect_flag_expr} or {prefix}Rank == {from_last_expr}"
+        if gate_ok_expr is not None:
+            cond = f"({cond}) and {gate_ok_expr}"
+        lines.append(f"            if {cond}")
+        indent = "                "
+    elif gate_ok_expr is not None:
+        lines.append(f"            if {gate_ok_expr}")
         indent = "                "
     else:
         indent = "            "
@@ -175,7 +225,7 @@ def build_rb_block(prefix: str, engine, bars, shown, table_zones, display_tz: Zo
         lines.append(f"{indent}line.new(array.get({prefix}Right, i), array.get({prefix}Bottom, i), array.get({prefix}Right, i), array.get({prefix}Top, i), xloc=xloc.bar_time, extend=extend.both, color=color.new(color.red,40), width=1)")
 
     if with_table:
-        t_id, t_type, t_side, t_bottom, t_top, t_origin, t_trigger, t_eligible, t_impact, t_bg = ([] for _ in range(10))
+        t_id, t_type, t_side, t_bottom, t_top, t_origin, t_trigger, t_eligible, t_impact, t_bg, t_impact_stamp = ([] for _ in range(11))
         for z in table_zones:
             origin = bars[z.candle]
             trig_txt = wrb.display_iso(z.trigger_time, display_tz)
@@ -188,6 +238,7 @@ def build_rb_block(prefix: str, engine, bars, shown, table_zones, display_tz: Zo
             t_trigger.append(f"\"{pine_text(trig_txt)}\""); t_eligible.append(f"\"{pine_text(elig_txt)}\"")
             t_impact.append(f"\"{pine_text(imp_txt)}\"")
             t_bg.append(f"color.new({rb_colour(z)}, 80)")
+            t_impact_stamp.append(pine_time(z.impact_time) if z.impact_time is not None else "na")
         n = len(table_zones)
         lines += [
             f"var table {prefix}Ledger = table.new(position.top_right, 9, {n + 1}, border_width=1)",
@@ -201,6 +252,7 @@ def build_rb_block(prefix: str, engine, bars, shown, table_zones, display_tz: Zo
             f"var array<string> {prefix}TEligible = {arr('string', t_eligible)}",
             f"var array<string> {prefix}TImpact = {arr('string', t_impact)}",
             f"var array<color> {prefix}TBg = {arr('color', t_bg)}",
+            f"var array<int> {prefix}TImpactT = {arr('int', t_impact_stamp)}",
         ]
         header = ["RB", "Type", "Side", "Bottom", "Top", "Origin (RYD)", "Trigger (RYD)", "Eligible (RYD)", "Impact (RYD)"]
         lines.append("if barstate.islast")
@@ -209,10 +261,21 @@ def build_rb_block(prefix: str, engine, bars, shown, table_zones, display_tz: Zo
             lines.append(f"        table.cell({prefix}Ledger, {col}, 0, \"{h}\", text_color=color.white, bgcolor=color.new(color.green,15))")
         lines.append(f"        for i = 0 to array.size({prefix}TId) - 1")
         lines.append("            row = i + 1")
+        t_gate_ok_expr = (
+            f"(focusGateNum == 0 or (not na(array.get({prefix}TImpactT, i)) and "
+            f"array.get({prefix}TImpactT, i) >= array.get(gateStart, focusGateNum) and "
+            f"array.get({prefix}TImpactT, i) < array.get(gateEnd, focusGateNum)))"
+        ) if gate_filter else None
         if inspect_flag_expr is not None:
             # table_zones is newest-first, so row 1 (i=0) is rank 1 -- same
             # rank convention as the box/label loop above.
-            lines.append(f"            if not {inspect_flag_expr} or row == {from_last_expr}")
+            tcond = f"not {inspect_flag_expr} or row == {from_last_expr}"
+            if t_gate_ok_expr is not None:
+                tcond = f"({tcond}) and {t_gate_ok_expr}"
+            lines.append(f"            if {tcond}")
+            tindent = "                "
+        elif t_gate_ok_expr is not None:
+            lines.append(f"            if {t_gate_ok_expr}")
             tindent = "                "
         else:
             tindent = "            "
@@ -263,7 +326,7 @@ def arr_generic(kind: str, values: List[str]) -> str:
     return f"array.from({', '.join(values)})" if values else f"array.new<{kind}>()"
 
 
-def build_bso_extra_lines_rb(bso_results: list, display_tz: ZoneInfo) -> List[str]:
+def build_bso_extra_lines_rb(bso_results: list, display_tz: ZoneInfo, gate_filter: bool = False) -> List[str]:
     """RB analog of `full_viewer.py`'s `build_bso_extra_lines` (~lines
     440-580 there): entry/SL/TP lines, the fixed-R green/red boxes, and a
     ledger table, on the 5m chart only (`onFive`). Reuses the SAME
@@ -286,7 +349,7 @@ def build_bso_extra_lines_rb(bso_results: list, display_tz: ZoneInfo) -> List[st
     def pf(v: Optional[float]) -> str:
         return f"{v:.5f}" if v is not None else "na"
 
-    ids, sides, restings, entries, sls, tps, results, exits, excursions = ([] for _ in range(9))
+    ids, sides, restings, entries, sls, tps, results, exits, excursions, entry_stamps = ([] for _ in range(10))
     blefts, brights, bys = [], [], []
     clefts, crights, cys, ccols = [], [], [], []
     gleft, gright, gtop, gbottom = [], [], [], []
@@ -311,6 +374,12 @@ def build_bso_extra_lines_rb(bso_results: list, display_tz: ZoneInfo) -> List[st
         mfe_v, mae_v = res.get("mfe"), res.get("mae")
         excursion_txt = f"{mfe_v / 0.0001:.1f}/{mae_v / 0.0001:.1f}" if mfe_v is not None and mae_v is not None else "-"
         excursions.append(f"\"{excursion_txt}\"")
+        # For the focusGateNum filter (Task 5): this attempt's own entry
+        # time (not the resting/candidate time) -- "na" for an attempt that
+        # never entered (e.g. H4_OB_BREACHED before an entry), excluded from
+        # every gate when the filter is active, same convention as the H4
+        # layer's ImpactT array above.
+        entry_stamps.append(pt(entry_t) if entry_t is not None else "na")
 
         cs, ep = res.get("candidate_since"), res.get("entry_price")
         blefts.append(pt(cs) if cs is not None and entry_t is not None else "na")
@@ -334,6 +403,15 @@ def build_bso_extra_lines_rb(bso_results: list, display_tz: ZoneInfo) -> List[st
             gleft.append("na"); gright.append("na"); gtop.append("na"); gbottom.append("na")
             rleft.append("na"); rright.append("na"); rtop.append("na"); rbottom.append("na")
 
+    bso_gate_ok_expr = (
+        "(focusGateNum == 0 or (not na(array.get(bso5EntryT, i)) and "
+        "array.get(bso5EntryT, i) >= array.get(gateStart, focusGateNum) and "
+        "array.get(bso5EntryT, i) < array.get(gateEnd, focusGateNum)))"
+    ) if gate_filter else None
+    bso_cond = "not inspectOne5mBSO or bRank == bso5FromLast"
+    if bso_gate_ok_expr is not None:
+        bso_cond = f"({bso_cond}) and {bso_gate_ok_expr}"
+
     return [
         "bool inspectOne5mBSO = input.bool(false, \"Inspect one 5m BSO only\", group=\"5m BSO inspection\")",
         f"int bso5FromLast = input.int(1, \"5m BSO from last\", minval=1, maxval={max(1, n)}, group=\"5m BSO inspection\", tooltip=\"1 = most recent 5m BSO attempt, 2 = the one before it, and so on.\")",
@@ -347,6 +425,7 @@ def build_bso_extra_lines_rb(bso_results: list, display_tz: ZoneInfo) -> List[st
         f"var array<string> bso5Result = {arr_generic('string', results)}",
         f"var array<string> bso5Exit = {arr_generic('string', exits)}",
         f"var array<string> bso5Excursion = {arr_generic('string', excursions)}",
+        f"var array<int> bso5EntryT = {arr_generic('int', entry_stamps)}",
         "if barstate.islast",
         "    if onFive",
         f"        array<int> bso5BLeft = {arr_generic('int', blefts)}",
@@ -375,7 +454,7 @@ def build_bso_extra_lines_rb(bso_results: list, display_tz: ZoneInfo) -> List[st
         "        table.cell(bso5Ledger, 8, 0, \"MFE/MAE (pips)\", text_color=color.white, bgcolor=color.new(color.purple,15))",
         "        for i = 0 to array.size(bso5Id) - 1",
         "            bRank = array.size(bso5Id) - i",
-        "            if not inspectOne5mBSO or bRank == bso5FromLast",
+    ] + [f"            if {bso_cond}"] + [
         "                bRow = inspectOne5mBSO ? 1 : i + 1",
         "                table.cell(bso5Ledger, 0, bRow, array.get(bso5Id, i), text_color=color.black, bgcolor=na)",
         "                table.cell(bso5Ledger, 1, bRow, array.get(bso5Side, i), text_color=color.black, bgcolor=na)",
@@ -471,6 +550,14 @@ def main() -> int:
             bso_results.append((z, it, parent_id, invalidation_reason, res))
 
     right_edge = minutes[-1].t + timedelta(days=365)
+
+    # Gate boundaries for the focusGateNum Pine input (Task 5).
+    gates_path = Path(args.gates_csv) if args.gates_csv else base / "rb_control_gates.csv"
+    gates = load_gates(gates_path)
+    gate_starts_pine = [pine_time(s) for s, _e in gates]
+    gate_ends_pine = [pine_time(e) if e is not None else pine_time(right_edge) for _s, e in gates]
+    gate_filter_on = len(gates) > 0
+
     weekly_shown = weekly_engine.rbs[-args.rb_cap:]
     weekly_table = weekly_engine.rbs[-args.table_cap:][::-1]
     h4_shown = h4_engine.rbs[-args.h4_rb_cap:]
@@ -500,6 +587,18 @@ def main() -> int:
         f"int rbFromLast = input.int(1, \"RB from last\", minval=1, maxval={max(1, len(weekly_shown))}, group=\"Weekly RB inspection\")",
         "bool inspectOneH4RB = input.bool(false, \"Inspect one 4H RB only\", group=\"H4 RB inspection\")",
         f"int h4RbFromLast = input.int(1, \"4H RB from last\", minval=1, maxval={max(1, len(h4_shown))}, group=\"H4 RB inspection\")",
+        # focusGateNum (Task 5): a runtime Pine input restricting the H4 RB
+        # layer and the 5m BSO layer to one control gate's time window
+        # (gate numbering matches rb_control_gates.csv's gate_index + 1, so
+        # "1" is the first gate, matching how the "Inspect one X only"
+        # toggles above already use 1-based "from last" ranks, not 0-based
+        # indices). 0 = off (show everything, the existing behavior).
+        # Independent of and combinable with inspectOneH4RB/inspectOne5mBSO
+        # above (both filters AND together when both are active). Does NOT
+        # touch the Weekly RB layer -- the task asked for H4/5m only.
+        f"int focusGateNum = input.int(0, \"Focus one gate only (H4/5m), 0=off\", minval=0, maxval={max(1, len(gates))}, group=\"Control gate focus\", tooltip=\"Gate numbers match rb_control_gates.csv's own gate_index column exactly (0 doubles as off and the trivial dataset-start gate, which never has any authorized zones or entries anyway).\")",
+        f"var array<int> gateStart = {arr('int', gate_starts_pine)}",
+        f"var array<int> gateEnd = {arr('int', gate_ends_pine)}",
     ]
 
     lines += build_struct_block("w", weekly_engine, weeks, args.label_cap, "onWeekly")
@@ -509,8 +608,9 @@ def main() -> int:
     lines += build_rb_block("h4", h4_engine, h4_bars, h4_shown, h4_table, display_tz,
                              draw_flag_expr="onH4 or onFive", hide_orb=True, right_edge=right_edge,
                              with_table=True, table_flag_expr="onH4",
-                             inspect_flag_expr="inspectOneH4RB", from_last_expr="h4RbFromLast", draw_impact_line=True)
-    lines += build_bso_extra_lines_rb(bso_results, display_tz)
+                             inspect_flag_expr="inspectOneH4RB", from_last_expr="h4RbFromLast", draw_impact_line=True,
+                             gate_filter=gate_filter_on)
+    lines += build_bso_extra_lines_rb(bso_results, display_tz, gate_filter=gate_filter_on)
 
     out_dir = Path(args.out_dir) if args.out_dir else Path(__file__).resolve().parent.parent / "data"
     out_dir.mkdir(parents=True, exist_ok=True)
