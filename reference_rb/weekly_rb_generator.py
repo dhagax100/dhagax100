@@ -377,11 +377,17 @@ def write_ledger(base: Path, engine: WeeklyRBEngine, display_zone: ZoneInfo) -> 
             ))
     with (base / "weekly_rb_swings.csv").open("w", newline="", encoding="utf-8") as f:
         wr = csv.writer(f)
-        wr.writerow(["record", "kind", "origin", "confirm", "price"])
+        wr.writerow(["record", "kind", "origin_utc", "origin_riyadh", "confirm_utc", "confirm_riyadh", "price"])
         for e in engine.events:
-            wr.writerow(["SWING", "HIGH" if e.kind == 0 else "LOW", wob.iso(engine.w[e.swing].start), wob.iso(engine.w[e.confirm].start), f"{e.price:.5f}"])
+            wr.writerow(["SWING", "HIGH" if e.kind == 0 else "LOW",
+                         wob.iso(engine.w[e.swing].start), wob.display_iso(engine.w[e.swing].start, display_zone),
+                         wob.iso(engine.w[e.confirm].start), wob.display_iso(engine.w[e.confirm].start, display_zone),
+                         f"{e.price:.5f}"])
         for x in engine.msses:
-            wr.writerow(["MSS_UP" if x.up else "MSS_DOWN", "", wob.iso(engine.w[x.broken].start), wob.iso(engine.w[x.at].start), f"{x.price:.5f}"])
+            wr.writerow(["MSS_UP" if x.up else "MSS_DOWN", "",
+                         wob.iso(engine.w[x.broken].start), wob.display_iso(engine.w[x.broken].start, display_zone),
+                         wob.iso(engine.w[x.at].start), wob.display_iso(engine.w[x.at].start, display_zone),
+                         f"{x.price:.5f}"])
 
 
 def rb_colour(z: RBZone) -> str:
@@ -535,7 +541,7 @@ def write_rb_pine(base: Path, engine: WeeklyRBEngine, label_cap: int, rb_cap: in
     (base / out_name).write_text("\n".join(lines), encoding="utf-8")
 
 
-def write_report(base: Path, minutes: List["wob.Minute"], weeks: List["wob.Week"], warnings: List[str], e: WeeklyRBEngine, args: argparse.Namespace) -> None:
+def write_report(base: Path, minutes: List["wob.Minute"], weeks: List["wob.Week"], warnings: List[str], e: WeeklyRBEngine, args: argparse.Namespace, display_zone: ZoneInfo) -> None:
     n_high = sum(1 for x in e.events if x.kind == 0)
     n_low = sum(1 for x in e.events if x.kind == 1)
     n_up = sum(1 for x in e.msses if x.up)
@@ -546,7 +552,8 @@ def write_report(base: Path, minutes: List["wob.Minute"], weeks: List["wob.Week"
     rows = [
         "WEEKLY RB REFERENCE RUN", f"input={args.csv_file}", f"price_side={args.price_side}",
         f"weekly_aggregation=Sunday {args.week_close_hour:02d}:00 {args.week_close_zone}",
-        f"minute_coverage={wob.iso(minutes[0].t)} to {wob.iso(minutes[-1].t)}",
+        f"minute_coverage_utc={wob.iso(minutes[0].t)} to {wob.iso(minutes[-1].t)}",
+        f"minute_coverage_riyadh={wob.display_iso(minutes[0].t, display_zone)} to {wob.display_iso(minutes[-1].t, display_zone)}",
         f"minutes={len(minutes):,}; weeks={len(weeks):,}; swing_highs={n_high:,}; swing_lows={n_low:,}; mss_up={n_up:,}; mss_down={n_down:,}",
         "", "RB LIFECYCLE COUNTS", *[f"{name}={counts[name]}" for name in counts],
         "", "Colors: IRB BUY=blue; IRB SELL=black; ARB=green (fixed); ORB=red (fixed).",
@@ -587,7 +594,7 @@ def main() -> int:
         engine.run()
         write_ledger(base, engine, display_tz)
         write_rb_pine(base, engine, args.pine_labels, args.pine_rbs, args.pine_table, display_tz)
-        write_report(base, minutes, weeks, warnings, engine, args)
+        write_report(base, minutes, weeks, warnings, engine, args, display_tz)
         print("Created:")
         print("  weekly_rb_ledger.csv")
         print("  weekly_rb_swings.csv")
