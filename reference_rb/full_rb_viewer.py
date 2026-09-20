@@ -107,22 +107,38 @@ def build_manual_rb_gates() -> List[Tuple[datetime, datetime, str, str, str]]:
       (1.18609) -- Weekly-close-body-inside/through POI-breach (SPEC.md
       SS14).
 
-    Gate 2 -- BUY_ONLY (RB zone #3, AIRB), 2026-02-16 -> 02-23 Riyadh:
+    Gate 2 -- BUY_ONLY (RB zone #3, AIRB), 2026-02-16 -> 02-19 16:01 Riyadh:
       RB2 (the only countertrend zone) is dead, so control reverts to the
       underlying UP trend at the next week's open. Zone #3 (AIRB, BUY,
-      zb=1.17652/zt=1.18095) is impacted mid-week (2026-02-17 18:28
-      Riyadh, "no respect") without ending BUY_ONLY -- an AIRB touch alone
+      zb=1.17652/zt=1.18095) is first TOUCHED mid-week (2026-02-17 18:28
+      Riyadh, "no respect") without ending BUY_ONLY -- a touch alone
       doesn't flip control.
 
-    Gate 3 -- SELL_ONLY, no anchor zone, 2026-02-23 -> 03-03 17:24 Riyadh:
-      Ends at the SAME instant gate 2 ends: the week-of-2026-02-16's own
-      close (2026-02-23 01:00 Riyadh) is 1.17921, which is BELOW the
-      PRIOR week's LOW (2026-02-09 week, low=1.18086) -- a structural
-      break-of-structure close, not a zone-breach close (distinct rule
-      from gate 1's SS14 check). This is read as: AIRB #3 failed to hold,
-      trend flipped bearish, and BUY_ONLY ends. There is no live SELL RB
-      to anchor a SELL_ONLY campaign (RB2 already died in gate 1), so
-      control goes trend-following SELL_ONLY with no parent zone.
+      Ends the moment MSS actually confirms: MSS does NOT require a close
+      -- a 1-pip wick exceedance of the protecting swing point is enough,
+      real-time, whatever the timeframe (SPEC clarification, user-given).
+      The swing protecting this BUY leg is AIRB #3's own anchor low,
+      1.17652 (confirmed swing, weekly_rb_swings.csv). First M1 wick
+      below it: 2026-02-19 16:01 Riyadh (low 1.17645, close 1.17648 --
+      same minute also closes through, so no ambiguity here between the
+      wick and close reads). This is BEFORE the week's own close
+      (02-23 01:00 Riyadh) -- an earlier draft of this gate incorrectly
+      used the week's close as the boundary; a real H4 RB (#91) got
+      authorized BUY on 2026-02-20 18:12 Riyadh under that wrong boundary
+      even though the real-time MSS-down had already confirmed the day
+      before. Corrected here.
+
+    Gate 3 -- SELL_ONLY, no anchor zone, 2026-02-19 16:01 -> 03-03 17:24
+    Riyadh:
+      Starts at the same 2026-02-19 16:01 Riyadh MSS-down confirmation
+      above. (The week-of-2026-02-16's own close, 1.17921, is also below
+      the PRIOR week's low, 1.18086 -- a real structural fact, but it is
+      a CONSEQUENCE of the same real-time move, not the trigger: the
+      trigger already fired days earlier via the wick-exceedance rule.)
+      Read as: AIRB #3 failed to hold, trend flipped bearish, BUY_ONLY
+      ends. There is no live SELL RB to anchor a SELL_ONLY campaign (RB2
+      already died in gate 1), so control goes trend-following SELL_ONLY
+      with no parent zone.
 
     Gate 4 -- BOTH, 2026-03-03 17:24 -> 17:26 Riyadh (2 minutes):
       RB1 (W ORB #1, BUY, zb=1.15692/zt=1.15797) is impacted at 2026-03-03
@@ -151,8 +167,8 @@ def build_manual_rb_gates() -> List[Tuple[datetime, datetime, str, str, str]]:
 
     return [
         (rt(2026, 2, 9, 15, 7), rt(2026, 2, 16, 1, 0), "SELL_ONLY", "2", ""),
-        (rt(2026, 2, 16, 1, 0), rt(2026, 2, 23, 1, 0), "BUY_ONLY", "", "3"),
-        (rt(2026, 2, 23, 1, 0), rt(2026, 3, 3, 17, 24), "SELL_ONLY", "", ""),
+        (rt(2026, 2, 16, 1, 0), rt(2026, 2, 19, 16, 1), "BUY_ONLY", "", "3"),
+        (rt(2026, 2, 19, 16, 1), rt(2026, 3, 3, 17, 24), "SELL_ONLY", "", ""),
         (rt(2026, 3, 3, 17, 24), rt(2026, 3, 3, 17, 26), "BOTH", "", "1"),
         (rt(2026, 3, 3, 17, 26), rt(2026, 3, 23, 14, 6), "SELL_ONLY", "", ""),
         (rt(2026, 3, 23, 14, 6), rt(2026, 9, 11, 22, 5), "NONE", "", ""),

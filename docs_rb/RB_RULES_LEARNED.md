@@ -13,6 +13,32 @@ or that apply differently in RB, are marked `[RB-NEW]` or `[RB-DIFF]`.
 
 ---
 
+## Real bug caught by the user from a chart replay (2026-09-20)
+
+Gate 2's end / gate 3's start was first encoded at the week-of-02-16's
+own close (2026-02-23 01:00 Riyadh), using a structural
+close-below-prior-week's-low fact as the trigger. **This was wrong.**
+User clarified the actual rule: **MSS does not require a close — a
+1-pip wick exceedance of the protecting swing point is enough, real-time,
+on whatever timeframe it happens** (mid-week, mid-day, mid-hour). The
+swing protecting gate 2's BUY leg is AIRB #3's own anchor low (1.17652);
+the first real M1 wick below it is **2026-02-19 16:01 Riyadh** (low
+1.17645), 4 days before the week's own close. Under the wrong boundary,
+a real H4 RB (#91) got authorized BUY on 2026-02-20 18:12 Riyadh — a
+live trading mistake, caught by the user replaying the chart, since the
+real-time MSS-down had already confirmed the day before. Fixed: gate
+2/3's boundary moved to 2026-02-19 16:01 Riyadh; H4 RB #91 now correctly
+shows `authorized=False`.
+
+`[RB-NEW]` **MSS confirmation rule, corrected**: real-time wick
+exceedance of a protecting swing point (even 1 pip), not a close, not
+delayed to any candle's own close on any timeframe. This generalizes
+the earlier "gates react in real time" finding (from the 1.16162 vs
+14:06 stop-event check) into an explicit, reusable rule: any future gate
+boundary describable as "trend flips" or "MSS" must be checked for the
+first wick (not close) breach of the relevant protecting swing, not a
+candle-close event on any timeframe.
+
 ## Carried over from OB (assumed true until RB data contradicts it)
 
 - `[OB]` **Weekly-close body-breach kills a POI.** If the containing
