@@ -393,7 +393,7 @@ def write_ledger(base: Path, engine: WeeklyRBEngine, display_zone: ZoneInfo) -> 
             wk = engine.w[z.candle]
             trig_wk = engine.w[z.trigger] if 0 <= z.trigger < len(engine.w) else None
             wr.writerow(dict(
-                id=z.id, type=STATE[z.origin_type], side="BUY" if z.bullish else "SELL",
+                id=z.id, type=status(z), side="BUY" if z.bullish else "SELL",
                 zb=f"{z.zb:.5f}", zt=f"{z.zt:.5f}",
                 origin_type="IRB-style (far-side stranding)" if z.origin_type == 0 else "ARB-style (near-side stranding)",
                 origin_week_utc=wob.iso(wk.start), origin_week_riyadh=wob.display_iso(wk.start, display_zone),
@@ -502,7 +502,7 @@ def write_rb_pine(base: Path, engine: WeeklyRBEngine, label_cap: int, rb_cap: in
     t_id, t_type, t_side, t_bottom, t_top, t_origin, t_trigger, t_eligible, t_impact, t_status, t_bg = ([] for _ in range(11))
     for z in table_zones:
         wk = engine.w[z.candle]
-        t_id.append(f"\"#{z.id}\""); t_type.append(f"\"{STATE[z.origin_type]}\"")
+        t_id.append(f"\"#{z.id}\""); t_type.append(f"\"{status(z)}\"")
         t_side.append(f"\"{'BUY' if z.bullish else 'SELL'}\"")
         t_bottom.append(f"\"{z.zb:.5f}\""); t_top.append(f"\"{z.zt:.5f}\"")
         t_origin.append(f"\"{wob.pine_text(wob.display_iso(wk.start, display_zone))}\"")
