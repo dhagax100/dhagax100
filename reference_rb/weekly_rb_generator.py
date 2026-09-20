@@ -550,6 +550,8 @@ def write_rb_pine(base: Path, engine: WeeklyRBEngine, label_cap: int, rb_cap: in
         f"int rbFromLast = input.int(1, \"RB from last\", minval=1, maxval={max_rb_offset}, group=\"RB inspection\", tooltip=\"1 = latest RB, 2 = the RB before it, and so on.\")",
         "var table ledger = table.new(position.top_right, 10, 21, border_width=1)",
         "bool onWeekly = timeframe.period == \"1W\"",
+        "bool onH4 = timeframe.period == \"240\"",
+        "bool on1m = timeframe.period == \"1\"",
     ]
 
     struct_x, struct_y, struct_txt, struct_col, struct_low = [], [], [], [], []
@@ -585,7 +587,7 @@ def write_rb_pine(base: Path, engine: WeeklyRBEngine, label_cap: int, rb_cap: in
             stamp = wob.pine_time(z.impact_time)
             impact_watchers += [f"var int {name} = na", f"if time <= {stamp} and {stamp} < time_close", f"    {name} := time"]
 
-    rb_left, rb_top, rb_bottom, rb_right_expr, rb_col, rb_rank, rb_audit = [], [], [], [], [], [], []
+    rb_left, rb_top, rb_bottom, rb_right_expr, rb_col, rb_rank, rb_audit, rb_has_line = [], [], [], [], [], [], [], []
     for z in shown:
         wk = engine.w[z.candle]
         fallback_right = z.impact_time or (engine.w[z.stop].start if 0 <= z.stop < len(engine.w) else right_edge)
@@ -594,6 +596,7 @@ def write_rb_pine(base: Path, engine: WeeklyRBEngine, label_cap: int, rb_cap: in
         rb_left.append(wob.pine_time(wk.start)); rb_top.append(f"{z.zt:.5f}"); rb_bottom.append(f"{z.zb:.5f}")
         rb_right_expr.append(right); rb_col.append(rb_colour(z)); rb_rank.append(str(rank_from_last))
         rb_audit.append(f"\"#{z.id} {status(z)} {'BUY' if z.bullish else 'SELL'}\"")
+        rb_has_line.append("true" if z.impact_time is not None else "false")
 
     t_id, t_type, t_side, t_bottom, t_top, t_origin, t_trigger, t_eligible, t_impact, t_status, t_bg = ([] for _ in range(11))
     for z in table_zones:
@@ -620,6 +623,7 @@ def write_rb_pine(base: Path, engine: WeeklyRBEngine, label_cap: int, rb_cap: in
         f"var array<color> rbCol = {arr('color', rb_col)}",
         f"var array<int> rbRank = {arr('int', rb_rank)}",
         f"var array<string> rbAudit = {arr('string', rb_audit)}",
+        f"var array<bool> rbHasLine = {arr('bool', rb_has_line)}",
         f"var array<string> tId = {arr('string', t_id)}",
         f"var array<string> tType = {arr('string', t_type)}",
         f"var array<string> tSide = {arr('string', t_side)}",
@@ -637,10 +641,14 @@ def write_rb_pine(base: Path, engine: WeeklyRBEngine, label_cap: int, rb_cap: in
         "        for i = 0 to array.size(structX) - 1",
         "            structYY = array.get(structLow, i) ? array.get(structY, i) - lowGap : array.get(structY, i)",
         "            label.new(array.get(structX, i), structYY, array.get(structTxt, i), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=array.get(structCol, i), size=size.small)",
+        "    if onWeekly or onH4 or on1m",
         f"        array<int> rbRight = {arr('int', rb_right_expr)}",
         "        for i = 0 to array.size(rbLeft) - 1",
         "            if not inspectOneRB or rbFromLast == array.get(rbRank, i)",
         "                box.new(array.get(rbLeft, i), array.get(rbTop, i), array.get(rbRight, i), array.get(rbBottom, i), border_color=array.get(rbCol, i), border_width=1, border_style=line.style_dashed, bgcolor=na, xloc=xloc.bar_time)",
+        "                if array.get(rbHasLine, i)",
+        "                    line.new(array.get(rbRight, i), array.get(rbBottom, i), array.get(rbRight, i), array.get(rbTop, i), xloc=xloc.bar_time, extend=extend.both, color=color.new(color.red, 30), width=1)",
+        "    if onWeekly",
         "        table.clear(ledger, 0, 0, 9, 20)",
         "        table.cell(ledger, 0, 0, \"W RB\", text_color=color.white, bgcolor=color.new(color.green, 15))",
         "        table.cell(ledger, 1, 0, \"Type\", text_color=color.white, bgcolor=color.new(color.green, 15))",
