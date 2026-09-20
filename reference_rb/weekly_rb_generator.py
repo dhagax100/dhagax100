@@ -621,6 +621,24 @@ def write_rb_pine(base: Path, engine: WeeklyRBEngine, label_cap: int, rb_cap: in
         t_status.append(f"\"{status(z)}\"")
         t_bg.append(f"color.new({rb_colour(z)}, 80)")
 
+    # Full-zone inspection set (every zone ever created, not just the
+    # table_cap-truncated table_zones above) -- mirrors OB's own i_*
+    # fix for the identical bug: "Inspect one RB only" needs to be able
+    # to reach any zone by rank, not only the last table_cap rows.
+    i_id, i_type, i_side, i_bottom, i_top, i_origin, i_trigger, i_eligible, i_impact, i_status, i_bg, i_rank = ([] for _ in range(12))
+    for z in engine.zones[::-1]:
+        rank_from_last = len(engine.zones) - z.id + 1
+        wk = engine.w[z.candle]
+        i_id.append(f"\"#{z.id}\""); i_type.append(f"\"{status(z)}\"")
+        i_side.append(f"\"{'BUY' if z.bullish else 'SELL'}\"")
+        i_bottom.append(f"\"{z.zb:.5f}\""); i_top.append(f"\"{z.zt:.5f}\"")
+        i_origin.append(f"\"{wob.pine_text(wob.display_iso(wk.start, display_zone))}\"")
+        i_trigger.append(f"\"{wob.pine_text(wob.display_iso(z.trigger_time, display_zone))}\"")
+        i_eligible.append(f"\"{wob.pine_text(wob.display_iso(z.eligible_time, display_zone))}\"")
+        i_impact.append(f"\"{wob.pine_text(wob.display_iso(z.impact_time, display_zone))}\"")
+        i_status.append(f"\"{status(z)}\"")
+        i_bg.append(f"color.new({rb_colour(z)}, 80)"); i_rank.append(str(rank_from_last))
+
     lines += [
         f"var array<int> structX = {arr('int', struct_x)}",
         f"var array<float> structY = {arr('float', struct_y)}",
@@ -645,6 +663,18 @@ def write_rb_pine(base: Path, engine: WeeklyRBEngine, label_cap: int, rb_cap: in
         f"var array<string> tImpact = {arr('string', t_impact)}",
         f"var array<string> tStatus = {arr('string', t_status)}",
         f"var array<color> tBg = {arr('color', t_bg)}",
+        f"var array<string> iId = {arr('string', i_id)}",
+        f"var array<string> iType = {arr('string', i_type)}",
+        f"var array<string> iSide = {arr('string', i_side)}",
+        f"var array<string> iBottom = {arr('string', i_bottom)}",
+        f"var array<string> iTop = {arr('string', i_top)}",
+        f"var array<string> iOrigin = {arr('string', i_origin)}",
+        f"var array<string> iTrigger = {arr('string', i_trigger)}",
+        f"var array<string> iEligible = {arr('string', i_eligible)}",
+        f"var array<string> iImpact = {arr('string', i_impact)}",
+        f"var array<string> iStatus = {arr('string', i_status)}",
+        f"var array<color> iBg = {arr('color', i_bg)}",
+        f"var array<int> iRank = {arr('int', i_rank)}",
         *impact_watchers,
         "if barstate.islast",
         "    if onWeekly",
@@ -670,17 +700,30 @@ def write_rb_pine(base: Path, engine: WeeklyRBEngine, label_cap: int, rb_cap: in
         "        table.cell(ledger, 7, 0, \"Eligible (RYD)\", text_color=color.white, bgcolor=color.new(color.green, 15))",
         "        table.cell(ledger, 8, 0, \"Impact (RYD)\", text_color=color.white, bgcolor=color.new(color.green, 15))",
         "        table.cell(ledger, 9, 0, \"Status\", text_color=color.white, bgcolor=color.new(color.green, 15))",
-        "        for i = 0 to array.size(tId) - 1",
-        "            table.cell(ledger, 0, i + 1, array.get(tId, i), text_color=color.black, bgcolor=na)",
-        "            table.cell(ledger, 1, i + 1, array.get(tType, i), text_color=color.black, bgcolor=na)",
-        "            table.cell(ledger, 2, i + 1, array.get(tSide, i), text_color=color.black, bgcolor=na)",
-        "            table.cell(ledger, 3, i + 1, array.get(tBottom, i), text_color=color.black, bgcolor=na)",
-        "            table.cell(ledger, 4, i + 1, array.get(tTop, i), text_color=color.black, bgcolor=na)",
-        "            table.cell(ledger, 5, i + 1, array.get(tOrigin, i), text_color=color.black, bgcolor=na)",
-        "            table.cell(ledger, 6, i + 1, array.get(tTrigger, i), text_color=color.black, bgcolor=na)",
-        "            table.cell(ledger, 7, i + 1, array.get(tEligible, i), text_color=color.black, bgcolor=na)",
-        "            table.cell(ledger, 8, i + 1, array.get(tImpact, i), text_color=color.black, bgcolor=na)",
-        "            table.cell(ledger, 9, i + 1, array.get(tStatus, i), text_color=color.black, bgcolor=array.get(tBg, i))",
+        "        if not inspectOneRB",
+        "            for i = 0 to array.size(tId) - 1",
+        "                table.cell(ledger, 0, i + 1, array.get(tId, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 1, i + 1, array.get(tType, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 2, i + 1, array.get(tSide, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 3, i + 1, array.get(tBottom, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 4, i + 1, array.get(tTop, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 5, i + 1, array.get(tOrigin, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 6, i + 1, array.get(tTrigger, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 7, i + 1, array.get(tEligible, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 8, i + 1, array.get(tImpact, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 9, i + 1, array.get(tStatus, i), text_color=color.black, bgcolor=array.get(tBg, i))",
+        "        for i = 0 to array.size(iId) - 1",
+        "            if inspectOneRB and rbFromLast == array.get(iRank, i)",
+        "                table.cell(ledger, 0, 1, array.get(iId, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 1, 1, array.get(iType, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 2, 1, array.get(iSide, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 3, 1, array.get(iBottom, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 4, 1, array.get(iTop, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 5, 1, array.get(iOrigin, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 6, 1, array.get(iTrigger, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 7, 1, array.get(iEligible, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 8, 1, array.get(iImpact, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 9, 1, array.get(iStatus, i), text_color=color.black, bgcolor=array.get(iBg, i))",
     ]
     if extra_lines:
         lines += extra_lines
