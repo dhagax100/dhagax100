@@ -651,7 +651,7 @@ def write_rb_pine(base: Path, engine: WeeklyRBEngine, label_cap: int, rb_cap: in
         "        for i = 0 to array.size(structX) - 1",
         "            structYY = array.get(structLow, i) ? array.get(structY, i) - lowGap : array.get(structY, i)",
         "            label.new(array.get(structX, i), structYY, array.get(structTxt, i), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=array.get(structCol, i), size=size.small)",
-        "    if onWeekly or onH4 or on1m",
+        "    if onWeekly or onH4 or on1m or onFive",
         f"        array<int> rbRight = {arr('int', rb_right_expr)}",
         "        for i = 0 to array.size(rbLeft) - 1",
         "            if not inspectOneRB or rbFromLast == array.get(rbRank, i)",

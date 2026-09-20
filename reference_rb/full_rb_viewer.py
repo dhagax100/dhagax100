@@ -223,7 +223,7 @@ def build_h4_rb_extra_lines(h4_engine: rb.WeeklyRBEngine, h4_bars: List["wob.Wee
         f"var array<bool> h4RbStructLow = {arr('bool', struct_low)}",
         *impact_watchers,
         "if barstate.islast",
-        "    if onH4 or on1m",
+        "    if onH4 or on1m or onFive",
         f"        array<int> h4RbRight = {arr('int', right_exprs)}",
         "        for i = 0 to array.size(h4RbLeft) - 1",
         "            hrRank = array.size(h4RbLeft) - i",
