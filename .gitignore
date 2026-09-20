@@ -16,3 +16,6 @@ data/weekly_rb_ledger.csv
 data/weekly_rb_swings.csv
 data/weekly_rb_viewer.pine
 data/weekly_rb_report.txt
+data/h4_rb_ledger.csv
+data/five_bso_rb_ledger.csv
+data/full_rb_viewer.pine
