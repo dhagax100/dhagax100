@@ -80,6 +80,7 @@ class RBZone:
     pre_spent_state: int
     eligible_time: Optional[datetime] = None
     impact_time: Optional[datetime] = None
+    trigger_time: Optional[datetime] = None
 
 
 class WeeklyRBEngine:
@@ -150,40 +151,64 @@ class WeeklyRBEngine:
                 return m.t
         return None
 
+    def break_time(self, k: int, bull: bool, level: float) -> Optional[datetime]:
+        """Exact M1 minute price first breaks the given armed level within
+        week k -- an IRB's real trigger moment (mirrors OB's own
+        set_promoted_ifob_trigger crossing search)."""
+        wk = self.w[k]
+        for m in self.m[wk.first:wk.last]:
+            if (m.h > level) if bull else (m.l < level):
+                return m.t
+        return None
+
     # ===================================================================
     # RB-SPECIFIC: zone construction (no scanning -- the wick of a known
     # swing-pivot candle, per the confirmed spec).
     # ===================================================================
 
-    def add_rb_from_swing(self, idx: int, is_high: bool, trigger_k: int, origin_type: int) -> int:
+    def add_rb_from_swing(self, idx: int, is_high: bool, trigger_k: int, origin_type: int, trigger_time: Optional[datetime]) -> int:
         wk = self.w[idx]
         if is_high:
             zb, zt, bull = max(wk.o, wk.c), wk.h, False
         else:
             zb, zt, bull = wk.l, min(wk.o, wk.c), True
-        eligible = trigger_k if origin_type == 1 else -1  # ARB: immediate. IRB: armed later.
+        # ARB: immediate eligibility -- eligible_time MUST be the exact
+        # trigger minute (not left blank/defaulting to the week's start),
+        # otherwise the impact-touch search below starts from the whole
+        # week's open instead of the real trigger moment and can find an
+        # "impact" that predates its own trigger. Real bug, caught by
+        # exactly that symptom (zone #2: impact 11:04 before trigger
+        # 15:07, both same day) -- fixed by always setting eligible_time
+        # here at creation, mirroring OB's own AOB convention
+        # (try_bull_aob/try_bear_aob always set an exact eligible_time,
+        # never leave it to a fallback). IRB: armed later (STEP 2).
+        eligible = trigger_k if origin_type == 1 else -1
+        eligible_time = trigger_time if origin_type == 1 else None
         z = RBZone(len(self.zones) + 1, idx, zb, zt, bull, trigger_k, eligible, -1,
-                   origin_type, origin_type, origin_type)
+                   origin_type, origin_type, origin_type, trigger_time=trigger_time, eligible_time=eligible_time)
         self.zones.append(z)
         self.active.append(len(self.zones) - 1)
         return len(self.zones) - 1
 
-    def try_bull_arb(self, preg: int, armed_swh: int, new_swl_i: int, k: int) -> None:
+    def try_bull_arb(self, preg: int, armed_swh: int, new_swl_i: int, k: int, at: Optional[datetime]) -> None:
         # Mirrors try_bull_aob's range + reference-validity gate one-for-one:
         # the armed swing HIGH (the far swing relative to the new swing low
         # that triggered this hunt) must not have been violated since.
+        # ARB's trigger MOMENT is MID-ARM itself -- the exact M1 minute the
+        # confirming swing event fired (`at`, straight from the Event's own
+        # .at field), not the week boundary.
         if preg != 1 or armed_swh < 0:
             return
         if any(self.w[v].h >= self.w[armed_swh].h for v in range(armed_swh + 1, new_swl_i + 1)):
             return
-        self.add_rb_from_swing(armed_swh, True, k, 1)
+        self.add_rb_from_swing(armed_swh, True, k, 1, at)
 
-    def try_bear_arb(self, preg: int, armed_swl: int, new_swh_i: int, k: int) -> None:
+    def try_bear_arb(self, preg: int, armed_swl: int, new_swh_i: int, k: int, at: Optional[datetime]) -> None:
         if preg != 2 or armed_swl < 0:
             return
         if any(self.w[v].l <= self.w[armed_swl].l for v in range(armed_swl + 1, new_swh_i + 1)):
             return
-        self.add_rb_from_swing(armed_swl, False, k, 1)
+        self.add_rb_from_swing(armed_swl, False, k, 1, at)
 
     def consume_break(self, bull: bool, k: int) -> bool:
         # Bull break consumes armed high (regime -> up). RB has no AOB/AIFOB
@@ -191,7 +216,9 @@ class WeeklyRBEngine:
         # the opposite reference swing always fires here when one exists,
         # exactly OB's own fallback branch (`elif self.last_l >= 0 and not
         # promoted: self.add_ifob(...)`), minus the "not promoted" guard
-        # RB has no analog for.
+        # RB has no analog for. IRB's trigger MOMENT is the exact M1 minute
+        # price actually breaks the armed extreme (self.h_price/l_price),
+        # found via break_time -- mirrors OB's set_promoted_ifob_trigger.
         if bull:
             if not self.have_h or self.w[k].h <= self.h_price:
                 return False
@@ -199,7 +226,7 @@ class WeeklyRBEngine:
                 self.msses.append(wob.MSS(k, self.h_idx, self.h_price, True))
             self.regime = 1
             if self.last_l >= 0:
-                self.add_rb_from_swing(self.last_l, False, k, 0)  # IRB, bullish (low wick)
+                self.add_rb_from_swing(self.last_l, False, k, 0, self.break_time(k, True, self.h_price))  # IRB, bullish (low wick)
             self.have_h = False
             return True
         if not self.have_l or self.w[k].l >= self.l_price:
@@ -208,7 +235,7 @@ class WeeklyRBEngine:
             self.msses.append(wob.MSS(k, self.l_idx, self.l_price, False))
         self.regime = 2
         if self.last_h >= 0:
-            self.add_rb_from_swing(self.last_h, True, k, 0)  # IRB, bearish (high wick)
+            self.add_rb_from_swing(self.last_h, True, k, 0, self.break_time(k, False, self.l_price))  # IRB, bearish (high wick)
         self.have_l = False
         return True
 
@@ -218,12 +245,12 @@ class WeeklyRBEngine:
                 self.have_h = True
                 self.h_price = ev.price
                 self.h_idx = ev.swing
-                self.try_bear_arb(preg, armed_l, ev.swing, k)
+                self.try_bear_arb(preg, armed_l, ev.swing, k, ev.at)
             else:
                 self.have_l = True
                 self.l_price = ev.price
                 self.l_idx = ev.swing
-                self.try_bull_arb(preg, armed_h, ev.swing, k)
+                self.try_bull_arb(preg, armed_h, ev.swing, k, ev.at)
 
     def finish_events_and_lifecycle(self, k: int, before: int, total: int, consumed_h: bool, consumed_l: bool) -> None:
         # STEP 2: arm swings + IRB eligibility. Bullish IRB zones (anchored
@@ -354,9 +381,10 @@ def status(z: RBZone) -> str:
 
 def write_ledger(base: Path, engine: WeeklyRBEngine, display_zone: ZoneInfo) -> None:
     with (base / "weekly_rb_ledger.csv").open("w", newline="", encoding="utf-8") as f:
-        fields = ["id", "type", "side", "zb", "zt", "origin_type", "anchor_week_utc", "anchor_week_riyadh",
-                   "anchor_open", "anchor_high", "anchor_low", "anchor_close",
+        fields = ["id", "type", "side", "zb", "zt", "origin_type", "origin_week_utc", "origin_week_riyadh",
+                   "origin_open", "origin_high", "origin_low", "origin_close",
                    "trigger_week_utc", "trigger_week_riyadh",
+                   "trigger_time_utc", "trigger_time_riyadh",
                    "eligible_time_utc", "eligible_time_riyadh",
                    "impact_time_utc", "impact_time_riyadh", "status"]
         wr = csv.DictWriter(f, fieldnames=fields)
@@ -368,9 +396,10 @@ def write_ledger(base: Path, engine: WeeklyRBEngine, display_zone: ZoneInfo) -> 
                 id=z.id, type=STATE[z.origin_type], side="BUY" if z.bullish else "SELL",
                 zb=f"{z.zb:.5f}", zt=f"{z.zt:.5f}",
                 origin_type="IRB-style (far-side stranding)" if z.origin_type == 0 else "ARB-style (near-side stranding)",
-                anchor_week_utc=wob.iso(wk.start), anchor_week_riyadh=wob.display_iso(wk.start, display_zone),
-                anchor_open=f"{wk.o:.5f}", anchor_high=f"{wk.h:.5f}", anchor_low=f"{wk.l:.5f}", anchor_close=f"{wk.c:.5f}",
+                origin_week_utc=wob.iso(wk.start), origin_week_riyadh=wob.display_iso(wk.start, display_zone),
+                origin_open=f"{wk.o:.5f}", origin_high=f"{wk.h:.5f}", origin_low=f"{wk.l:.5f}", origin_close=f"{wk.c:.5f}",
                 trigger_week_utc=wob.iso(trig_wk.start) if trig_wk else "", trigger_week_riyadh=wob.display_iso(trig_wk.start, display_zone) if trig_wk else "",
+                trigger_time_utc=wob.iso(z.trigger_time), trigger_time_riyadh=wob.display_iso(z.trigger_time, display_zone),
                 eligible_time_utc=wob.iso(z.eligible_time), eligible_time_riyadh=wob.display_iso(z.eligible_time, display_zone),
                 impact_time_utc=wob.iso(z.impact_time), impact_time_riyadh=wob.display_iso(z.impact_time, display_zone),
                 status=status(z),
@@ -423,7 +452,7 @@ def write_rb_pine(base: Path, engine: WeeklyRBEngine, label_cap: int, rb_cap: in
         "float lowGap = ta.atr(14) * 0.08",
         "bool inspectOneRB = input.bool(false, \"Inspect one RB only\", group=\"RB inspection\")",
         f"int rbFromLast = input.int(1, \"RB from last\", minval=1, maxval={max_rb_offset}, group=\"RB inspection\", tooltip=\"1 = latest RB, 2 = the RB before it, and so on.\")",
-        "var table ledger = table.new(position.top_right, 9, 21, border_width=1)",
+        "var table ledger = table.new(position.top_right, 10, 21, border_width=1)",
         "bool onWeekly = timeframe.period == \"1W\"",
     ]
 
@@ -470,13 +499,14 @@ def write_rb_pine(base: Path, engine: WeeklyRBEngine, label_cap: int, rb_cap: in
         rb_right_expr.append(right); rb_col.append(rb_colour(z)); rb_rank.append(str(rank_from_last))
         rb_audit.append(f"\"#{z.id} {status(z)} {'BUY' if z.bullish else 'SELL'}\"")
 
-    t_id, t_type, t_side, t_bottom, t_top, t_anchor, t_eligible, t_impact, t_status, t_bg = ([] for _ in range(10))
+    t_id, t_type, t_side, t_bottom, t_top, t_origin, t_trigger, t_eligible, t_impact, t_status, t_bg = ([] for _ in range(11))
     for z in table_zones:
         wk = engine.w[z.candle]
         t_id.append(f"\"#{z.id}\""); t_type.append(f"\"{STATE[z.origin_type]}\"")
         t_side.append(f"\"{'BUY' if z.bullish else 'SELL'}\"")
         t_bottom.append(f"\"{z.zb:.5f}\""); t_top.append(f"\"{z.zt:.5f}\"")
-        t_anchor.append(f"\"{wob.pine_text(wob.display_iso(wk.start, display_zone))}\"")
+        t_origin.append(f"\"{wob.pine_text(wob.display_iso(wk.start, display_zone))}\"")
+        t_trigger.append(f"\"{wob.pine_text(wob.display_iso(z.trigger_time, display_zone))}\"")
         t_eligible.append(f"\"{wob.pine_text(wob.display_iso(z.eligible_time, display_zone))}\"")
         t_impact.append(f"\"{wob.pine_text(wob.display_iso(z.impact_time, display_zone))}\"")
         t_status.append(f"\"{status(z)}\"")
@@ -499,7 +529,8 @@ def write_rb_pine(base: Path, engine: WeeklyRBEngine, label_cap: int, rb_cap: in
         f"var array<string> tSide = {arr('string', t_side)}",
         f"var array<string> tBottom = {arr('string', t_bottom)}",
         f"var array<string> tTop = {arr('string', t_top)}",
-        f"var array<string> tAnchor = {arr('string', t_anchor)}",
+        f"var array<string> tOrigin = {arr('string', t_origin)}",
+        f"var array<string> tTrigger = {arr('string', t_trigger)}",
         f"var array<string> tEligible = {arr('string', t_eligible)}",
         f"var array<string> tImpact = {arr('string', t_impact)}",
         f"var array<string> tStatus = {arr('string', t_status)}",
@@ -514,26 +545,28 @@ def write_rb_pine(base: Path, engine: WeeklyRBEngine, label_cap: int, rb_cap: in
         "        for i = 0 to array.size(rbLeft) - 1",
         "            if not inspectOneRB or rbFromLast == array.get(rbRank, i)",
         "                box.new(array.get(rbLeft, i), array.get(rbTop, i), array.get(rbRight, i), array.get(rbBottom, i), border_color=array.get(rbCol, i), border_width=1, border_style=line.style_dashed, bgcolor=na, xloc=xloc.bar_time)",
-        "        table.clear(ledger, 0, 0, 8, 20)",
+        "        table.clear(ledger, 0, 0, 9, 20)",
         "        table.cell(ledger, 0, 0, \"W RB\", text_color=color.white, bgcolor=color.new(color.green, 15))",
         "        table.cell(ledger, 1, 0, \"Type\", text_color=color.white, bgcolor=color.new(color.green, 15))",
         "        table.cell(ledger, 2, 0, \"Side\", text_color=color.white, bgcolor=color.new(color.green, 15))",
         "        table.cell(ledger, 3, 0, \"Bottom\", text_color=color.white, bgcolor=color.new(color.green, 15))",
         "        table.cell(ledger, 4, 0, \"Top\", text_color=color.white, bgcolor=color.new(color.green, 15))",
-        "        table.cell(ledger, 5, 0, \"Anchor (RYD)\", text_color=color.white, bgcolor=color.new(color.green, 15))",
-        "        table.cell(ledger, 6, 0, \"Eligible (RYD)\", text_color=color.white, bgcolor=color.new(color.green, 15))",
-        "        table.cell(ledger, 7, 0, \"Impact (RYD)\", text_color=color.white, bgcolor=color.new(color.green, 15))",
-        "        table.cell(ledger, 8, 0, \"Status\", text_color=color.white, bgcolor=color.new(color.green, 15))",
+        "        table.cell(ledger, 5, 0, \"Origin (RYD)\", text_color=color.white, bgcolor=color.new(color.green, 15))",
+        "        table.cell(ledger, 6, 0, \"Trigger (RYD)\", text_color=color.white, bgcolor=color.new(color.green, 15))",
+        "        table.cell(ledger, 7, 0, \"Eligible (RYD)\", text_color=color.white, bgcolor=color.new(color.green, 15))",
+        "        table.cell(ledger, 8, 0, \"Impact (RYD)\", text_color=color.white, bgcolor=color.new(color.green, 15))",
+        "        table.cell(ledger, 9, 0, \"Status\", text_color=color.white, bgcolor=color.new(color.green, 15))",
         "        for i = 0 to array.size(tId) - 1",
         "            table.cell(ledger, 0, i + 1, array.get(tId, i), text_color=color.black, bgcolor=na)",
         "            table.cell(ledger, 1, i + 1, array.get(tType, i), text_color=color.black, bgcolor=na)",
         "            table.cell(ledger, 2, i + 1, array.get(tSide, i), text_color=color.black, bgcolor=na)",
         "            table.cell(ledger, 3, i + 1, array.get(tBottom, i), text_color=color.black, bgcolor=na)",
         "            table.cell(ledger, 4, i + 1, array.get(tTop, i), text_color=color.black, bgcolor=na)",
-        "            table.cell(ledger, 5, i + 1, array.get(tAnchor, i), text_color=color.black, bgcolor=na)",
-        "            table.cell(ledger, 6, i + 1, array.get(tEligible, i), text_color=color.black, bgcolor=na)",
-        "            table.cell(ledger, 7, i + 1, array.get(tImpact, i), text_color=color.black, bgcolor=na)",
-        "            table.cell(ledger, 8, i + 1, array.get(tStatus, i), text_color=color.black, bgcolor=array.get(tBg, i))",
+        "            table.cell(ledger, 5, i + 1, array.get(tOrigin, i), text_color=color.black, bgcolor=na)",
+        "            table.cell(ledger, 6, i + 1, array.get(tTrigger, i), text_color=color.black, bgcolor=na)",
+        "            table.cell(ledger, 7, i + 1, array.get(tEligible, i), text_color=color.black, bgcolor=na)",
+        "            table.cell(ledger, 8, i + 1, array.get(tImpact, i), text_color=color.black, bgcolor=na)",
+        "            table.cell(ledger, 9, i + 1, array.get(tStatus, i), text_color=color.black, bgcolor=array.get(tBg, i))",
     ]
     if extra_lines:
         lines += extra_lines
