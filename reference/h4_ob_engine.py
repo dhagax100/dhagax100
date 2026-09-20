@@ -51,24 +51,59 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--week-close-zone", default="America/New_York", help="must match the run that produced --control-ledger")
     p.add_argument("--week-close-hour", type=int, default=17, choices=range(24), help="must match the run that produced --control-ledger")
     p.add_argument("--display-tz", default="Asia/Riyadh")
-    p.add_argument("--h4-anchor-hour", type=int, default=1, choices=range(4), help="UTC hour the 4H grid starts from (1 => 01/05/09/13/17/21 UTC = 04/08/12/16/20/00 Riyadh). Chart-verified 2026-09-16 against a real FXCM 4H candle open at 16:00 Riyadh (=13:00 UTC).")
+    p.add_argument("--h4-anchor-hour", type=int, default=17, choices=range(24), help="NY-LOCAL hour the 4H grid starts from, DST-aware (default 17 -- the same hour as the Weekly close, so the grid is 17/21/01/05/09/13 NY-local, stepping every 4 hours). Chart-verified against two real FXCM 4H candle opens six months apart: 2026-09-16 (EDT) at 01:00 UTC = 21:00 NY-local, and 2026-02-13 (EST) at 22:00 UTC (01:00 Riyadh) = 17:00 NY-local -- both are the SAME grid, 4 hours apart, confirming the anchor is NY-local wall time, not a fixed UTC offset. A fixed-UTC-hour version of this flag was wrong for exactly the winter (EST) months -- see the 2026-09-20 handoff entry.")
     p.add_argument("--control-ledger", default=None, help="path to weekly_control_ledger.csv; default: alongside input CSV")
     p.add_argument("--pine-obs", type=int, default=200, choices=range(1, 451))
     return p.parse_args()
 
 
+NY = ZoneInfo("America/New_York")
+
+
+def h4_grid_start(t: datetime, anchor_hour: int, ny_zone: ZoneInfo = NY) -> datetime:
+    """The most recent 4-hour grid boundary at or before `t`, anchored to
+    `anchor_hour` NY-LOCAL wall time -- DST-aware, exactly like
+    weekly_ob_generator.forex_week_start() already is for the Weekly grid.
+
+    Real bug fixed 2026-09-20 (user-caught on the real chart): the
+    original version of this function used a FIXED UTC anchor hour,
+    unconditionally, all year round. That was chart-verified once, in
+    September (EDT) -- but a second real-chart check in February (EST,
+    winter) showed the actual FXCM grid boundary one hour earlier in UTC
+    than the fixed constant assumed. Converting both verified boundaries
+    to NY-local time landed on 21:00 NY (Sept) and 17:00 NY (Feb) -- the
+    SAME grid, exactly 4 hours apart, confirming the real anchor is a
+    fixed NY-LOCAL hour (matching the Weekly close hour, 17:00) that
+    shifts in UTC terms with DST, not a fixed UTC hour. Since this
+    function is shared, unmodified, by the OB and RB sides, this fix
+    applies to both -- any H4 OB previously verified during a winter
+    (EST) week was computed against the wrong grid and needs
+    re-verification; H4 OBs during EDT months are unaffected (the old
+    fixed constant happened to already match EDT).
+
+    Implementation: both `local` and `anchor_today` are AWARE datetimes in
+    the same zone, so their subtraction is always physically correct
+    (computed via UTC internally) even across a DST-transition day --
+    unlike naive epoch-hour arithmetic, which cannot know a NY calendar
+    day was 23 or 25 hours long that particular week."""
+    local = t.astimezone(ny_zone)
+    anchor_today = local.replace(hour=anchor_hour, minute=0, second=0, microsecond=0)
+    if anchor_today > local:
+        anchor_today -= timedelta(days=1)
+    block = int((local - anchor_today).total_seconds() // 3600) // 4
+    return (anchor_today + timedelta(hours=4 * block)).astimezone(UTC)
+
+
 def aggregate_h4(minutes: List["wob.Minute"], anchor_hour: int) -> List["wob.Week"]:
-    """Native 4-hour bars aligned to anchor_hour UTC. Reuses wob.Week's shape
+    """Native 4-hour bars aligned to `anchor_hour` NY-local wall time
+    (DST-aware -- see h4_grid_start). Reuses wob.Week's shape
     (start,end,o,h,l,c,first,last) unmodified -- it is generic, not Weekly
     -specific. Gaps (weekend, missing export minutes) simply produce no bar
     for that slot, same policy as aggregate_weeks."""
     bars: List["wob.Week"] = []
     i, n = 0, len(minutes)
     while i < n:
-        t = minutes[i].t
-        epoch_hours = int((t - EPOCH).total_seconds() // 3600)
-        grid_hours = ((epoch_hours - anchor_hour) // 4) * 4 + anchor_hour
-        start = EPOCH + timedelta(hours=grid_hours)
+        start = h4_grid_start(minutes[i].t, anchor_hour)
         end = start + timedelta(hours=4)
         j = i + 1
         high, low = minutes[i].h, minutes[i].l
@@ -175,7 +210,7 @@ def main() -> int:
 
     with (base / "h4_ob_report.txt").open("w", encoding="utf-8") as f:
         f.write("4H STRUCTURE/OB ENGINE -- FIRST PASS, UNVERIFIED\n\n")
-        f.write(f"4H bars: {len(h4_bars)}  (grid anchor: {args.h4_anchor_hour:02d}:00 UTC -- VERIFY against the real FXCM chart first)\n")
+        f.write(f"4H bars: {len(h4_bars)}  (grid anchor: {args.h4_anchor_hour:02d}:00 NY-local, DST-aware -- chart-verified against both EDT and EST real candle opens, see h4_grid_start())\n")
         f.write(f"4H OBs computed: {len(engine.zones)}\n")
         f.write(f"Impacted (state=SPENT): {sum(1 for z in engine.zones if z.state == 3)}\n")
         f.write(f"Drawn (impacted + pre-eligible, not OOB + control-authorized at impact): {len(drawn)}\n")

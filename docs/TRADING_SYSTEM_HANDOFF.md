@@ -1291,3 +1291,21 @@ User asked directly: why hasn't anything discovered/decided this session (or the
 2. **When new data is appended** (a newer EURUSD CSV extending past 2026-09-11), don't reprocess from scratch and don't assume continuity is automatic: rerun the full pipeline (`weekly_ob_generator.py` -> `weekly_control_engine.py` -> `full_viewer.py`) against the new file end-to-end, since the locked engines are stateless recomputations over the whole file, not incremental. Then re-verify starting from this exact known-good terminal state (control=NONE, zone 8 dead, last event 2026-08-24 00:00) forward -- treat everything before 09-11 22:05 as already locked and don't re-litigate it, only chart-verify the new tail.
 3. **This file (`docs/TRADING_SYSTEM_HANDOFF.md`) is the continuity record.** A new session or new dataset picks up by reading it end to end, not by re-deriving any of gates 1-16 from raw data again.
 4. Still-open, unrelated to this closure: the phantom weekly Sunday-reopen candle (OB #249, and now this session's zone-8-death margin note), and the ~3-pip feed discrepancy vs. the live FXCM chart. Neither blocks calling the 2026 dataset closed -- both are flagged for whenever they get picked up.
+
+## Session update — 2026-09-20 (real DST bug found and fixed in h4_ob_engine.aggregate_h4 -- shared by OB and RB)
+
+**Found while chart-verifying the RB project (a separate, parallel effort -- see docs_rb/RB_HANDOFF.md), but the bug lives in this project's own shared `h4_ob_engine.py`, so it affects OB too.**
+
+`aggregate_h4()` used a FIXED UTC anchor hour (`--h4-anchor-hour`, default 1: grid at 01/05/09/13/17/21 UTC), chart-verified once, in September (EDT). The user then checked a real 4H candle boundary in February (winter, EST) and it landed on **01:00 Riyadh, not 00:00** -- one hour off from what the fixed constant predicts.
+
+Converting both real, chart-confirmed boundaries to NY-local time: September's verified boundary (01:00 UTC) is **21:00 NY-local**; February's new one (22:00 UTC = 01:00 Riyadh) is **17:00 NY-local**. These are the SAME grid, exactly 4 hours apart -- confirming the real anchor is a fixed NY-LOCAL hour (17:00, the same hour as the Weekly close), not a fixed UTC hour. A fixed-UTC constant can't track DST; NY-local can, automatically, the same way `forex_week_start()` already handles the Weekly grid.
+
+**Fixed**: added `h4_grid_start()` (DST-aware, using aware-datetime subtraction in `America/New_York` -- physically correct across a DST-transition day, unlike naive epoch-hour arithmetic). `aggregate_h4()` now calls it instead of doing fixed-UTC epoch math. `--h4-anchor-hour` changed from "UTC hour, 0-3" to "NY-local hour, 0-23", default changed from `1` to `17`. Updated in `h4_ob_engine.py`, `five_bso_engine.py`, and `full_viewer.py` (all three had their own copy of this same CLI flag).
+
+**Verified against both real boundaries directly** (not just re-running and eyeballing counts):
+```
+h4_grid_start(2026-09-16 01:30 UTC, 17)  -> 2026-09-16 01:00 UTC -> 04:00 Riyadh  (matches Sept)
+h4_grid_start(2026-02-13 01:30 Riyadh, 17) -> 2026-02-12 22:00 UTC -> 01:00 Riyadh (matches Feb)
+```
+
+**Regenerated and checked**: 4H bars went from 1130 to 1120 (the grid genuinely shifted). For the existing `--manual-gates` window, the final counts happened to come out identical (24 H4 OBs drawn, 23 ENTERED / 6 H4_OB_BREACHED -- same as before the fix) -- but this is NOT a guarantee nothing changed underneath. Any individual H4 OB whose origin/trigger/eligible/impact falls inside a winter (EST, roughly Nov-Mar) week now sits on a shifted bar grid (up to a few hours' difference in exact candle boundary) even if it happened to net out to the same authorization outcome this time. **Any H4 OB previously chart-verified during a winter week should be re-checked** -- OBs during EDT months (roughly Mar-Nov) are unaffected, since the old fixed constant happened to already match EDT.

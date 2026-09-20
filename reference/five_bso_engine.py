@@ -83,7 +83,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--week-close-zone", default="America/New_York")
     p.add_argument("--week-close-hour", type=int, default=17, choices=range(24))
     p.add_argument("--display-tz", default="Asia/Riyadh")
-    p.add_argument("--h4-anchor-hour", type=int, default=1, choices=range(4))
+    p.add_argument("--h4-anchor-hour", type=int, default=17, choices=range(24))
     p.add_argument("--control-ledger", default=None)
     p.add_argument("--focus-weekly-id", type=int, default=0, help="0 = every authorized H4 OB in the dataset")
     return p.parse_args()

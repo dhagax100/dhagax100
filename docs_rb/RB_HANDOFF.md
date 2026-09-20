@@ -79,3 +79,17 @@ python3 full_rb_viewer.py ../data/EURUSD_m1_BidAndAsk.csv
 Produces (next to the CSV): `full_rb_viewer.pine`, `h4_rb_ledger.csv`, `five_bso_rb_ledger.csv`, plus the Weekly RB files as before.
 
 **Not yet done**: gates 2+ (only gate 1 was in scope this round). No automated RB control engine yet (mirrors the OB project's own history -- hand-verify gate-by-gate first, automate later once the sequence settles). Not yet chart-verified against the real TradingView chart.
+
+## Session update — 2026-09-20 (real DST bug in shared h4_ob_engine; RB wording cleaned up)
+
+**Real bug found via RB chart verification, but the bug lives in the SHARED `h4_ob_engine.py` (reused unchanged from the OB project) -- see `docs/TRADING_SYSTEM_HANDOFF.md`'s own 2026-09-20 entry for the full root-cause writeup.** In short: the H4 grid anchor was a fixed UTC hour, verified once in September (EDT); user caught a real winter (EST) 4H boundary at 01:00 Riyadh where the old code predicted 00:00 -- a genuine 1-hour DST gap. Fixed to anchor on 17:00 NY-LOCAL time (DST-aware, matching the Weekly close hour), verified against both real chart boundaries directly.
+
+This is fixed in the shared file, so both OB and RB inherit it automatically. Regenerated RB's gate 1 window: 4H bars 1130 -> 1120, H4 RBs computed 446 -> 449, authorized in gate 1's window **6 -> 5**, 5m entries 10 -> 8 (5 ENTERED, 3 breached) -- unlike the OB side, RB's counts DID change, since gate 1's window (Feb 2026) is entirely in winter/EST.
+
+**RB wording cleanup** (user: "we should use RB everywhere for consistency... I have seen 4H OB breached in the table which is weird"): `five_bso_engine.py`'s shared, generic result dict uses `"H4_OB_BREACHED"` as a literal stage string, and `full_viewer.build_bso_extra_lines()` (also reused) hardcodes `"Weekly OB"`/`"4H OB"` as its own 5m table headers. Neither is RB-aware, and neither should be edited directly (both are still the OB project's real, correct wording). Added `rb_relabel()` / `rb_ledger_row()` / `RB_LEDGER_FIELDS` in `full_rb_viewer.py`: a thin, display-only remapping layer that renames `H4_OB_BREACHED` -> `H4_RB_BREACHED`, `h4_ob_*` CSV columns -> `h4_rb_*`, and patches the two hardcoded 5m table header strings -- applied only to RB's own output, never touching the shared OB functions. Verified: zero "OB" wording anywhere in the regenerated `full_rb_viewer.pine` or `five_bso_rb_ledger.csv` except one accurate doc-comment describing swing/MSS lineage.
+
+**Run order unchanged**:
+```
+cd reference_rb
+python3 full_rb_viewer.py ../data/EURUSD_m1_BidAndAsk.csv
+```

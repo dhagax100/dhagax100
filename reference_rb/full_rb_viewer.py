@@ -58,10 +58,34 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--pine-labels", type=int, default=120, choices=range(1, 161))
     p.add_argument("--pine-rbs", type=int, default=150, choices=range(1, 451))
     p.add_argument("--pine-table", type=int, default=20, choices=range(1, 21))
-    p.add_argument("--h4-anchor-hour", type=int, default=1, choices=range(4))
+    p.add_argument("--h4-anchor-hour", type=int, default=17, choices=range(24), help="NY-LOCAL hour the 4H grid starts from, DST-aware -- see h4_ob_engine.h4_grid_start().")
     p.add_argument("--h4-pine-rbs", type=int, default=200, choices=range(1, 451))
     p.add_argument("--h4-pine-labels", type=int, default=80, choices=range(1, 161))
     return p.parse_args()
+
+
+RB_LEDGER_FIELDS = [f.replace("h4_ob_", "h4_rb_") for f in bso.LEDGER_FIELDS]
+
+
+def rb_relabel(res: Dict) -> Dict:
+    """Relabel OB-specific wording in a five_bso_engine result dict for RB
+    display, WITHOUT touching the shared engine itself (still used by the
+    actual OB project, unmodified). Only ever renames labels; never
+    changes any value that drives logic (result/stage classification,
+    prices, times) -- purely cosmetic, per the user's explicit request
+    ("we should use RB everywhere for consistency... I have seen 4H OB
+    breached in the table which is weird while we are working on RB")."""
+    out = dict(res)
+    for k in ("stage", "result"):
+        if out.get(k) == "H4_OB_BREACHED":
+            out[k] = "H4_RB_BREACHED"
+    return out
+
+
+def rb_ledger_row(z, it: Optional[datetime], parent_id: str, invalidation_reason: Optional[str],
+                   res: Dict, display_tz: ZoneInfo) -> Dict:
+    row = bso.ledger_row(z, it, parent_id, invalidation_reason, rb_relabel(res), display_tz)
+    return {k.replace("h4_ob_", "h4_rb_"): v for k, v in row.items()}
 
 
 def build_manual_rb_gates() -> List[Tuple[datetime, datetime, str, str, str]]:
@@ -312,14 +336,22 @@ def main() -> int:
         invalidated_at, invalidation_reason = bso.structural_invalid_at(z, z.impact_time, h4_bars, h4_bar_starts, h4_engine.events, minutes, mt)
         attempts = bso.run_bso_chain(z, z.impact_time, five_bar_starts, five_engine.events, minutes, mt, invalidated_at)
         for res in attempts:
-            bso_results.append((z, z.impact_time, parent_id, invalidation_reason, res))
-    bso_extra_lines = fv.build_bso_extra_lines(bso_results, display_tz)
+            bso_results.append((z, z.impact_time, parent_id, invalidation_reason, rb_relabel(res)))
+    # build_bso_extra_lines is reused verbatim from the OB project (it's
+    # otherwise fully generic -- see the module docstring), but its own
+    # 5m table header hardcodes "Weekly OB"/"4H OB" literally. Patched
+    # post-hoc rather than duplicating the whole function for two labels;
+    # the shared OB function itself stays untouched.
+    bso_extra_lines = [
+        line.replace('"Weekly OB"', '"Weekly RB"').replace('"4H OB"', '"4H RB"')
+        for line in fv.build_bso_extra_lines(bso_results, display_tz)
+    ]
 
     with (base / "five_bso_rb_ledger.csv").open("w", newline="", encoding="utf-8") as f:
-        wr = csv.DictWriter(f, fieldnames=bso.LEDGER_FIELDS)
+        wr = csv.DictWriter(f, fieldnames=RB_LEDGER_FIELDS)
         wr.writeheader()
         for z, it, parent_id, invalidation_reason, res in bso_results:
-            wr.writerow(bso.ledger_row(z, it, parent_id, invalidation_reason, res, display_tz))
+            wr.writerow(rb_ledger_row(z, it, parent_id, invalidation_reason, res, display_tz))
 
     extra_lines = h4_extra_lines + bso_extra_lines
 
