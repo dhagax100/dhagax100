@@ -552,6 +552,16 @@ def write_rb_pine(base: Path, engine: WeeklyRBEngine, label_cap: int, rb_cap: in
         "bool onWeekly = timeframe.period == \"1W\"",
         "bool onH4 = timeframe.period == \"240\"",
         "bool on1m = timeframe.period == \"1\"",
+        # Required by full_viewer.build_bso_extra_lines(), reused verbatim
+        # for the 5m BSO layer -- it references "onFive" by name (matching
+        # OB's own weekly_ob_generator.write_ob_pine() declaration), and
+        # the 5m entry engine (five_bso_engine.aggregate_5m) genuinely
+        # computes on 5-minute bars, so this needs its own bool here even
+        # though the RB Weekly layer itself never draws on the 5m chart.
+        # Missing this produced a real CE10272 "undeclared identifier
+        # onFive" the moment full_rb_viewer.py appended the reused BSO
+        # layer -- same class of gap already hit and fixed on the OB side.
+        "bool onFive = timeframe.period == \"5\"",
     ]
 
     struct_x, struct_y, struct_txt, struct_col, struct_low = [], [], [], [], []
