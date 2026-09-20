@@ -62,7 +62,7 @@ import weekly_ob_generator as wob  # noqa: E402 -- reused for Minute/Week/Event/
                                     # load_minutes, aggregate_weeks, iso helpers, pine helpers
 
 UTC = timezone.utc
-STATE = {0: "IRB", 1: "ARB", 2: "ORB", 3: "SPENT"}
+STATE = {0: "IRB", 1: "ARB", 2: "ORB", 3: "SPENT", 4: "AIRB"}
 
 
 @dataclass
@@ -72,15 +72,20 @@ class RBZone:
     zb: float
     zt: float
     bullish: bool         # by RAW WICK TYPE: swing-low wick=True, swing-high wick=False
-    trigger: int          # the hunt's firing week index (break moment for IRB, mid-arm for ARB)
-    eligible: int          # -1 = not yet eligible (IRB only, until its arming swing confirms)
+    trigger: int          # the hunt's firing week index (break moment for IRB/promoted AIRB, mid-arm for ARB)
+    eligible: int          # -1 = not yet eligible (IRB/AIRB only, until its arming swing confirms)
     stop: int              # -1 = extending
-    state: int             # 0=IRB, 1=ARB, 2=ORB, 3=SPENT
-    origin_type: int       # 0=IRB-style (far-side stranding), 1=ARB-style (near-side stranding)
+    state: int             # 0=IRB, 1=ARB, 2=ORB, 3=SPENT, 4=AIRB (dynamic -- 4 becomes 0 on promotion)
+    origin_type: int       # 0=IRB-style (far-side stranding), 1=ARB-style (near-side stranding) --
+                            # IMMUTABLE, governs which side strands. AIRB is IRB-style (0) and stays 0
+                            # through promotion, unlike `state` which does change.
     pre_spent_state: int
     eligible_time: Optional[datetime] = None
     impact_time: Optional[datetime] = None
     trigger_time: Optional[datetime] = None
+    created_state: int = -1              # immutable creation type, for audit (mirrors OB's created_state)
+    promotion_from_state: int = -1       # mirrors OB's promotion_from_state; -1 = never promoted
+    promotion_time: Optional[datetime] = None
 
 
 class WeeklyRBEngine:
@@ -103,6 +108,11 @@ class WeeklyRBEngine:
         self.regime = 0
         self.ei = 0
         self.last_h = self.last_l = -1
+        # Pending-AIRB trackers, mirroring OB's pend_bull_aifob/pend_bear_aifob:
+        # only the LATEST candidate is ever tracked -- an older pending AIRB
+        # is abandoned (not deleted, just untracked) the moment a newer
+        # same-direction swing confirms and creates a fresh candidate.
+        self.pend_bull_airb = self.pend_bear_airb = -1
 
     # ===================================================================
     # SWING/MSS DETECTION -- COPIED VERBATIM FROM weekly_ob_generator.py's
@@ -166,7 +176,22 @@ class WeeklyRBEngine:
     # swing-pivot candle, per the confirmed spec).
     # ===================================================================
 
-    def add_rb_from_swing(self, idx: int, is_high: bool, trigger_k: int, origin_type: int, trigger_time: Optional[datetime]) -> int:
+    def claimed(self, candle: int, bull: bool) -> bool:
+        """Mirrors OB's own claimed() guard (every OB zone-creation path
+        checks it) -- prevents the same physical candle/direction from
+        being stamped with two separate RB zone IDs. Added specifically
+        because AIRB raises real collision odds: if an AIRB anchored on
+        candle X never gets promoted (stranded/impacted first) and the
+        armed extreme later still breaks with self.last_l/last_h still
+        unchanged (== X), the normal IRB fallback would otherwise anchor
+        on that exact same candle again."""
+        return any(z.candle == candle and z.bullish == bull for z in self.zones)
+
+    def add_rb_from_swing(self, idx: int, is_high: bool, trigger_k: int, origin_type: int,
+                           trigger_time: Optional[datetime], state: Optional[int] = None) -> int:
+        bull_of_this = not is_high
+        if self.claimed(idx, bull_of_this):
+            return -1
         wk = self.w[idx]
         if is_high:
             zb, zt, bull = max(wk.o, wk.c), wk.h, False
@@ -181,11 +206,13 @@ class WeeklyRBEngine:
         # 15:07, both same day) -- fixed by always setting eligible_time
         # here at creation, mirroring OB's own AOB convention
         # (try_bull_aob/try_bear_aob always set an exact eligible_time,
-        # never leave it to a fallback). IRB: armed later (STEP 2).
-        eligible = trigger_k if origin_type == 1 else -1
-        eligible_time = trigger_time if origin_type == 1 else None
+        # never leave it to a fallback). IRB/AIRB: armed later (STEP 2).
+        actual_state = state if state is not None else origin_type
+        eligible = trigger_k if origin_type == 1 and actual_state != 4 else -1
+        eligible_time = trigger_time if origin_type == 1 and actual_state != 4 else None
         z = RBZone(len(self.zones) + 1, idx, zb, zt, bull, trigger_k, eligible, -1,
-                   origin_type, origin_type, origin_type, trigger_time=trigger_time, eligible_time=eligible_time)
+                   actual_state, origin_type, actual_state, trigger_time=trigger_time,
+                   eligible_time=eligible_time, created_state=actual_state)
         self.zones.append(z)
         self.active.append(len(self.zones) - 1)
         return len(self.zones) - 1
@@ -210,22 +237,67 @@ class WeeklyRBEngine:
             return
         self.add_rb_from_swing(armed_swl, False, k, 1, at)
 
+    # ===================================================================
+    # AIRB (Aggressive-InFavor RB) -- mirrors OB's AIFOB exactly, adapted
+    # for RB's direct-anchor construction (no scanning needed). AIFOB is a
+    # PRE-ARMED, early IFOB candidate created at the same MID-ARM moment an
+    # AOB would be tried (while the eventual trigger swing is only ARMED,
+    # not yet broken); if that swing later actually breaks, the candidate
+    # is PROMOTED in place (same zone ID, trigger facts overwritten with
+    # the real break); if a newer same-direction swing confirms first, the
+    # old candidate is abandoned (untracked, not deleted) and a fresh one
+    # replaces it; if the break never happens, it stays AIRB forever, but
+    # is tradable (eligible/impactable) throughout, exactly like AIFOB.
+    #
+    # RB's IRB anchor is never searched -- it's always the literal
+    # opposite-reference swing (self.last_l/self.last_h) at whatever
+    # moment that gets evaluated. So AIRB's anchor is simply the swing
+    # that JUST confirmed now (new_low/new_high): if no NEWER one forms
+    # before the eventual break, that is exactly what self.last_l/last_h
+    # will still be when the break happens, so promoting it in place is
+    # correct. Gating conditions mirror try_bull_aifob/try_bear_aifob's
+    # preconditions one-for-one (translated: no range-search terms needed).
+    # ===================================================================
+
+    def try_bull_airb(self, preg: int, had_h: bool, armed_h: int, last_low: int, new_low: int, k: int, at: Optional[datetime]) -> int:
+        if preg != 1 or not had_h or armed_h < 0 or last_low < 0 or self.w[k].l < self.w[new_low].l:
+            return -1
+        return self.add_rb_from_swing(new_low, False, k, 0, at, state=4)
+
+    def try_bear_airb(self, preg: int, had_l: bool, armed_l: int, last_high: int, new_high: int, k: int, at: Optional[datetime]) -> int:
+        if preg != 2 or not had_l or armed_l < 0 or last_high < 0 or self.w[k].h > self.w[new_high].h:
+            return -1
+        return self.add_rb_from_swing(new_high, True, k, 0, at, state=4)
+
     def consume_break(self, bull: bool, k: int) -> bool:
-        # Bull break consumes armed high (regime -> up). RB has no AOB/AIFOB
-        # promotion machinery to conditionally skip -- the IRB anchored on
-        # the opposite reference swing always fires here when one exists,
-        # exactly OB's own fallback branch (`elif self.last_l >= 0 and not
-        # promoted: self.add_ifob(...)`), minus the "not promoted" guard
-        # RB has no analog for. IRB's trigger MOMENT is the exact M1 minute
-        # price actually breaks the armed extreme (self.h_price/l_price),
-        # found via break_time -- mirrors OB's set_promoted_ifob_trigger.
+        # Bull break consumes armed high (regime -> up). If a pending AIRB
+        # is still alive (state==4, i.e. not already stranded/impacted),
+        # PROMOTE it in place -- same zone, trigger facts overwritten with
+        # this real break, eligible reset to re-arm under the new (later)
+        # trigger week, mirroring OB's own promotion block exactly
+        # (including resetting eligible/eligible_time, since the officially
+        # recognized trigger week just changed). Otherwise fall back to
+        # the plain IRB creation, exactly OB's own fallback branch
+        # (`elif self.last_l >= 0 and not promoted: self.add_ifob(...)`).
         if bull:
             if not self.have_h or self.w[k].h <= self.h_price:
                 return False
             if self.regime == 2:
                 self.msses.append(wob.MSS(k, self.h_idx, self.h_price, True))
             self.regime = 1
-            if self.last_l >= 0:
+            promoted = False
+            if 0 <= self.pend_bull_airb < len(self.zones) and self.zones[self.pend_bull_airb].state == 4:
+                z = self.zones[self.pend_bull_airb]
+                z.promotion_from_state = z.state
+                z.state = 0
+                z.trigger = k
+                z.trigger_time = self.break_time(k, True, self.h_price)
+                z.promotion_time = self.w[k].start
+                z.eligible = -1
+                z.eligible_time = None
+                promoted = True
+            self.pend_bull_airb = -1
+            if not promoted and self.last_l >= 0:
                 self.add_rb_from_swing(self.last_l, False, k, 0, self.break_time(k, True, self.h_price))  # IRB, bullish (low wick)
             self.have_h = False
             return True
@@ -234,7 +306,19 @@ class WeeklyRBEngine:
         if self.regime == 1:
             self.msses.append(wob.MSS(k, self.l_idx, self.l_price, False))
         self.regime = 2
-        if self.last_h >= 0:
+        promoted = False
+        if 0 <= self.pend_bear_airb < len(self.zones) and self.zones[self.pend_bear_airb].state == 4:
+            z = self.zones[self.pend_bear_airb]
+            z.promotion_from_state = z.state
+            z.state = 0
+            z.trigger = k
+            z.trigger_time = self.break_time(k, False, self.l_price)
+            z.promotion_time = self.w[k].start
+            z.eligible = -1
+            z.eligible_time = None
+            promoted = True
+        self.pend_bear_airb = -1
+        if not promoted and self.last_h >= 0:
             self.add_rb_from_swing(self.last_h, True, k, 0, self.break_time(k, False, self.l_price))  # IRB, bearish (high wick)
         self.have_l = False
         return True
@@ -245,12 +329,18 @@ class WeeklyRBEngine:
                 self.have_h = True
                 self.h_price = ev.price
                 self.h_idx = ev.swing
+                self.pend_bull_airb = -1
                 self.try_bear_arb(preg, armed_l, ev.swing, k, ev.at)
+                if self.pend_bear_airb < 0:
+                    self.pend_bear_airb = self.try_bear_airb(preg, self.have_l, armed_l, self.last_h, ev.swing, k, ev.at)
             else:
                 self.have_l = True
                 self.l_price = ev.price
                 self.l_idx = ev.swing
+                self.pend_bear_airb = -1
                 self.try_bull_arb(preg, armed_h, ev.swing, k, ev.at)
+                if self.pend_bull_airb < 0:
+                    self.pend_bull_airb = self.try_bull_airb(preg, self.have_h, armed_h, self.last_l, ev.swing, k, ev.at)
 
     def finish_events_and_lifecycle(self, k: int, before: int, total: int, consumed_h: bool, consumed_l: bool) -> None:
         # STEP 2: arm swings + IRB eligibility. Bullish IRB zones (anchored
@@ -267,7 +357,7 @@ class WeeklyRBEngine:
                 self.last_h = ev.swing
                 for zidx in self.active:
                     z = self.zones[zidx]
-                    if z.bullish and z.state == 0 and z.eligible < 0 and k > z.trigger:
+                    if z.bullish and z.state in (0, 4) and z.eligible < 0 and k > z.trigger:
                         z.eligible = k
                         z.eligible_time = ev.at
             else:
@@ -278,7 +368,7 @@ class WeeklyRBEngine:
                 self.last_l = ev.swing
                 for zidx in self.active:
                     z = self.zones[zidx]
-                    if not z.bullish and z.state == 0 and z.eligible < 0 and k > z.trigger:
+                    if not z.bullish and z.state in (0, 4) and z.eligible < 0 and k > z.trigger:
                         z.eligible = k
                         z.eligible_time = ev.at
             self.ei += 1
@@ -296,7 +386,7 @@ class WeeklyRBEngine:
             if z.eligible >= 0 and k >= z.eligible:
                 touch = self.first_touch(z.eligible_time or self.w[k].start, k, z.bullish, z.zb, z.zt)
             strand_ev = None
-            if z.state in (0, 1) and z.eligible != -1:
+            if z.state in (0, 1, 4) and z.eligible != -1:
                 is_irb = z.origin_type != 1
                 for ev in self.events[before:total]:
                     if ev.confirm != k:
@@ -386,7 +476,8 @@ def write_ledger(base: Path, engine: WeeklyRBEngine, display_zone: ZoneInfo) -> 
                    "trigger_week_utc", "trigger_week_riyadh",
                    "trigger_time_utc", "trigger_time_riyadh",
                    "eligible_time_utc", "eligible_time_riyadh",
-                   "impact_time_utc", "impact_time_riyadh", "status"]
+                   "impact_time_utc", "impact_time_riyadh", "status",
+                   "created_type", "promotion_from_type", "promotion_time_utc", "promotion_time_riyadh"]
         wr = csv.DictWriter(f, fieldnames=fields)
         wr.writeheader()
         for z in engine.zones:
@@ -403,6 +494,9 @@ def write_ledger(base: Path, engine: WeeklyRBEngine, display_zone: ZoneInfo) -> 
                 eligible_time_utc=wob.iso(z.eligible_time), eligible_time_riyadh=wob.display_iso(z.eligible_time, display_zone),
                 impact_time_utc=wob.iso(z.impact_time), impact_time_riyadh=wob.display_iso(z.impact_time, display_zone),
                 status=status(z),
+                created_type=STATE[z.created_state] if z.created_state >= 0 else "",
+                promotion_from_type=STATE[z.promotion_from_state] if z.promotion_from_state >= 0 else "",
+                promotion_time_utc=wob.iso(z.promotion_time), promotion_time_riyadh=wob.display_iso(z.promotion_time, display_zone),
             ))
     with (base / "weekly_rb_swings.csv").open("w", newline="", encoding="utf-8") as f:
         wr = csv.writer(f)
@@ -425,6 +519,8 @@ def rb_colour(z: RBZone) -> str:
         return "color.red"
     if d == 1:
         return "color.green"
+    if d == 4:
+        return "color.orange"  # AIRB, mirrors OB's AIFOB=orange convention
     return "color.blue" if z.bullish else "color.black"
 
 
@@ -579,7 +675,7 @@ def write_report(base: Path, minutes: List["wob.Minute"], weeks: List["wob.Week"
     n_low = sum(1 for x in e.events if x.kind == 1)
     n_up = sum(1 for x in e.msses if x.up)
     n_down = sum(1 for x in e.msses if not x.up)
-    counts = {name: 0 for name in ("IRB", "ARB", "ORB", "SPENT")}
+    counts = {name: 0 for name in ("IRB", "ARB", "ORB", "SPENT", "AIRB")}
     for z in e.zones:
         counts[status(z)] += 1
     rows = [
