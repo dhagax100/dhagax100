@@ -71,6 +71,55 @@ corrected (post-DST-fix) numbers — pending.
 
 ---
 
+## Gates 2-5 — 2026-02-16 01:00 Riyadh → 2026-03-23 14:06 Riyadh
+
+**Claim (user-supplied), verified sub-claim by sub-claim against the real
+ledger/swing/M1 data before any code was written:**
+
+- **Gate 2, BUY_ONLY** (2026-02-16 → 02-23 Riyadh, parent zone #3 AIRB):
+  RB2 dead → control reverts to the underlying UP trend at week open.
+  Zone #3 (AIRB, BUY, zb=1.17652/zt=1.18095) impacted mid-week
+  (2026-02-17 18:28 Riyadh) without ending BUY_ONLY — confirmed an AIRB
+  touch alone does not flip control.
+- **Gate 3, SELL_ONLY, no anchor zone** (2026-02-23 → 03-03 17:24 Riyadh):
+  A **new** rule, distinct from gate 1's Weekly-close-body-breach rule —
+  **structural break-of-structure**: the week-of-2026-02-16's own close
+  (1.17921) is below the *prior* week's low (1.18086, week-of-02-09).
+  Confirmed directly. Read as AIRB #3 failing + trend flip; no live SELL
+  RB exists to anchor the campaign (RB2 already dead), so SELL_ONLY here
+  has no parent zone.
+- **Gate 4, BOTH** (2026-03-03 17:24 → 17:26 Riyadh, only 2 minutes):
+  RB1 (W ORB #1, BUY, zb=1.15692/zt=1.15797) impacted 2026-03-03 17:24
+  Riyadh, opening BOTH.
+- **Gate 5, SELL_ONLY, no anchor zone** (resumes 2026-03-03 17:26 Riyadh):
+  2 minutes after RB1's impact, price breaks below RB1's own anchor low
+  (1.15692, confirmed swing week-of-2026-01-19) — low 1.15667 at
+  2026-03-03 17:26 Riyadh. Confirmed near-immediate.
+- **Stop, 2026-03-23 14:06 Riyadh**: user initially cited price 1.16162,
+  but direct data check showed price had already exceeded the prior
+  week's high (1.16159, week-of-03-16) earlier that same day, at 14:06
+  Riyadh (high 1.1619) — **user confirmed 14:06/1.1619 is correct**, not
+  the later 1.16162 print, and not the engine's own formally-confirmed
+  SWING HIGH (which lags to 1.16394, week-of-03-30).
+
+**`[RB-NEW]` Real, important rule difference confirmed here**: the
+control-gate "stop" trigger uses the **first real-time tick that exceeds
+the prior week's high/low** — NOT the engine's formal, delayed
+two-sided-confirmed SWING event. This is the "event vs. candle reaction"
+distinction the user set up from the start; gates react in real time,
+the Weekly RB zone engine's own SWING/MSS detection is deliberately
+slower/confirmed. Any future gate-boundary claim citing a "swing"
+must be checked against BOTH definitions before encoding, since they
+can disagree by up to a week and a meaningfully different price.
+
+**Result**: `build_manual_rb_gates()` in `full_rb_viewer.py` now encodes
+gates 1-5, then NONE from 2026-03-23 14:06 Riyadh onward (next gate not
+yet given). 25 H4 RBs authorized across the known window (up from gate
+1's 5): 5 BUY (gate 2, parent #3), 20 SELL (5 parent #2 from gate 1, 15
+parentless from gates 3/5). Cross-checked every authorized row's side
+against its own control_at_impact column — zero mismatches. 29 total 5m
+entries (14 ENTERED, 15 H4_RB_BREACHED).
+
 ## Open questions / not yet tested by real gate data
 
 - Does RB ever need its own countertrend/trend-alignment nuance beyond

@@ -89,32 +89,61 @@ def rb_ledger_row(z, it: Optional[datetime], parent_id: str, invalidation_reason
 
 
 def build_manual_rb_gates() -> List[Tuple[datetime, datetime, str, str, str]]:
-    """Hand-verified RB control timeline, gate 1 only (per explicit scope:
-    "given the first gate, create that gate"). Same tuple shape as OB's
-    build_manual_gates(): (start, end, control, sell_parent_id, buy_parent_id).
+    """Hand-verified RB control timeline, gates 1-5 (through 2026-03-23).
+    Same tuple shape as OB's build_manual_gates(): (start, end, control,
+    sell_parent_id, buy_parent_id). Every boundary below was checked
+    directly against weekly_rb_ledger.csv / weekly_rb_swings.csv / the raw
+    M1 data before being encoded -- see docs_rb/RB_RULES_LEARNED.md for the
+    full gate-by-gate verification record.
 
     Gate 1 -- SELL_ONLY (RB zone #2, ARB):
       RB zone #2 (Weekly ARB, bearish -- top=1.20825, bottom=1.18609) has
       trigger, eligible and impact all at the SAME minute, 2026-02-09
-      15:07 Riyadh -- verified directly against weekly_rb_ledger.csv.
-      Trend context (2025 carryover, not derivable from this 2026-only
-      dataset -- user-supplied fact, not code-inferred): Weekly trend was
-      UP at this point, so this is a COUNTERTREND SELL_ONLY start (same
-      mechanism as the OB side's own zone #1, CAMPAIGN_START_COUNTERTREND
-      -- countertrend campaigns are explicitly allowed, trend and control
-      are independent per SPEC.md SS9).
+      15:07 Riyadh. Trend context (2025 carryover, user-supplied, not
+      derivable from this 2026-only dataset): Weekly trend was UP, so this
+      is a COUNTERTREND SELL_ONLY start (trend and control are independent
+      per SPEC.md SS9). Dies at the containing week's own close: week
+      2026-02-09 -> 02-16 Riyadh closes at 1.18722, which is >= zb
+      (1.18609) -- Weekly-close-body-inside/through POI-breach (SPEC.md
+      SS14).
 
-      Dies at the containing week's OWN close: the week 2026-02-09 01:00
-      -> 2026-02-16 01:00 Riyadh closes at 1.18722, which is >= zb
-      (1.18609) -- the same Weekly-close-body-inside/through POI-breach
-      rule already used throughout the OB side (SPEC.md SS14): a body
-      close merely INSIDE the zone (no clean wick-reject) is enough on
-      its own to kill it, exactly like a full close-through. Verified
-      directly against the week's own O/H/L/C.
+    Gate 2 -- BUY_ONLY (RB zone #3, AIRB), 2026-02-16 -> 02-23 Riyadh:
+      RB2 (the only countertrend zone) is dead, so control reverts to the
+      underlying UP trend at the next week's open. Zone #3 (AIRB, BUY,
+      zb=1.17652/zt=1.18095) is impacted mid-week (2026-02-17 18:28
+      Riyadh, "no respect") without ending BUY_ONLY -- an AIRB touch alone
+      doesn't flip control.
 
-    NONE from there through the end of the dataset -- no further RB gates
-    built yet (explicitly out of scope for this delivery; only gate 1 was
-    asked for)."""
+    Gate 3 -- SELL_ONLY, no anchor zone, 2026-02-23 -> 03-03 17:24 Riyadh:
+      Ends at the SAME instant gate 2 ends: the week-of-2026-02-16's own
+      close (2026-02-23 01:00 Riyadh) is 1.17921, which is BELOW the
+      PRIOR week's LOW (2026-02-09 week, low=1.18086) -- a structural
+      break-of-structure close, not a zone-breach close (distinct rule
+      from gate 1's SS14 check). This is read as: AIRB #3 failed to hold,
+      trend flipped bearish, and BUY_ONLY ends. There is no live SELL RB
+      to anchor a SELL_ONLY campaign (RB2 already died in gate 1), so
+      control goes trend-following SELL_ONLY with no parent zone.
+
+    Gate 4 -- BOTH, 2026-03-03 17:24 -> 17:26 Riyadh (2 minutes):
+      RB1 (W ORB #1, BUY, zb=1.15692/zt=1.15797) is impacted at 2026-03-03
+      17:24 Riyadh, opening BOTH directions per RB1's buy side alongside
+      the ongoing sell thesis.
+
+    Gate 5 -- SELL_ONLY, no anchor zone, resumes 2026-03-03 17:26 Riyadh:
+      Just 2 minutes after RB1's impact, price breaks below RB1's own
+      floor (1.15692 -- RB1's own swing-low anchor, confirmed week of
+      2026-01-19) at 2026-03-03 17:26 Riyadh (low 1.15667) -- RB1's
+      protecting swing low is violated, snapping control back to
+      SELL_ONLY.
+
+      Stops at 2026-03-23 14:06 Riyadh: the first real-time minute price
+      exceeds the PRIOR week's high (week-of-2026-03-16, high=1.16159) --
+      high=1.1619 at that minute. User-confirmed as the actual rule (NOT
+      the later, formally-confirmed engine SWING HIGH at 1.16394/week of
+      2026-03-30, which lags this real-time break by a week).
+
+    NONE from 2026-03-23 14:06 Riyadh through the end of the dataset --
+    next gate not yet given (out of scope for this delivery)."""
     rtz = ZoneInfo("Asia/Riyadh")
 
     def rt(y: int, mo: int, d: int, h: int, mi: int) -> datetime:
@@ -122,7 +151,11 @@ def build_manual_rb_gates() -> List[Tuple[datetime, datetime, str, str, str]]:
 
     return [
         (rt(2026, 2, 9, 15, 7), rt(2026, 2, 16, 1, 0), "SELL_ONLY", "2", ""),
-        (rt(2026, 2, 16, 1, 0), rt(2026, 9, 11, 22, 5), "NONE", "", ""),
+        (rt(2026, 2, 16, 1, 0), rt(2026, 2, 23, 1, 0), "BUY_ONLY", "", "3"),
+        (rt(2026, 2, 23, 1, 0), rt(2026, 3, 3, 17, 24), "SELL_ONLY", "", ""),
+        (rt(2026, 3, 3, 17, 24), rt(2026, 3, 3, 17, 26), "BOTH", "", "1"),
+        (rt(2026, 3, 3, 17, 26), rt(2026, 3, 23, 14, 6), "SELL_ONLY", "", ""),
+        (rt(2026, 3, 23, 14, 6), rt(2026, 9, 11, 22, 5), "NONE", "", ""),
     ]
 
 
@@ -313,13 +346,15 @@ def main() -> int:
         wr.writeheader()
         wr.writerows(rows)
 
-    # Gate 1's OWN bounds (not gates[-1][1], which would be the open-ended
-    # trailing NONE's end -- almost the whole dataset). Authorization
-    # itself was already correct regardless (permits() only matches a
-    # zone impacted inside an actual SELL_ONLY/BUY_ONLY/BOTH gate), but
-    # this window also scopes which H4 swing/MSS labels get shown, which
-    # must stay to gate 1's real span.
-    window_start, window_end = gates[0][0], gates[0][1]
+    # Span of the currently hand-verified/narrated gates only -- NOT
+    # gates[-1][1], which is the open-ended trailing NONE's end (almost
+    # the whole dataset). Authorization itself is already correct
+    # regardless (permits() only matches a zone impacted inside an actual
+    # SELL_ONLY/BUY_ONLY/BOTH gate), but this window also scopes which H4
+    # swing/MSS labels get shown, which must stay to the real, verified
+    # span -- the last gate before the final trailing NONE marks that end.
+    window_start = gates[0][0]
+    window_end = gates[-1][0] if gates[-1][2] == "NONE" else gates[-1][1]
     focused_drawn = [d for d in drawn if window_start <= d[0].impact_time < window_end]
     h4_extra_lines = build_h4_rb_extra_lines(h4_engine, h4_bars, focused_drawn, args.h4_pine_rbs, display_tz,
                                               window_start, window_end, args.h4_pine_labels)
@@ -364,8 +399,8 @@ def main() -> int:
     print("  full_rb_viewer.pine   (Weekly RB layer + 4H RB layer/table + 5m BSO entry lines)")
     print("  h4_rb_ledger.csv, five_bso_rb_ledger.csv")
     print("  weekly_rb_ledger.csv, weekly_rb_swings.csv, weekly_rb_report.txt")
-    print(f"Gate 1 window: {window_start} -> {window_end} (SELL_ONLY, RB zone #2)")
-    print(f"{len(h4_bars)} 4H bars, {len(h4_engine.zones)} H4 RBs computed, {len(drawn)} authorized, {len(focused_drawn)} shown (gate 1 window).")
+    print(f"Known gates window: {window_start} -> {window_end} ({len(gates) - 1} gates, gate 1 SELL_ONLY RB zone #2)")
+    print(f"{len(h4_bars)} 4H bars, {len(h4_engine.zones)} H4 RBs computed, {len(drawn)} authorized, {len(focused_drawn)} shown (known gates window).")
     bso_stages: Dict[str, int] = {}
     for _z, _it, _parent_id, _reason, res in bso_results:
         bso_stages[res.get("stage")] = bso_stages.get(res.get("stage"), 0) + 1
