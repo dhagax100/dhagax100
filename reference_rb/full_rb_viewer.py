@@ -136,21 +136,30 @@ def build_manual_rb_gates() -> List[Tuple[datetime, datetime, str, str, str]]:
       a CONSEQUENCE of the same real-time move, not the trigger: the
       trigger already fired days earlier via the wick-exceedance rule.)
       Read as: AIRB #3 failed to hold, trend flipped bearish, BUY_ONLY
-      ends. There is no live SELL RB to anchor a SELL_ONLY campaign (RB2
-      already died in gate 1), so control goes trend-following SELL_ONLY
-      with no parent zone.
+      ends. RB2 (the old SELL parent) already died in gate 1, but the
+      "parent" isn't blank -- parent-in-charge is the LAST RB zone on the
+      current bias side, whether or not it has been impacted yet (user
+      rule, 2026-09-23: "get the RB in charge from the last RB that has
+      the same direction as our bias"). The last SELL zone that exists by
+      2026-02-19 16:01 is zone #4 (Weekly ORB, bearish, top=1.19283,
+      bottom=1.18722, confirmed/promoted at this exact same MSS-down
+      minute) -- so zone #4, not RB2, is gate 3's sell parent.
 
     Gate 4 -- BOTH, 2026-03-03 17:24 -> 17:26 Riyadh (2 minutes):
       RB1 (W ORB #1, BUY, zb=1.15692/zt=1.15797) is impacted at 2026-03-03
       17:24 Riyadh, opening BOTH directions per RB1's buy side alongside
-      the ongoing sell thesis.
+      the ongoing sell thesis (sell side still in charge of zone #4, per
+      the same last-RB-on-that-side rule).
 
-    Gate 5 -- SELL_ONLY, no anchor zone, resumes 2026-03-03 17:26 Riyadh:
+    Gate 5 -- SELL_ONLY, resumes 2026-03-03 17:26 Riyadh:
       Just 2 minutes after RB1's impact, price breaks below RB1's own
       floor (1.15692 -- RB1's own swing-low anchor, confirmed week of
       2026-01-19) at 2026-03-03 17:26 Riyadh (low 1.15667) -- RB1's
       protecting swing low is violated, snapping control back to
-      SELL_ONLY.
+      SELL_ONLY. Zone #4 is still the last (and only) SELL zone in
+      existence through the end of this gate -- no newer SELL zone is
+      born until zone #6 (origin week 2026-03-23, well after this gate
+      ends) -- so zone #4 stays the sell parent here too.
 
       Stops at 2026-03-23 14:06 Riyadh: the first real-time minute price
       exceeds the PRIOR week's high (week-of-2026-03-16, high=1.16159) --
@@ -168,9 +177,9 @@ def build_manual_rb_gates() -> List[Tuple[datetime, datetime, str, str, str]]:
     return [
         (rt(2026, 2, 9, 15, 7), rt(2026, 2, 16, 1, 0), "SELL_ONLY", "2", ""),
         (rt(2026, 2, 16, 1, 0), rt(2026, 2, 19, 16, 1), "BUY_ONLY", "", "3"),
-        (rt(2026, 2, 19, 16, 1), rt(2026, 3, 3, 17, 24), "SELL_ONLY", "", ""),
-        (rt(2026, 3, 3, 17, 24), rt(2026, 3, 3, 17, 26), "BOTH", "", "1"),
-        (rt(2026, 3, 3, 17, 26), rt(2026, 3, 23, 14, 6), "SELL_ONLY", "", ""),
+        (rt(2026, 2, 19, 16, 1), rt(2026, 3, 3, 17, 24), "SELL_ONLY", "4", ""),
+        (rt(2026, 3, 3, 17, 24), rt(2026, 3, 3, 17, 26), "BOTH", "4", "1"),
+        (rt(2026, 3, 3, 17, 26), rt(2026, 3, 23, 14, 6), "SELL_ONLY", "4", ""),
         (rt(2026, 3, 23, 14, 6), rt(2026, 9, 11, 22, 5), "NONE", "", ""),
     ]
 

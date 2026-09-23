@@ -39,6 +39,29 @@ boundary describable as "trend flips" or "MSS" must be checked for the
 first wick (not close) breach of the relevant protecting swing, not a
 candle-close event on any timeframe.
 
+## Real bug caught by the user from the H4 table (2026-09-23)
+
+H4 RB #143 (SELL, gate 5, 2026-03-23) showed `Parent W: -` (blank). User
+clarified: the parent shown for a control gate with no anchor-impact zone
+should never be blank -- it's **the last RB zone on the current bias side**,
+whether or not that zone has itself been impacted yet. "If RB2 was the last
+selling RB, then in this 4h sell that RB2 is in charge." Checked
+`weekly_rb_ledger.csv`: by 2026-02-19 16:01 Riyadh (gate 3's start), zone #4
+(Weekly ORB, SELL, zb=1.18722/zt=1.19283) had just been confirmed at that
+exact same MSS-down minute -- the newest SELL zone in existence, superseding
+RB2 (dead since gate 1). No newer SELL zone is born until zone #6 (origin
+week 2026-03-23, after gate 5 ends), so zone #4 stays the sell parent
+through gates 3, 4 (sell side), and 5.
+
+`[RB-NEW]` **Parent-in-charge rule**: a control gate's displayed parent is
+the most recently created RB zone sharing that gate's bias direction, not
+necessarily the zone whose impact/MSS event opened the gate. An "anchor
+zone" gate (one triggered by a specific zone's impact, e.g. gate 1/RB2 or
+gate 4's BUY/RB1) still uses that triggering zone directly; a "no anchor"
+gate (triggered by a structural/MSS event with no zone impact, e.g. gates
+3/5) must look up the last same-direction zone instead of leaving the
+parent blank.
+
 ## Carried over from OB (assumed true until RB data contradicts it)
 
 - `[OB]` **Weekly-close body-breach kills a POI.** If the containing
