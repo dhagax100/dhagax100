@@ -167,8 +167,35 @@ def build_manual_rb_gates() -> List[Tuple[datetime, datetime, str, str, str]]:
       the later, formally-confirmed engine SWING HIGH at 1.16394/week of
       2026-03-30, which lags this real-time break by a week).
 
-    NONE from 2026-03-23 14:06 Riyadh through the end of the dataset --
-    next gate not yet given (out of scope for this delivery)."""
+    NONE, 2026-03-23 14:06 -> 03-30 12:17 Riyadh:
+      No live SELL RB anchor yet (zone #6 doesn't exist until the swing high
+      that creates it confirms). Confirmed against the fixed
+      weekly_rb_swings.csv real-minute export (2026-09-24 fix): the
+      week-of-2026-03-23 swing high (1.16394) confirms at the exact M1
+      minute 2026-03-30 12:17 Riyadh -- not the week-open label previously
+      (wrongly) shown for it.
+
+    Gate 6a -- SELL_ONLY, 2026-03-30 12:17 -> 04-08 01:32 Riyadh:
+      Resumes selling the moment that swing high confirms real-time. Zone
+      #6 (Weekly AIRB, SELL, zb=1.15348/zt=1.16394) is created at this same
+      minute and is the new last (most recent) SELL zone in existence, so
+      it's the sell parent -- same "last RB on the current bias side" rule
+      already applied to zone #4 in gates 3-5.
+
+    Gate 6b -- SELL_ONLY, 2026-04-08 01:32 -> 01:36 Riyadh (4 minutes):
+      Zone #6 (still AIRB, not yet promoted) is impacted at 01:32 (first M1
+      high, 1.16298, crossing its own zb 1.15348) -- confirmed against raw
+      M1 data. Control stays SELL_ONLY (an AIRB touch alone doesn't flip
+      control, same as zone #3 in gate 2), split into its own gate purely
+      to mark the impact boundary in the record.
+
+    NONE from 2026-04-08 01:36 Riyadh:
+      4 minutes after impact, price wicks above zone #6's own top -- the
+      exact same swing high (1.16394) that created it -- at 01:36 (M1 high
+      1.16402). That's the real-time MSS_UP exceedance (confirmed against
+      the fixed weekly_rb_swings.csv export, same minute). Zone #6's own
+      supportive swing is taken, stopping the sell campaign. Next gate not
+      yet given -- out of scope for this delivery."""
     rtz = ZoneInfo("Asia/Riyadh")
 
     def rt(y: int, mo: int, d: int, h: int, mi: int) -> datetime:
@@ -180,7 +207,10 @@ def build_manual_rb_gates() -> List[Tuple[datetime, datetime, str, str, str]]:
         (rt(2026, 2, 19, 16, 1), rt(2026, 3, 3, 17, 24), "SELL_ONLY", "4", ""),
         (rt(2026, 3, 3, 17, 24), rt(2026, 3, 3, 17, 26), "BOTH", "4", "1"),
         (rt(2026, 3, 3, 17, 26), rt(2026, 3, 23, 14, 6), "SELL_ONLY", "4", ""),
-        (rt(2026, 3, 23, 14, 6), rt(2026, 9, 11, 22, 5), "NONE", "", ""),
+        (rt(2026, 3, 23, 14, 6), rt(2026, 3, 30, 12, 17), "NONE", "", ""),
+        (rt(2026, 3, 30, 12, 17), rt(2026, 4, 8, 1, 32), "SELL_ONLY", "6", ""),
+        (rt(2026, 4, 8, 1, 32), rt(2026, 4, 8, 1, 36), "SELL_ONLY", "6", ""),
+        (rt(2026, 4, 8, 1, 36), rt(2026, 9, 11, 22, 5), "NONE", "", ""),
     ]
 
 
