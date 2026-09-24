@@ -310,7 +310,7 @@ def pack_array(var_name: str, kind: str, values: list) -> List[str]:
         f"var array<{kind}> {var_name} = array.new<{kind}>()",
         "if barstate.isfirst",
         f"    for p in str.split(\"{esc}\", \"{_PACK_SEP}\")",
-        f"        array.push({var_name}, p == \"{_PACK_NA}\" ? na : {conv})",
+        f"        array.push({var_name}, p == \"{_PACK_NA}\" ? {kind}(na) : {conv})",
     ]
 
 

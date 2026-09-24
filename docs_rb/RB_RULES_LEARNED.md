@@ -173,6 +173,24 @@ Note: `reference/weekly_ob_generator.py`'s own `weekly_ob_swings.csv`
 export (OB project, lines ~810-813) has the identical defect, unfixed --
 flagged, not touched, since that engine is marked locked/complete.
 
+## CE10123 in pack_array's na cast (2026-09-24)
+
+After the CE10295 rewrite, real compile error on the actual chart:
+**CE10123, "Cannot call operator ?: with argument expr1='na'. An argument
+of simple na type was used but a series bool type was expected."** --
+Pine's ternary requires both branches to share not just a type but a type
+QUALIFIER (simple/series); a bare `na` defaults to "simple", which
+conflicts with a runtime-computed "series bool" (`p == "true"`) on the
+other branch. Hit on both bool fields (`h4RbBull`, `h4RbStructLow`); int/
+float/string happened not to trip the same qualifier check in this case,
+but the fix needs to be uniform, not per-kind-as-needed.
+
+**Fixed**: `pack_array`'s na branch now casts explicitly to the target
+type (`int(na)`, `float(na)`, `bool(na)`, `string(na)`) instead of bare
+`na`, for every kind. This is Pine's own documented idiom for producing a
+correctly-qualified na. Verified in the regenerated file: every packed
+array's na branch now reads e.g. `p == "§NA§" ? bool(na) : p == "true"`.
+
 ## CE10295, actually fixed this time (2026-09-24)
 
 User, after the epoch-int fix still didn't hold: "well, you aren't
