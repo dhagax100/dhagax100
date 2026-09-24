@@ -173,6 +173,46 @@ Note: `reference/weekly_ob_generator.py`'s own `weekly_ob_swings.csv`
 export (OB project, lines ~810-813) has the identical defect, unfixed --
 flagged, not touched, since that engine is marked locked/complete.
 
+## CE10295 for a third time -- the Weekly layer was never converted (2026-09-24)
+
+User: "this is your last chance to fix this." Fair -- the CE10295 fix had
+only been applied to the H4 RB and 5m BSO layers (`full_rb_viewer.py`,
+`full_viewer.py`); `weekly_rb_generator.py`'s own `write_rb_pine()` --
+the Weekly layer, drawn first in the same combined script -- was still
+using the old `array.from(...)` for every one of its ~36 fields
+(structX/Y/Txt/Col/Low, rbLeft/Top/Bottom/Right/Col/Rank/Audit/HasLine,
+the per-zone named `impact_x_<id>` watchers, and BOTH the table_cap-
+limited `t_*` fields AND the fully uncapped `i_*` "inspect any zone"
+audit fields covering every zone ever created). Small in isolation (~18
+zones), but combined with the two already-fixed layers this was enough
+to push the WHOLE script over CE10295 again -- exactly the earlier lesson
+("array-packing alone doesn't scale, only the string+split technique
+does") not yet applied everywhere it needed to be.
+
+**Fixed**: `pack_array()` duplicated into `weekly_rb_generator.py` itself
+(same technique as `full_viewer.py`'s copy -- this file doesn't import
+`full_viewer`, so a second small copy, matching the existing
+`pine_epoch` duplication pattern already in place). Every field in
+`write_rb_pine()` converted, including colors: `array<color>` isn't
+`str.tonumber`-able, so colors now pack as one-letter codes
+("R"/"G"/"O"/"B"/"K") and get mapped back to the real `color.*` value
+with a ternary at draw time (`colour_ternary()` helper). The per-zone
+`impact_x_<id>` named-watcher pattern (up to 3 lines x every shown zone)
+also got the same consolidation the H4 layer already had: one shared
+`array<int> rbImpactX` + one per-bar loop, instead of one named var +
+one watcher block per zone.
+
+Verified: **zero remaining `array.from(` calls anywhere in the generated
+file** (checked directly, not just believed) -- 0 in the Weekly layer, 0
+in the H4 layer, 0 in the 5m BSO layer. File is 480 lines (up slightly
+from 394 since every field is now its own small if-block instead of one
+compact array.from line, but every one of those blocks costs Pine the
+same handful of AST nodes regardless of how many rows/zones/swings it
+holds). 122 H4 RBs, 152 5m BSO rows, same computed facts as before --
+this was rendering-only, top to bottom. This should not recur regardless
+of how much further the gates list grows, since NOTHING in the generated
+script scales with row count anymore.
+
 ## CE10123 in pack_array's na cast (2026-09-24)
 
 After the CE10295 rewrite, real compile error on the actual chart:

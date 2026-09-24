@@ -561,6 +561,59 @@ def pine_epoch(t: datetime) -> str:
     return str(int(t.astimezone(timezone.utc).timestamp() * 1000))
 
 
+_PACK_NA = "§NA§"  # printable sentinel, never collides with real data
+_PACK_SEP = "|"  # printable delimiter -- none of our values ever contain "|"
+
+
+def pack_array(var_name: str, kind: str, values: list) -> List[str]:
+    """The real, scale-invariant CE10295 fix (2026-09-24) -- duplicated
+    from full_viewer.py's own pack_array (see its docstring for the full
+    reasoning): array.from(...) still costs Pine ~1 AST node per element
+    no matter how cheap each element is, so it scales with row count
+    regardless of epoch-int savings. This packs the whole column into ONE
+    Pine string literal (1 node, any length) and decodes it at runtime via
+    str.split() inside a single `if barstate.isfirst` loop (O(1) compile
+    cost, any row count). `values`: raw Python int/float/str/bool, None
+    means na. `kind`: "int"|"float"|"string"|"bool". na branch is cast to
+    the target type (`int(na)` etc) -- Pine's ternary requires matching
+    type QUALIFIERS, and a bare `na` defaults to "simple" vs. the other
+    branch's "series", which is CE10123 otherwise (fixed 2026-09-24)."""
+    if not values:
+        return [f"var array<{kind}> {var_name} = array.new<{kind}>()"]
+
+    def fmt(v):
+        if v is None:
+            return _PACK_NA
+        if kind == "bool":
+            return "true" if v else "false"
+        return str(v)
+
+    packed = _PACK_SEP.join(fmt(v) for v in values)
+    esc = packed.replace("\\", "\\\\").replace('"', '\\"')
+    conv = {
+        "string": "p",
+        "int": "int(str.tonumber(p))",
+        "float": "str.tonumber(p)",
+        "bool": 'p == "true"',
+    }[kind]
+    return [
+        f"var array<{kind}> {var_name} = array.new<{kind}>()",
+        "if barstate.isfirst",
+        f"    for p in str.split(\"{esc}\", \"{_PACK_SEP}\")",
+        f"        array.push({var_name}, p == \"{_PACK_NA}\" ? {kind}(na) : {conv})",
+    ]
+
+
+_COLOUR_CODE = {"color.red": "R", "color.green": "G", "color.orange": "O", "color.blue": "B", "color.black": "K"}
+
+
+def colour_ternary(get_expr: str) -> str:
+    """Maps a packed colour-code string (see _COLOUR_CODE) back to a real
+    Pine `color.*` value at draw time, e.g. `array.get(rbColCode, i)`."""
+    return (f'{get_expr} == "R" ? color.red : {get_expr} == "G" ? color.green : '
+            f'{get_expr} == "O" ? color.orange : {get_expr} == "B" ? color.blue : color.black')
+
+
 def write_rb_pine(base: Path, engine: WeeklyRBEngine, label_cap: int, rb_cap: int, table_cap: int,
                    display_zone: ZoneInfo, extra_lines: Optional[List[str]] = None, out_name: str = "weekly_rb_viewer.pine") -> None:
     """Array-packed from the start (see the CE10295/CE10205/CE10013 lesson
@@ -576,9 +629,6 @@ def write_rb_pine(base: Path, engine: WeeklyRBEngine, label_cap: int, rb_cap: in
     shown = engine.zones[-rb_cap:]
     table_zones = engine.zones[-table_cap:][::-1]
     max_rb_offset = max(1, len(engine.zones))
-
-    def arr(kind: str, values: List[str]) -> str:
-        return f"array.from({', '.join(values)})" if values else f"array.new<{kind}>()"
 
     lines = [
         "//@version=6",
@@ -606,16 +656,16 @@ def write_rb_pine(base: Path, engine: WeeklyRBEngine, label_cap: int, rb_cap: in
 
     struct_x, struct_y, struct_txt, struct_col, struct_low = [], [], [], [], []
     for e in sh:
-        struct_x.append(pine_epoch(engine.w[e.swing].start)); struct_y.append(f"{e.price:.5f}")
-        struct_txt.append("\"▲\""); struct_col.append("color.blue"); struct_low.append("false")
+        struct_x.append(pine_epoch(engine.w[e.swing].start)); struct_y.append(e.price)
+        struct_txt.append("▲"); struct_col.append("B"); struct_low.append(False)
     for e in sl:
-        struct_x.append(pine_epoch(engine.w[e.swing].start)); struct_y.append(f"{e.price:.5f}")
-        struct_txt.append("\"▼\""); struct_col.append("color.black"); struct_low.append("true")
+        struct_x.append(pine_epoch(engine.w[e.swing].start)); struct_y.append(e.price)
+        struct_txt.append("▼"); struct_col.append("K"); struct_low.append(True)
     for m in ms:
         struct_x.append(pine_epoch(engine.w[m.broken].start))
-        struct_y.append(f"{m.price:.5f}")
-        struct_txt.append("\"✕\""); struct_col.append("color.blue" if m.up else "color.black")
-        struct_low.append("false" if m.up else "true")
+        struct_y.append(m.price)
+        struct_txt.append("✕"); struct_col.append("B" if m.up else "K")
+        struct_low.append(not m.up)
 
     # Resolve each static M1 impact into the opening time of whichever
     # Weekly bar actually CONTAINS it -- exactly OB's impact_x_<id> watcher
@@ -624,42 +674,36 @@ def write_rb_pine(base: Path, engine: WeeklyRBEngine, label_cap: int, rb_cap: in
     # box.new/line.new's xloc.bar_time lets Pine snap it to the NEXT bar's
     # open instead of the bar the impact actually happened in -- confirmed
     # by the user on the real chart (box/impact-line stopping one candle
-    # late). `impact_x_<id>` is a `var int`, updated once time actually
-    # reaches the impact stamp's own containing bar, so it always resolves
-    # to that bar's own open -- never a lookahead, never the next bar.
+    # late). Was one named `var int impact_x_<id>` + its own 3-line watcher
+    # PER ZONE (up to 3n top-level statements) -- replaced 2026-09-24 with
+    # ONE shared `array<int> rbImpactX`, updated by a single per-bar loop,
+    # same "latch to real bar time, never a lookahead" behavior, O(1) cost.
     right_edge = engine.m[-1].t + timedelta(days=365)
-    impact_vars: Dict[int, str] = {}
-    impact_watchers: List[str] = []
-    for z in shown:
-        if z.impact_time is not None:
-            name = f"impact_x_{z.id}"
-            impact_vars[z.id] = name
-            stamp = pine_epoch(z.impact_time)
-            impact_watchers += [f"var int {name} = na", f"if time <= {stamp} and {stamp} < time_close", f"    {name} := time"]
-
-    rb_left, rb_top, rb_bottom, rb_right_expr, rb_col, rb_rank, rb_audit, rb_has_line = [], [], [], [], [], [], [], []
+    rb_left, rb_top, rb_bottom, rb_fallback_right, rb_impact_stamp, rb_has_impact, rb_col, rb_rank, rb_audit, rb_has_line = ([] for _ in range(10))
     for z in shown:
         wk = engine.w[z.candle]
         fallback_right = z.impact_time or (engine.w[z.stop].start if 0 <= z.stop < len(engine.w) else right_edge)
-        right = f"(na({impact_vars[z.id]}) ? {pine_epoch(fallback_right)} : {impact_vars[z.id]})" if z.impact_time is not None else pine_epoch(fallback_right)
         rank_from_last = len(engine.zones) - z.id + 1
-        rb_left.append(pine_epoch(wk.start)); rb_top.append(f"{z.zt:.5f}"); rb_bottom.append(f"{z.zb:.5f}")
-        rb_right_expr.append(right); rb_col.append(rb_colour(z)); rb_rank.append(str(rank_from_last))
-        rb_audit.append(f"\"#{z.id} {status(z)} {'BUY' if z.bullish else 'SELL'}\"")
-        rb_has_line.append("true" if z.impact_time is not None else "false")
+        rb_left.append(pine_epoch(wk.start)); rb_top.append(z.zt); rb_bottom.append(z.zb)
+        rb_fallback_right.append(pine_epoch(fallback_right))
+        rb_impact_stamp.append(pine_epoch(z.impact_time) if z.impact_time is not None else None)
+        rb_has_impact.append(z.impact_time is not None)
+        rb_col.append(_COLOUR_CODE[rb_colour(z)]); rb_rank.append(rank_from_last)
+        rb_audit.append(f"#{z.id} {status(z)} {'BUY' if z.bullish else 'SELL'}")
+        rb_has_line.append(z.impact_time is not None)
 
     t_id, t_type, t_side, t_bottom, t_top, t_origin, t_trigger, t_eligible, t_impact, t_status, t_bg = ([] for _ in range(11))
     for z in table_zones:
         wk = engine.w[z.candle]
-        t_id.append(f"\"#{z.id}\""); t_type.append(f"\"{status(z)}\"")
-        t_side.append(f"\"{'BUY' if z.bullish else 'SELL'}\"")
-        t_bottom.append(f"\"{z.zb:.5f}\""); t_top.append(f"\"{z.zt:.5f}\"")
-        t_origin.append(f"\"{wob.pine_text(wob.display_iso(wk.start, display_zone))}\"")
-        t_trigger.append(f"\"{wob.pine_text(wob.display_iso(z.trigger_time, display_zone))}\"")
-        t_eligible.append(f"\"{wob.pine_text(wob.display_iso(z.eligible_time, display_zone))}\"")
-        t_impact.append(f"\"{wob.pine_text(wob.display_iso(z.impact_time, display_zone))}\"")
-        t_status.append(f"\"{status(z)}\"")
-        t_bg.append(f"color.new({rb_colour(z)}, 80)")
+        t_id.append(f"#{z.id}"); t_type.append(status(z))
+        t_side.append('BUY' if z.bullish else 'SELL')
+        t_bottom.append(f"{z.zb:.5f}"); t_top.append(f"{z.zt:.5f}")
+        t_origin.append(wob.display_iso(wk.start, display_zone))
+        t_trigger.append(wob.display_iso(z.trigger_time, display_zone))
+        t_eligible.append(wob.display_iso(z.eligible_time, display_zone))
+        t_impact.append(wob.display_iso(z.impact_time, display_zone))
+        t_status.append(status(z))
+        t_bg.append(_COLOUR_CODE[rb_colour(z)])
 
     # Full-zone inspection set (every zone ever created, not just the
     # table_cap-truncated table_zones above) -- mirrors OB's own i_*
@@ -669,65 +713,75 @@ def write_rb_pine(base: Path, engine: WeeklyRBEngine, label_cap: int, rb_cap: in
     for z in engine.zones[::-1]:
         rank_from_last = len(engine.zones) - z.id + 1
         wk = engine.w[z.candle]
-        i_id.append(f"\"#{z.id}\""); i_type.append(f"\"{status(z)}\"")
-        i_side.append(f"\"{'BUY' if z.bullish else 'SELL'}\"")
-        i_bottom.append(f"\"{z.zb:.5f}\""); i_top.append(f"\"{z.zt:.5f}\"")
-        i_origin.append(f"\"{wob.pine_text(wob.display_iso(wk.start, display_zone))}\"")
-        i_trigger.append(f"\"{wob.pine_text(wob.display_iso(z.trigger_time, display_zone))}\"")
-        i_eligible.append(f"\"{wob.pine_text(wob.display_iso(z.eligible_time, display_zone))}\"")
-        i_impact.append(f"\"{wob.pine_text(wob.display_iso(z.impact_time, display_zone))}\"")
-        i_status.append(f"\"{status(z)}\"")
-        i_bg.append(f"color.new({rb_colour(z)}, 80)"); i_rank.append(str(rank_from_last))
+        i_id.append(f"#{z.id}"); i_type.append(status(z))
+        i_side.append('BUY' if z.bullish else 'SELL')
+        i_bottom.append(f"{z.zb:.5f}"); i_top.append(f"{z.zt:.5f}")
+        i_origin.append(wob.display_iso(wk.start, display_zone))
+        i_trigger.append(wob.display_iso(z.trigger_time, display_zone))
+        i_eligible.append(wob.display_iso(z.eligible_time, display_zone))
+        i_impact.append(wob.display_iso(z.impact_time, display_zone))
+        i_status.append(status(z))
+        i_bg.append(_COLOUR_CODE[rb_colour(z)]); i_rank.append(rank_from_last)
 
     lines += [
-        f"var array<int> structX = {arr('int', struct_x)}",
-        f"var array<float> structY = {arr('float', struct_y)}",
-        f"var array<string> structTxt = {arr('string', struct_txt)}",
-        f"var array<color> structCol = {arr('color', struct_col)}",
-        f"var array<bool> structLow = {arr('bool', struct_low)}",
-        f"var array<int> rbLeft = {arr('int', rb_left)}",
-        f"var array<float> rbTop = {arr('float', rb_top)}",
-        f"var array<float> rbBottom = {arr('float', rb_bottom)}",
-        f"var array<color> rbCol = {arr('color', rb_col)}",
-        f"var array<int> rbRank = {arr('int', rb_rank)}",
-        f"var array<string> rbAudit = {arr('string', rb_audit)}",
-        f"var array<bool> rbHasLine = {arr('bool', rb_has_line)}",
-        f"var array<string> tId = {arr('string', t_id)}",
-        f"var array<string> tType = {arr('string', t_type)}",
-        f"var array<string> tSide = {arr('string', t_side)}",
-        f"var array<string> tBottom = {arr('string', t_bottom)}",
-        f"var array<string> tTop = {arr('string', t_top)}",
-        f"var array<string> tOrigin = {arr('string', t_origin)}",
-        f"var array<string> tTrigger = {arr('string', t_trigger)}",
-        f"var array<string> tEligible = {arr('string', t_eligible)}",
-        f"var array<string> tImpact = {arr('string', t_impact)}",
-        f"var array<string> tStatus = {arr('string', t_status)}",
-        f"var array<color> tBg = {arr('color', t_bg)}",
-        f"var array<string> iId = {arr('string', i_id)}",
-        f"var array<string> iType = {arr('string', i_type)}",
-        f"var array<string> iSide = {arr('string', i_side)}",
-        f"var array<string> iBottom = {arr('string', i_bottom)}",
-        f"var array<string> iTop = {arr('string', i_top)}",
-        f"var array<string> iOrigin = {arr('string', i_origin)}",
-        f"var array<string> iTrigger = {arr('string', i_trigger)}",
-        f"var array<string> iEligible = {arr('string', i_eligible)}",
-        f"var array<string> iImpact = {arr('string', i_impact)}",
-        f"var array<string> iStatus = {arr('string', i_status)}",
-        f"var array<color> iBg = {arr('color', i_bg)}",
-        f"var array<int> iRank = {arr('int', i_rank)}",
-        *impact_watchers,
+        *pack_array("structX", "int", struct_x),
+        *pack_array("structY", "float", struct_y),
+        *pack_array("structTxt", "string", struct_txt),
+        *pack_array("structColCode", "string", struct_col),
+        *pack_array("structLow", "bool", struct_low),
+        *pack_array("rbLeft", "int", rb_left),
+        *pack_array("rbTop", "float", rb_top),
+        *pack_array("rbBottom", "float", rb_bottom),
+        *pack_array("rbFallbackRight", "int", rb_fallback_right),
+        *pack_array("rbImpactStamp", "int", rb_impact_stamp),
+        *pack_array("rbHasImpact", "bool", rb_has_impact),
+        *pack_array("rbColCode", "string", rb_col),
+        *pack_array("rbRank", "int", rb_rank),
+        *pack_array("rbAudit", "string", rb_audit),
+        *pack_array("rbHasLine", "bool", rb_has_line),
+        *pack_array("tId", "string", t_id),
+        *pack_array("tType", "string", t_type),
+        *pack_array("tSide", "string", t_side),
+        *pack_array("tBottom", "string", t_bottom),
+        *pack_array("tTop", "string", t_top),
+        *pack_array("tOrigin", "string", t_origin),
+        *pack_array("tTrigger", "string", t_trigger),
+        *pack_array("tEligible", "string", t_eligible),
+        *pack_array("tImpact", "string", t_impact),
+        *pack_array("tStatus", "string", t_status),
+        *pack_array("tBgCode", "string", t_bg),
+        *pack_array("iId", "string", i_id),
+        *pack_array("iType", "string", i_type),
+        *pack_array("iSide", "string", i_side),
+        *pack_array("iBottom", "string", i_bottom),
+        *pack_array("iTop", "string", i_top),
+        *pack_array("iOrigin", "string", i_origin),
+        *pack_array("iTrigger", "string", i_trigger),
+        *pack_array("iEligible", "string", i_eligible),
+        *pack_array("iImpact", "string", i_impact),
+        *pack_array("iStatus", "string", i_status),
+        *pack_array("iBgCode", "string", i_bg),
+        *pack_array("iRank", "int", i_rank),
+        f"var array<int> rbImpactX = array.new<int>({len(shown)}, na)",
+        "for hi = 0 to array.size(rbImpactStamp) - 1",
+        "    if array.get(rbHasImpact, hi)",
+        "        hiStamp = array.get(rbImpactStamp, hi)",
+        "        if na(array.get(rbImpactX, hi)) and time <= hiStamp and hiStamp < time_close",
+        "            array.set(rbImpactX, hi, time)",
         "if barstate.islast",
         "    if onWeekly",
         "        for i = 0 to array.size(structX) - 1",
+        f"            structCol = {colour_ternary('array.get(structColCode, i)')}",
         "            structYY = array.get(structLow, i) ? array.get(structY, i) - lowGap : array.get(structY, i)",
-        "            label.new(array.get(structX, i), structYY, array.get(structTxt, i), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=array.get(structCol, i), size=size.small)",
+        "            label.new(array.get(structX, i), structYY, array.get(structTxt, i), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=structCol, size=size.small)",
         "    if onWeekly or onH4 or on1m or onFive",
-        f"        array<int> rbRight = {arr('int', rb_right_expr)}",
         "        for i = 0 to array.size(rbLeft) - 1",
         "            if not inspectOneRB or rbFromLast == array.get(rbRank, i)",
-        "                box.new(array.get(rbLeft, i), array.get(rbTop, i), array.get(rbRight, i), array.get(rbBottom, i), border_color=array.get(rbCol, i), border_width=1, border_style=line.style_dashed, bgcolor=na, xloc=xloc.bar_time)",
+        "                rbRight = array.get(rbHasImpact, i) and not na(array.get(rbImpactX, i)) ? array.get(rbImpactX, i) : array.get(rbFallbackRight, i)",
+        f"                rbCol = {colour_ternary('array.get(rbColCode, i)')}",
+        "                box.new(array.get(rbLeft, i), array.get(rbTop, i), rbRight, array.get(rbBottom, i), border_color=rbCol, border_width=1, border_style=line.style_dashed, bgcolor=na, xloc=xloc.bar_time)",
         "                if array.get(rbHasLine, i)",
-        "                    line.new(array.get(rbRight, i), array.get(rbBottom, i), array.get(rbRight, i), array.get(rbTop, i), xloc=xloc.bar_time, extend=extend.both, color=color.new(color.red, 30), width=1)",
+        "                    line.new(rbRight, array.get(rbBottom, i), rbRight, array.get(rbTop, i), xloc=xloc.bar_time, extend=extend.both, color=color.new(color.red, 30), width=1)",
         "    if onWeekly",
         "        table.clear(ledger, 0, 0, 9, 20)",
         "        table.cell(ledger, 0, 0, \"W RB\", text_color=color.white, bgcolor=color.new(color.green, 15))",
@@ -751,7 +805,7 @@ def write_rb_pine(base: Path, engine: WeeklyRBEngine, label_cap: int, rb_cap: in
         "                table.cell(ledger, 6, i + 1, array.get(tTrigger, i), text_color=color.black, bgcolor=na)",
         "                table.cell(ledger, 7, i + 1, array.get(tEligible, i), text_color=color.black, bgcolor=na)",
         "                table.cell(ledger, 8, i + 1, array.get(tImpact, i), text_color=color.black, bgcolor=na)",
-        "                table.cell(ledger, 9, i + 1, array.get(tStatus, i), text_color=color.black, bgcolor=array.get(tBg, i))",
+        f"                table.cell(ledger, 9, i + 1, array.get(tStatus, i), text_color=color.black, bgcolor=color.new({colour_ternary('array.get(tBgCode, i)')}, 80))",
         "        for i = 0 to array.size(iId) - 1",
         "            if inspectOneRB and rbFromLast == array.get(iRank, i)",
         "                table.cell(ledger, 0, 1, array.get(iId, i), text_color=color.black, bgcolor=na)",
@@ -763,7 +817,7 @@ def write_rb_pine(base: Path, engine: WeeklyRBEngine, label_cap: int, rb_cap: in
         "                table.cell(ledger, 6, 1, array.get(iTrigger, i), text_color=color.black, bgcolor=na)",
         "                table.cell(ledger, 7, 1, array.get(iEligible, i), text_color=color.black, bgcolor=na)",
         "                table.cell(ledger, 8, 1, array.get(iImpact, i), text_color=color.black, bgcolor=na)",
-        "                table.cell(ledger, 9, 1, array.get(iStatus, i), text_color=color.black, bgcolor=array.get(iBg, i))",
+        f"                table.cell(ledger, 9, 1, array.get(iStatus, i), text_color=color.black, bgcolor=color.new({colour_ternary('array.get(iBgCode, i)')}, 80))",
     ]
     if extra_lines:
         lines += extra_lines
