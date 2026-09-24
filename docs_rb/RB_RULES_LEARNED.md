@@ -39,6 +39,41 @@ boundary describable as "trend flips" or "MSS" must be checked for the
 first wick (not close) breach of the relevant protecting swing, not a
 candle-close event on any timeframe.
 
+## Real bug fixed — ARB/ORB stranding used the wrong ("near-side") condition (2026-09-24)
+
+H4 RB #163 (SELL, W6, zb=1.16187/zt=1.16268) never stranded in the engine
+despite a run of swing highs (1.15636, 1.15488, 1.15713 -- all well below
+its own bottom) forming during its life; it stayed ARB and only died by
+direct impact on 2026-04-08 01:05 Riyadh. User: "this is wrong... compare
+[this] to the stranding rule of the AOB... I knew ORB had inherited
+mistake of this from the first pine code I shared with you but it needs
+to be fixed now."
+
+Checked `weekly_ob_generator.py`'s strand check directly (line ~542): OB
+uses **one single condition for every OB type** -- IFOB, AOB, AIFOB alike,
+no branching at all: `(bullish and LOW swing confirmed above zt) or
+(bearish and HIGH swing confirmed below zb)`. RB's `weekly_rb_generator.py`
+had split this into an `origin_type`-keyed `is_irb` branch: the `is_irb`
+branch (origin_type 0, IRB/AIRB) already matched OB's real rule exactly;
+the `else` branch (origin_type 1, ARB) used an invented, swapped condition
+(`bullish+HIGH below zb` / `bearish+LOW above zt`) that OB never has for
+AOB or any other type.
+
+`[RB-NEW]` **Fixed**: removed the `origin_type` branch entirely from the
+stranding check in `WeeklyRBEngine.finish_events_and_lifecycle` (or
+equivalent step-3 lifecycle block) -- all RB zone types (IRB, ARB, AIRB)
+now strand under the exact same single condition OB uses for all its
+types. `origin_type` is still used elsewhere (ARB's immediate-eligibility
+timing at zone creation) -- that usage is unrelated and untouched.
+
+Re-ran: zone #163 now correctly shows `ORB`, `authorized=False` (a
+stranded zone is no longer a fresh POI). Full-window effect: 449 H4 RBs
+computed, 27 authorized (was 29), 31 5m BSO attempts (was 33) -- several
+other ARB zones in the W6 sell campaign were also wrongly staying ARB and
+now correctly strand to ORB (e.g. #166's stranding time shifted earlier,
+2026-04-03 05:21 -> its own downstream eligible/impact times moved with
+it).
+
 ## Known issue flagged, NOT fixed yet — weekly-open-candle wick RBs (2026-09-24)
 
 H4 RB #168 (Parent W #6, SELL, bottom=1.15195, top=1.15226, trigger

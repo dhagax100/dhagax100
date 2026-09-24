@@ -387,21 +387,19 @@ class WeeklyRBEngine:
                 touch = self.first_touch(z.eligible_time or self.w[k].start, k, z.bullish, z.zb, z.zt)
             strand_ev = None
             if z.state in (0, 1, 4) and z.eligible != -1:
-                is_irb = z.origin_type != 1
+                # Single universal condition, same for every zone type
+                # (IRB/ARB/AIRB alike) -- matches OB's own strand check
+                # exactly (weekly_ob_generator.py: one rule for
+                # IFOB/AOB/AIFOB, no origin_type branching). The former
+                # origin_type-keyed "near-side" branch for ARB zones was
+                # a bug inherited from the very first RB pine: it used an
+                # invented, inverted condition that OB never has. Fixed
+                # 2026-09-24 -- see RB_RULES_LEARNED.md.
                 for ev in self.events[before:total]:
                     if ev.confirm != k:
                         continue
-                    stranded = False
-                    if is_irb:
-                        if z.bullish and ev.kind == 1 and ev.price > z.zt:
-                            stranded = True
-                        if not z.bullish and ev.kind == 0 and ev.price < z.zb:
-                            stranded = True
-                    else:
-                        if z.bullish and ev.kind == 0 and ev.price < z.zb:
-                            stranded = True
-                        if not z.bullish and ev.kind == 1 and ev.price > z.zt:
-                            stranded = True
+                    stranded = (z.bullish and ev.kind == 1 and ev.price > z.zt) or \
+                               (not z.bullish and ev.kind == 0 and ev.price < z.zb)
                     if stranded:
                         strand_ev = ev
                         break
