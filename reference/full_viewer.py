@@ -234,6 +234,24 @@ def pine_time(t: datetime) -> str:
     return f"timestamp(\"GMT+0\", {u.year}, {u.month}, {u.day}, {u.hour}, {u.minute})"
 
 
+def pine_epoch(t: datetime) -> str:
+    """Bare UTC epoch-millisecond integer literal -- exactly equivalent to
+    pine_time(t) as a Pine time VALUE (Pine's own `time`/`time_close` are
+    already epoch-ms ints), but one AST node instead of six (one
+    timestamp() call + 5 int args). Use this, not pine_time(), for any
+    array.from(...) literal or comparison built from many rows -- e.g.
+    build_bso_extra_lines' per-attempt time arrays -- so the compiled
+    script's node count doesn't scale 6x with row count. Real bug, fixed
+    2026-09-24 (RB side, ported here since this shared function hit the
+    same CE10205 "statement too long" once RB's 5m BSO table grew past
+    ~150 rows -- see reference_rb/docs_rb/RB_RULES_LEARNED.md). Ported
+    into this locked-adjacent shared file deliberately: it only changes
+    how a time VALUE is spelled in generated Pine text, never which
+    events/prices/logic get computed, so it's safe for OB's own use of
+    this same function too."""
+    return str(int(t.astimezone(UTC).timestamp() * 1000))
+
+
 def pine_text(s: str) -> str:
     return s.replace("\\", "\\\\").replace('"', '\\"')
 
@@ -510,7 +528,7 @@ def build_bso_extra_lines(bso_results: List[tuple], display_tz: ZoneInfo) -> Lis
     n = len(bso_results)
 
     def pt(t: Optional[datetime]) -> str:
-        return pine_time(t) if t is not None else "na"
+        return pine_epoch(t) if t is not None else "na"
 
     def pf(v: Optional[float]) -> str:
         return f"{v:.5f}" if v is not None else "na"

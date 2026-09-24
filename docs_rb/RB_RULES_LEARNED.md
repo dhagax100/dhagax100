@@ -173,6 +173,28 @@ Note: `reference/weekly_ob_generator.py`'s own `weekly_ob_swings.csv`
 export (OB project, lines ~810-813) has the identical defect, unfixed --
 flagged, not touched, since that engine is marked locked/complete.
 
+## CE10205 in the shared BSO layer, same fix ported (2026-09-24)
+
+With gates 8-34 added, the 5m BSO table grew to 152 rows and hit a NEW
+Pine error: **CE10205, "the {statementName} statement is too long"** --
+one specific statement (a single `array.from(...)` line), not the whole
+script (that's CE10295, already fixed). Root cause: `full_viewer.py`'s
+`build_bso_extra_lines()` -- the shared 5m entry-visualization function
+RB reuses verbatim from OB -- still built its time arrays with the old
+`pine_time(t)` (`timestamp("GMT+0", Y, M, D, h, mi)`, 6 AST nodes per
+element) through its own `pt()` helper, never touched by the earlier
+CE10295 fix (that fix only covered RB's OWN files). At 152 rows this one
+array literal got too large for a single statement.
+
+**Fixed**: added `pine_epoch(t)` to `full_viewer.py` itself (same bare
+epoch-ms-int technique) and pointed `pt()` at it instead of `pine_time()`.
+This is a SHARED file (OB's own `build_bso_extra_lines` call site too),
+but the change only affects how a time VALUE is spelled in generated Pine
+text -- zero effect on any computed event, price, or logic -- so it's safe
+and also benefits OB the same way if OB's own BSO table ever grows this
+large. Verified: `bso5BLeft` etc. now hold bare integers
+(e.g. `1770693300000`), not nested `timestamp(...)` calls.
+
 ## Full gate history written into code, corrected rule applied everywhere (2026-09-24)
 
 `build_manual_rb_gates()` now covers the ENTIRE loaded dataset: 2026-02-09
