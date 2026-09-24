@@ -173,6 +173,57 @@ Note: `reference/weekly_ob_generator.py`'s own `weekly_ob_swings.csv`
 export (OB project, lines ~810-813) has the identical defect, unfixed --
 flagged, not touched, since that engine is marked locked/complete.
 
+## CE10295, actually fixed this time (2026-09-24)
+
+User, after the epoch-int fix still didn't hold: "well, you aren't
+learning from the OB journey. are you?" -- fair. Array-packing (one
+`array.from(...)` per FIELD, not one statement per ROW) was the right fix
+for the ORIGINAL failure mode, and epoch-int literals were a real
+improvement, but neither one changes the fact that `array.from(...)`
+still costs Pine roughly ONE AST NODE PER ELEMENT. That cost scales
+directly with row count no matter how cheap each element's own expression
+is -- so every partial fix just moved the ceiling further out, guaranteeing
+a repeat the next time the known-gates window grew (which it always will,
+since RB's whole point is covering more of the dataset over time, unlike
+OB's narrower single-zone windows that never grew this large).
+
+**The actual, scale-invariant fix**: `full_viewer.py`'s new `pack_array()`
+packs an entire column into ONE Pine string literal (costs Pine ONE node
+regardless of string length) and decodes it at runtime with
+`str.split()` inside a single `if barstate.isfirst` for-loop (a loop's
+compile-time cost is its own fixed body size, not how many times it
+iterates -- so this is O(1) compile cost per field, forever, regardless of
+row count). Applied to every large field in both `build_h4_rb_extra_lines`
+(full_rb_viewer.py: h4RbLeft/Top/Bottom/Bull/Label/Id/Parent/Side/
+Bot5/Top5/Trig/Elig/Impact/StructX/Y/Txt/Col/Low) and `build_bso_extra_lines`
+(full_viewer.py, shared with OB: all 26 bso5* fields). Colors got the same
+treatment as a byproduct: packed as a one-letter code string ("B"/"K"/"R"/"G")
+and mapped to the real `color.*` value with a ternary at draw time, since
+color isn't a `str.tonumber`-able primitive.
+
+Also eliminated the OTHER O(n) source in the H4 RB layer: up to 122
+separate named `var int h4rbimpact_x_<id>` watcher variables (one per
+zone, 3 lines each = up to 366 top-level statements) got replaced with
+ONE shared `array<int> h4RbImpactX`, updated by a single per-bar loop --
+same "latch to the real bar `time` the first bar it's reached, never a
+lookahead" behavior, O(1) statement cost regardless of zone count.
+
+Verified: `full_rb_viewer.pine` dropped from 617 lines / ~7422
+array-literal elements to 394 lines / 714 elements (the 714 remaining are
+all in the small, naturally-bounded Weekly layer -- ~18 zones/swings --
+never touched by this fix since it was never the problem). Same 122 H4
+RBs, 152 5m BSO rows, identical computed facts -- rendering-only change.
+This is expected to hold regardless of how many more gates get added
+later, since the big layers' compile cost no longer scales with row count
+at all.
+
+Delimiter/NA-sentinel note: the first version used the ASCII unit-separator
+control character (0x1F) as the delimiter, which is INVISIBLE in a
+terminal/editor and risks being silently stripped by a browser textarea
+on copy-paste into Pine Editor -- switched to a plain printable delimiter
+(`|`) and NA sentinel (`§NA§`) before delivery, since none of RB's own
+data (dates, prices, ids, labels) ever contains either.
+
 ## CE10205 in the shared BSO layer, same fix ported (2026-09-24)
 
 With gates 8-34 added, the 5m BSO table grew to 152 rows and hit a NEW

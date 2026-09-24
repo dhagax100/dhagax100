@@ -256,6 +256,64 @@ def pine_text(s: str) -> str:
     return s.replace("\\", "\\\\").replace('"', '\\"')
 
 
+_PACK_NA = "\u00a7NA\u00a7"  # printable sentinel (section-sign guards), never collides with real data
+_PACK_SEP = "|"  # printable delimiter -- none of our values (dates, prices, labels, ids) ever contain "|"
+
+
+def pack_array(var_name: str, kind: str, values: list) -> List[str]:
+    """The REAL, scale-invariant CE10295 fix (2026-09-24) -- see
+    RB_RULES_LEARNED.md's "CE10295, actually fixed this time" entry.
+
+    Array-packing (one array.from(...) statement per FIELD instead of one
+    label.new/box.new per ROW) was the original, correct fix for the
+    original failure mode -- but array.from(...) STILL costs Pine roughly
+    one AST node per ELEMENT, so a field's own compiled cost still scales
+    with row count. Switching every time value from timestamp(...) (6
+    nodes) to a bare epoch-ms int (1 node) bought real headroom but didn't
+    change that scaling -- it only moved the ceiling further out. Once RB's
+    known-gates window grew to cover the whole dataset (122 H4 RBs, 152 5m
+    BSO rows), the sheer ELEMENT COUNT (not per-element complexity) pushed
+    the whole script over CE10295 again, even with epoch ints.
+
+    This is the actual fix: pack the whole column into ONE Pine string
+    literal (a string literal costs Pine ONE node no matter how long the
+    string is) and decode it at runtime with str.split() inside a single
+    `if barstate.isfirst` for-loop. A for-loop's COMPILE-TIME cost is its
+    own body's statement count (fixed, ~2 lines), not how many times it
+    iterates -- so this is O(1) compile cost regardless of row count,
+    scaling to any future dataset size without hitting this ceiling again.
+
+    `values`: raw Python values (int/float/str/bool), None means na.
+    `kind`: "int" | "float" | "string" | "bool". Returns the `var array`
+    declaration plus the populating if-block, as a self-contained sequence
+    of top-level Pine lines (safe to splice anywhere in the top-level
+    statement list -- never insert anything between these lines)."""
+    if not values:
+        return [f"var array<{kind}> {var_name} = array.new<{kind}>()"]
+
+    def fmt(v):
+        if v is None:
+            return _PACK_NA
+        if kind == "bool":
+            return "true" if v else "false"
+        return str(v)
+
+    packed = _PACK_SEP.join(fmt(v) for v in values)
+    esc = packed.replace("\\", "\\\\").replace('"', '\\"')
+    conv = {
+        "string": "p",
+        "int": "int(str.tonumber(p))",
+        "float": "str.tonumber(p)",
+        "bool": 'p == "true"',
+    }[kind]
+    return [
+        f"var array<{kind}> {var_name} = array.new<{kind}>()",
+        "if barstate.isfirst",
+        f"    for p in str.split(\"{esc}\", \"{_PACK_SEP}\")",
+        f"        array.push({var_name}, p == \"{_PACK_NA}\" ? na : {conv})",
+    ]
+
+
 def build_h4_extra_lines(h4_engine, h4_bars, drawn: List[tuple], ob_cap: int, display_tz: ZoneInfo,
                           window_start: Optional[datetime] = None, window_end: Optional[datetime] = None,
                           label_cap: int = 80) -> List[str]:
@@ -527,12 +585,6 @@ def build_bso_extra_lines(bso_results: List[tuple], display_tz: ZoneInfo) -> Lis
     Weekly OB (grandparent) -> 4H OB (parent) -> 5m entry (child)."""
     n = len(bso_results)
 
-    def pt(t: Optional[datetime]) -> str:
-        return pine_epoch(t) if t is not None else "na"
-
-    def pf(v: Optional[float]) -> str:
-        return f"{v:.5f}" if v is not None else "na"
-
     ids, weeklys, sides, restings, entries, sls, tps, results, exits, excursions = ([] for _ in range(10))
     blefts, brights, bys = [], [], []
     clefts, crights, cys, ccols = [], [], [], []
@@ -540,84 +592,82 @@ def build_bso_extra_lines(bso_results: List[tuple], display_tz: ZoneInfo) -> Lis
     rleft, rright, rtop, rbottom = [], [], [], []
     for z, _it, parent_id, _invalidation_reason, res in bso_results:
         attempt_no = res.get("attempt")
-        ids.append(f"\"#{z.id}\"" if attempt_no in (None, 1) else f"\"#{z.id} (re-entry {attempt_no})\"")
-        weeklys.append(f"\"{pine_text('#' + parent_id if parent_id else '-')}\"")
-        sides.append(f"\"{'BUY' if z.bullish else 'SELL'}\"")
-        restings.append(f"\"{pine_text(wob.display_iso(res.get('resting_at'), display_tz))}\"")
+        ids.append(f"#{z.id}" if attempt_no in (None, 1) else f"#{z.id} (re-entry {attempt_no})")
+        weeklys.append('#' + parent_id if parent_id else '-')
+        sides.append('BUY' if z.bullish else 'SELL')
+        restings.append(wob.display_iso(res.get('resting_at'), display_tz))
         entry_t, entry_p = res.get("entry_time"), res.get("entry_price")
         entry_txt = f"{wob.display_iso(entry_t, display_tz)} @ {entry_p:.5f}" if entry_t is not None and entry_p is not None else "-"
-        entries.append(f"\"{pine_text(entry_txt)}\"")
+        entries.append(entry_txt)
         sl_v, tp_v, risk_v = res.get("sl_price"), res.get("tp_price"), res.get("risk")
         # SL column shows risk in pips (1 pip = 0.0001 for EURUSD) ahead of
         # the price itself, separated by "/", e.g. "6.5/1.16527".
         sl_txt = f"{risk_v / 0.0001:.1f}/{sl_v:.5f}" if sl_v is not None and risk_v is not None else ("-" if sl_v is None else f"{sl_v:.5f}")
-        sls.append(f"\"{sl_txt}\"")
-        tps.append(f"\"{tp_v:.5f}\"" if tp_v is not None else "\"-\"")
+        sls.append(sl_txt)
+        tps.append(f"{tp_v:.5f}" if tp_v is not None else "-")
         result_txt = res.get("result") or res.get("stage") or "?"
-        results.append(f"\"{pine_text(result_txt)}\"")
+        results.append(result_txt)
         exit_t, exit_p = res.get("exit_time"), res.get("exit_price")
         exit_txt = f"{wob.display_iso(exit_t, display_tz)} @ {exit_p:.5f}" if exit_t is not None and exit_p is not None else "-"
-        exits.append(f"\"{pine_text(exit_txt)}\"")
+        exits.append(exit_txt)
         mfe_v, mae_v = res.get("mfe"), res.get("mae")
         excursion_txt = f"{mfe_v / 0.0001:.1f}/{mae_v / 0.0001:.1f}" if mfe_v is not None and mae_v is not None else "-"
-        excursions.append(f"\"{excursion_txt}\"")
+        excursions.append(excursion_txt)
 
         cs, ep = res.get("candidate_since"), res.get("entry_price")
-        blefts.append(pt(cs) if cs is not None and entry_t is not None else "na")
-        brights.append(pt(entry_t) if cs is not None and entry_t is not None else "na")
-        bys.append(pf(ep) if cs is not None and entry_t is not None else "na")
+        have_b = cs is not None and entry_t is not None
+        blefts.append(pine_epoch(cs) if have_b else None)
+        brights.append(pine_epoch(entry_t) if have_b else None)
+        bys.append(ep if have_b else None)
 
         result = res.get("result")
         if result in ("SL", "TP") and entry_t is not None and exit_t is not None and exit_p is not None:
-            clefts.append(pt(entry_t)); crights.append(pt(exit_t)); cys.append(pf(exit_p))
-            ccols.append("color.red" if result == "SL" else "color.green")
+            clefts.append(pine_epoch(entry_t)); crights.append(pine_epoch(exit_t)); cys.append(exit_p)
+            ccols.append("R" if result == "SL" else "G")
         else:
-            clefts.append("na"); crights.append("na"); cys.append("na"); ccols.append("na")
+            clefts.append(None); crights.append(None); cys.append(None); ccols.append(None)
 
         end_t = res.get("excursion_end_time")
         if entry_t is not None and end_t is not None and tp_v is not None and sl_v is not None:
-            gleft.append(pt(entry_t)); gright.append(pt(end_t))
-            gtop.append(pf(max(entry_p, tp_v))); gbottom.append(pf(min(entry_p, tp_v)))
-            rleft.append(pt(entry_t)); rright.append(pt(end_t))
-            rtop.append(pf(max(entry_p, sl_v))); rbottom.append(pf(min(entry_p, sl_v)))
+            gleft.append(pine_epoch(entry_t)); gright.append(pine_epoch(end_t))
+            gtop.append(max(entry_p, tp_v)); gbottom.append(min(entry_p, tp_v))
+            rleft.append(pine_epoch(entry_t)); rright.append(pine_epoch(end_t))
+            rtop.append(max(entry_p, sl_v)); rbottom.append(min(entry_p, sl_v))
         else:
-            gleft.append("na"); gright.append("na"); gtop.append("na"); gbottom.append("na")
-            rleft.append("na"); rright.append("na"); rtop.append("na"); rbottom.append("na")
-
-    def arr(kind: str, values: List[str]) -> str:
-        return f"array.from({', '.join(values)})" if values else f"array.new<{kind}>()"
+            gleft.append(None); gright.append(None); gtop.append(None); gbottom.append(None)
+            rleft.append(None); rright.append(None); rtop.append(None); rbottom.append(None)
 
     return [
         "bool inspectOne5mBSO = input.bool(false, \"Inspect one 5m BSO only\", group=\"5m BSO inspection\")",
         f"int bso5FromLast = input.int(1, \"5m BSO from last\", minval=1, maxval={max(1, n)}, group=\"5m BSO inspection\", tooltip=\"1 = most recent 5m BSO attempt, 2 = the one before it, and so on.\")",
         f"var table bso5Ledger = table.new(position.middle_right, 10, {n + 1}, border_width=1)",
-        f"var array<string> bso5Id = {arr('string', ids)}",
-        f"var array<string> bso5Weekly = {arr('string', weeklys)}",
-        f"var array<string> bso5Side = {arr('string', sides)}",
-        f"var array<string> bso5Resting = {arr('string', restings)}",
-        f"var array<string> bso5Entry = {arr('string', entries)}",
-        f"var array<string> bso5Sl = {arr('string', sls)}",
-        f"var array<string> bso5Tp = {arr('string', tps)}",
-        f"var array<string> bso5Result = {arr('string', results)}",
-        f"var array<string> bso5Exit = {arr('string', exits)}",
-        f"var array<string> bso5Excursion = {arr('string', excursions)}",
+        *pack_array("bso5Id", "string", ids),
+        *pack_array("bso5Weekly", "string", weeklys),
+        *pack_array("bso5Side", "string", sides),
+        *pack_array("bso5Resting", "string", restings),
+        *pack_array("bso5Entry", "string", entries),
+        *pack_array("bso5Sl", "string", sls),
+        *pack_array("bso5Tp", "string", tps),
+        *pack_array("bso5Result", "string", results),
+        *pack_array("bso5Exit", "string", exits),
+        *pack_array("bso5Excursion", "string", excursions),
+        *pack_array("bso5BLeft", "int", blefts),
+        *pack_array("bso5BRight", "int", brights),
+        *pack_array("bso5BY", "float", bys),
+        *pack_array("bso5CLeft", "int", clefts),
+        *pack_array("bso5CRight", "int", crights),
+        *pack_array("bso5CY", "float", cys),
+        *pack_array("bso5CCol", "string", ccols),
+        *pack_array("bso5GLeft", "int", gleft),
+        *pack_array("bso5GRight", "int", gright),
+        *pack_array("bso5GTop", "float", gtop),
+        *pack_array("bso5GBottom", "float", gbottom),
+        *pack_array("bso5RLeft", "int", rleft),
+        *pack_array("bso5RRight", "int", rright),
+        *pack_array("bso5RTop", "float", rtop),
+        *pack_array("bso5RBottom", "float", rbottom),
         "if barstate.islast",
         "    if onFive",
-        f"        array<int> bso5BLeft = {arr('int', blefts)}",
-        f"        array<int> bso5BRight = {arr('int', brights)}",
-        f"        array<float> bso5BY = {arr('float', bys)}",
-        f"        array<int> bso5CLeft = {arr('int', clefts)}",
-        f"        array<int> bso5CRight = {arr('int', crights)}",
-        f"        array<float> bso5CY = {arr('float', cys)}",
-        f"        array<color> bso5CCol = {arr('color', ccols)}",
-        f"        array<int> bso5GLeft = {arr('int', gleft)}",
-        f"        array<int> bso5GRight = {arr('int', gright)}",
-        f"        array<float> bso5GTop = {arr('float', gtop)}",
-        f"        array<float> bso5GBottom = {arr('float', gbottom)}",
-        f"        array<int> bso5RLeft = {arr('int', rleft)}",
-        f"        array<int> bso5RRight = {arr('int', rright)}",
-        f"        array<float> bso5RTop = {arr('float', rtop)}",
-        f"        array<float> bso5RBottom = {arr('float', rbottom)}",
         "        table.cell(bso5Ledger, 0, 0, \"Weekly OB\", text_color=color.white, bgcolor=color.new(color.purple,15))",
         "        table.cell(bso5Ledger, 1, 0, \"4H OB\", text_color=color.white, bgcolor=color.new(color.purple,15))",
         "        table.cell(bso5Ledger, 2, 0, \"Side\", text_color=color.white, bgcolor=color.new(color.purple,15))",
@@ -645,7 +695,7 @@ def build_bso_extra_lines(bso_results: List[tuple], display_tz: ZoneInfo) -> Lis
         "                if not na(array.get(bso5BLeft, i))",
         "                    line.new(array.get(bso5BLeft, i), array.get(bso5BY, i), array.get(bso5BRight, i), array.get(bso5BY, i), xloc=xloc.bar_time, extend=extend.none, color=color.blue, width=2)",
         "                if not na(array.get(bso5CLeft, i))",
-        "                    line.new(array.get(bso5CLeft, i), array.get(bso5CY, i), array.get(bso5CRight, i), array.get(bso5CY, i), xloc=xloc.bar_time, extend=extend.none, color=array.get(bso5CCol, i), width=2)",
+        "                    line.new(array.get(bso5CLeft, i), array.get(bso5CY, i), array.get(bso5CRight, i), array.get(bso5CY, i), xloc=xloc.bar_time, extend=extend.none, color=array.get(bso5CCol, i) == \"R\" ? color.red : color.green, width=2)",
         "                if not na(array.get(bso5GLeft, i))",
         "                    box.new(array.get(bso5GLeft, i), array.get(bso5GTop, i), array.get(bso5GRight, i), array.get(bso5GBottom, i), border_color=color.green, bgcolor=color.new(color.green, 80), xloc=xloc.bar_time)",
         "                if not na(array.get(bso5RLeft, i))",

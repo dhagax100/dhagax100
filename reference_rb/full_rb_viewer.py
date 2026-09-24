@@ -200,9 +200,6 @@ def build_h4_rb_extra_lines(h4_engine: rb.WeeklyRBEngine, h4_bars: List["wob.Wee
     shown = drawn[-rb_cap:]
     n = len(shown)
 
-    def arr(kind: str, values: List[str]) -> str:
-        return f"array.from({', '.join(values)})" if values else f"array.new<{kind}>()"
-
     def in_window(t: datetime) -> bool:
         if window_start is None:
             return True
@@ -213,89 +210,88 @@ def build_h4_rb_extra_lines(h4_engine: rb.WeeklyRBEngine, h4_bars: List["wob.Wee
     ms = [m for m in h4_engine.msses if in_window(h4_bars[m.broken].start)][-label_cap:]
     struct_x, struct_y, struct_txt, struct_col, struct_low = [], [], [], [], []
     for e in sh:
-        struct_x.append(rb.pine_epoch(h4_bars[e.swing].start)); struct_y.append(f"{e.price:.5f}")
-        struct_txt.append("\"▲\""); struct_col.append("color.blue"); struct_low.append("false")
+        struct_x.append(rb.pine_epoch(h4_bars[e.swing].start)); struct_y.append(e.price)
+        struct_txt.append("▲"); struct_col.append("B"); struct_low.append(False)
     for e in sl:
-        struct_x.append(rb.pine_epoch(h4_bars[e.swing].start)); struct_y.append(f"{e.price:.5f}")
-        struct_txt.append("\"▼\""); struct_col.append("color.black"); struct_low.append("true")
+        struct_x.append(rb.pine_epoch(h4_bars[e.swing].start)); struct_y.append(e.price)
+        struct_txt.append("▼"); struct_col.append("K"); struct_low.append(True)
     for m in ms:
         struct_x.append(rb.pine_epoch(h4_bars[m.broken].start))
-        struct_y.append(f"{m.price:.5f}")
-        struct_txt.append("\"✕\""); struct_col.append("color.blue" if m.up else "color.black")
-        struct_low.append("false" if m.up else "true")
+        struct_y.append(m.price)
+        struct_txt.append("✕"); struct_col.append("B" if m.up else "K")
+        struct_low.append(not m.up)
 
-    impact_vars: Dict[int, str] = {}
-    impact_watchers: List[str] = []
-    for z, parent_id in shown:
-        if z.impact_time is not None:  # guaranteed: authorized => impacted => impact_time set
-            name = f"h4rbimpact_x_{z.id}"
-            impact_vars[z.id] = name
-            stamp = rb.pine_epoch(z.impact_time)
-            impact_watchers += [f"var int {name} = na", f"if time <= {stamp} and {stamp} < time_close", f"    {name} := time"]
-
-    lefts, tops, bottoms, right_exprs, bulls, labels, parents, sides, bots5, tops5, trigs, eligs, impacts = ([] for _ in range(13))
+    lefts, tops, bottoms, fallback_rights, impact_stamps, bulls, labels, parents, sides, bots5, tops5, trigs, eligs, impacts = ([] for _ in range(14))
     for z, parent_id in shown:
         origin = h4_bars[z.candle]
-        fallback_right = h4_bars[z.stop].start  # guaranteed valid: authorized => impacted => z.stop set
         lefts.append(rb.pine_epoch(origin.start))
-        tops.append(f"{z.zt:.5f}")
-        bottoms.append(f"{z.zb:.5f}")
-        if z.id in impact_vars:
-            right_exprs.append(f"(na({impact_vars[z.id]}) ? {rb.pine_epoch(fallback_right)} : {impact_vars[z.id]})")
-        else:
-            right_exprs.append(rb.pine_epoch(fallback_right))
-        bulls.append("true" if z.bullish else "false")
-        label_text = f"#{z.id} {'BUY' if z.bullish else 'SELL'} (W{parent_id})"
-        labels.append(f"\"{fv.pine_text(label_text)}\"")
-        parents.append(f"\"{fv.pine_text('#' + parent_id if parent_id else '-')}\"")
-        sides.append(f"\"{'BUY' if z.bullish else 'SELL'}\"")
-        bots5.append(f"\"{z.zb:.5f}\"")
-        tops5.append(f"\"{z.zt:.5f}\"")
-        trig_txt = wob.display_iso(z.trigger_time, display_tz)
-        elig_txt = wob.display_iso(z.eligible_time, display_tz)
-        trigs.append(f"\"{fv.pine_text(trig_txt)}\"")
-        eligs.append(f"\"{fv.pine_text(elig_txt)}\"")
-        impacts.append(f"\"{fv.pine_text(wob.display_iso(z.impact_time, display_tz))}\"")
+        tops.append(z.zt)
+        bottoms.append(z.zb)
+        fallback_rights.append(rb.pine_epoch(h4_bars[z.stop].start))  # guaranteed valid: authorized => impacted => z.stop set
+        impact_stamps.append(rb.pine_epoch(z.impact_time))  # guaranteed: authorized => impacted => impact_time set
+        bulls.append(z.bullish)
+        parents.append('#' + parent_id if parent_id else '-')
+        labels.append(f"#{z.id} {'BUY' if z.bullish else 'SELL'} (W{parent_id})")
+        sides.append('BUY' if z.bullish else 'SELL')
+        bots5.append(f"{z.zb:.5f}")
+        tops5.append(f"{z.zt:.5f}")
+        trigs.append(wob.display_iso(z.trigger_time, display_tz))
+        eligs.append(wob.display_iso(z.eligible_time, display_tz))
+        impacts.append(wob.display_iso(z.impact_time, display_tz))
 
-    ids = [f"\"{'#' + str(z.id)}\"" for z, *_ in shown]
+    ids = [f"#{z.id}" for z, *_ in shown]
 
     lines: List[str] = [
         "bool inspectOneH4RB = input.bool(true, \"Inspect one 4H RB only\", group=\"H4 RB inspection\")",
         f"int h4RbFromLast = input.int(1, \"H4 RB from last\", minval=1, maxval={max(1, n)}, group=\"H4 RB inspection\", tooltip=\"1 = most recent 4H RB, 2 = the one before it, and so on.\")",
         f"var table h4RbLedger = table.new(position.bottom_right, 8, {n + 1}, border_width=1)",
-        f"var array<int> h4RbLeft = {arr('int', lefts)}",
-        f"var array<float> h4RbTop = {arr('float', tops)}",
-        f"var array<float> h4RbBottom = {arr('float', bottoms)}",
-        f"var array<bool> h4RbBull = {arr('bool', bulls)}",
-        f"var array<string> h4RbLabel = {arr('string', labels)}",
-        f"var array<string> h4RbId = {arr('string', ids)}",
-        f"var array<string> h4RbParent = {arr('string', parents)}",
-        f"var array<string> h4RbSide = {arr('string', sides)}",
-        f"var array<string> h4RbBot5 = {arr('string', bots5)}",
-        f"var array<string> h4RbTop5 = {arr('string', tops5)}",
-        f"var array<string> h4RbTrig = {arr('string', trigs)}",
-        f"var array<string> h4RbElig = {arr('string', eligs)}",
-        f"var array<string> h4RbImpact = {arr('string', impacts)}",
-        f"var array<int> h4RbStructX = {arr('int', struct_x)}",
-        f"var array<float> h4RbStructY = {arr('float', struct_y)}",
-        f"var array<string> h4RbStructTxt = {arr('string', struct_txt)}",
-        f"var array<color> h4RbStructCol = {arr('color', struct_col)}",
-        f"var array<bool> h4RbStructLow = {arr('bool', struct_low)}",
-        *impact_watchers,
+        *fv.pack_array("h4RbLeft", "int", lefts),
+        *fv.pack_array("h4RbTop", "float", tops),
+        *fv.pack_array("h4RbBottom", "float", bottoms),
+        *fv.pack_array("h4RbBull", "bool", bulls),
+        *fv.pack_array("h4RbLabel", "string", labels),
+        *fv.pack_array("h4RbId", "string", ids),
+        *fv.pack_array("h4RbParent", "string", parents),
+        *fv.pack_array("h4RbSide", "string", sides),
+        *fv.pack_array("h4RbBot5", "string", bots5),
+        *fv.pack_array("h4RbTop5", "string", tops5),
+        *fv.pack_array("h4RbTrig", "string", trigs),
+        *fv.pack_array("h4RbElig", "string", eligs),
+        *fv.pack_array("h4RbImpact", "string", impacts),
+        *fv.pack_array("h4RbFallbackRight", "int", fallback_rights),
+        *fv.pack_array("h4RbImpactStamp", "int", impact_stamps),
+        *fv.pack_array("h4RbStructX", "int", struct_x),
+        *fv.pack_array("h4RbStructY", "float", struct_y),
+        *fv.pack_array("h4RbStructTxt", "string", struct_txt),
+        *fv.pack_array("h4RbStructCol", "string", struct_col),
+        *fv.pack_array("h4RbStructLow", "bool", struct_low),
+        # ONE shared per-bar watcher loop replaces what used to be a
+        # separate named `var int h4rbimpact_x_<id>` + its own 3-line `if`
+        # per zone (up to 3n top-level statements). Same effect (each
+        # slot latches to the real bar `time` the instant it reaches that
+        # zone's own impact minute, never a lookahead), but O(1) compile
+        # cost regardless of n -- the other half of the 2026-09-24 fix,
+        # see pack_array's own docstring for the array.from(...) half.
+        f"var array<int> h4RbImpactX = array.new<int>({n}, na)",
+        "for hi = 0 to array.size(h4RbImpactStamp) - 1",
+        "    hiStamp = array.get(h4RbImpactStamp, hi)",
+        "    if na(array.get(h4RbImpactX, hi)) and time <= hiStamp and hiStamp < time_close",
+        "        array.set(h4RbImpactX, hi, time)",
         "if barstate.islast",
         "    if onH4 or on1m or onFive",
-        f"        array<int> h4RbRight = {arr('int', right_exprs)}",
         "        for i = 0 to array.size(h4RbLeft) - 1",
         "            hrRank = array.size(h4RbLeft) - i",
         "            if not inspectOneH4RB or hrRank == h4RbFromLast",
+        "                hrRight = na(array.get(h4RbImpactX, i)) ? array.get(h4RbFallbackRight, i) : array.get(h4RbImpactX, i)",
         "                hrCol = array.get(h4RbBull, i) ? color.blue : color.black",
-        "                box.new(array.get(h4RbLeft, i), array.get(h4RbTop, i), array.get(h4RbRight, i), array.get(h4RbBottom, i), border_color=hrCol, border_width=1, border_style=line.style_dashed, bgcolor=na, xloc=xloc.bar_time)",
+        "                box.new(array.get(h4RbLeft, i), array.get(h4RbTop, i), hrRight, array.get(h4RbBottom, i), border_color=hrCol, border_width=1, border_style=line.style_dashed, bgcolor=na, xloc=xloc.bar_time)",
         "                label.new(array.get(h4RbLeft, i), array.get(h4RbTop, i), array.get(h4RbLabel, i), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_down, color=color.new(hrCol,85), textcolor=hrCol, size=size.tiny)",
-        "                line.new(array.get(h4RbRight, i), array.get(h4RbBottom, i), array.get(h4RbRight, i), array.get(h4RbTop, i), xloc=xloc.bar_time, extend=extend.both, color=color.new(color.red,30), width=1)",
+        "                line.new(hrRight, array.get(h4RbBottom, i), hrRight, array.get(h4RbTop, i), xloc=xloc.bar_time, extend=extend.both, color=color.new(color.red,30), width=1)",
         "    if onH4",
         "        for i = 0 to array.size(h4RbStructX) - 1",
+        "            hrStructCol = array.get(h4RbStructCol, i) == \"B\" ? color.blue : color.black",
         "            hrStructYY = array.get(h4RbStructLow, i) ? array.get(h4RbStructY, i) - lowGap : array.get(h4RbStructY, i)",
-        "            label.new(array.get(h4RbStructX, i), hrStructYY, array.get(h4RbStructTxt, i), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=array.get(h4RbStructCol, i), size=size.small)",
+        "            label.new(array.get(h4RbStructX, i), hrStructYY, array.get(h4RbStructTxt, i), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=hrStructCol, size=size.small)",
         "        table.cell(h4RbLedger, 0, 0, \"4H RB\", text_color=color.white, bgcolor=color.new(color.blue,15))",
         "        table.cell(h4RbLedger, 1, 0, \"Parent W\", text_color=color.white, bgcolor=color.new(color.blue,15))",
         "        table.cell(h4RbLedger, 2, 0, \"Side\", text_color=color.white, bgcolor=color.new(color.blue,15))",
