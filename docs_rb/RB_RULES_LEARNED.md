@@ -173,6 +173,40 @@ Note: `reference/weekly_ob_generator.py`'s own `weekly_ob_swings.csv`
 export (OB project, lines ~810-813) has the identical defect, unfixed --
 flagged, not touched, since that engine is marked locked/complete.
 
+## Full gate history written into code, corrected rule applied everywhere (2026-09-24)
+
+`build_manual_rb_gates()` now covers the ENTIRE loaded dataset: 2026-02-09
+15:07 through 2026-09-11 22:05 Riyadh (end of the M1 data), 33 gate rows.
+Every boundary from gate 8 onward was walked and verified live in this
+session (respect reactions, anchor breaks, Weekly-close body-breaches,
+simultaneous-event collisions -- all per the rules above and below).
+
+Applying the corrected parent-in-charge rule RIGOROUSLY (via a small script
+that merges the established control-state timeline against every zone's
+actual impact time, sorted) surfaced two corrections to gates already
+shipped before the rule reached its final form:
+- **Gate 2** (2026-02-16 -> 02-19 16:01): splits into two rows. No buy
+  parent at all from 02-16 to 02-17 18:28 (zone #3 doesn't react until
+  then -- it's the FIRST buy reaction in the whole dataset, so there is
+  nothing to show before it). buy_parent="3" only from 02-17 18:28.
+- **Gate 7** (2026-04-08 01:36 -> 04-29 21:37): buy_parent corrected from
+  "7" to "1" (RB1, last reacted 2026-03-03 17:24) -- zone #7 was CREATED
+  at 04-08 01:36 but not actually touched by price until 2026-06-08 12:31,
+  long after gate 7 already ended.
+
+Full sell/buy parent reaction history (each id's first reaction time):
+  SELL: #2 (02-09 15:07) -> #6 (04-08 01:32) -> #8 (05-06 13:45) -> #15
+    (07-29 21:53) -> #13 (08-07 15:34) -> #12 (08-19 16:29, current).
+  BUY: none -> #3 (02-17 18:28) -> #1 (03-03 17:24) -> #9 (05-14 18:00)
+    -> #11 (06-05 16:00) -> #7 (06-08 12:31) -> #5 (06-19 07:57) -> #14
+    (07-23 15:43, current).
+
+Regenerated: 122 H4 RBs authorized (up from 38), 152 5m BSO attempts (90
+ENTERED, 61 H4_RB_BREACHED, 1 NO_ENTRY_IN_DATA). The full docstring inside
+`build_manual_rb_gates()` was rewritten to state the rule once, generally,
+rather than repeat per-gate reasoning inline for all 33 gates (that
+reasoning lives in this doc's own gate-by-gate entries instead).
+
 ## Parent-in-charge rule, corrected: REACTED, not just created (2026-09-24)
 
 The earlier "last RB on the current bias side" rule (below, 2026-09-23) was

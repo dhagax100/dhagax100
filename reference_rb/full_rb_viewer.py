@@ -89,131 +89,60 @@ def rb_ledger_row(z, it: Optional[datetime], parent_id: str, invalidation_reason
 
 
 def build_manual_rb_gates() -> List[Tuple[datetime, datetime, str, str, str]]:
-    """Hand-verified RB control timeline, gates 1-5 (through 2026-03-23).
-    Same tuple shape as OB's build_manual_gates(): (start, end, control,
-    sell_parent_id, buy_parent_id). Every boundary below was checked
-    directly against weekly_rb_ledger.csv / weekly_rb_swings.csv / the raw
-    M1 data before being encoded -- see docs_rb/RB_RULES_LEARNED.md for the
-    full gate-by-gate verification record.
+    """Hand-verified RB control timeline, gates 1 through the final BUY_ONLY
+    (2026-02-09 -> 2026-09-11, end of the loaded M1 data). Same tuple shape
+    as OB's build_manual_gates(): (start, end, control, sell_parent_id,
+    buy_parent_id). Every boundary was checked directly against
+    weekly_rb_ledger.csv / weekly_rb_swings.csv / the raw M1 data before
+    being encoded -- see docs_rb/RB_RULES_LEARNED.md for the full
+    gate-by-gate verification record and worked examples.
 
-    Gate 1 -- SELL_ONLY (RB zone #2, ARB):
-      RB zone #2 (Weekly ARB, bearish -- top=1.20825, bottom=1.18609) has
-      trigger, eligible and impact all at the SAME minute, 2026-02-09
-      15:07 Riyadh. Trend context (2025 carryover, user-supplied, not
-      derivable from this 2026-only dataset): Weekly trend was UP, so this
-      is a COUNTERTREND SELL_ONLY start (trend and control are independent
-      per SPEC.md SS9). Dies at the containing week's own close: week
-      2026-02-09 -> 02-16 Riyadh closes at 1.18722, which is >= zb
-      (1.18609) -- Weekly-close-body-inside/through POI-breach (SPEC.md
-      SS14).
+    PARENT-IN-CHARGE RULE (final form, corrected 2026-09-24 -- see
+    RB_RULES_LEARNED.md's "Parent-in-charge rule, corrected" entry for the
+    full derivation): a side's parent updates ONLY the instant price
+    actually REACTS off (impacts/touches) a zone on that side -- never
+    merely because a new zone was created/triggered, and never merely
+    because a structural/swing/MSS continuation event fires (a swing
+    confirming, an MSS exceedance, an RB's own anchor breaking). A
+    continuation event can start/stop/flip CONTROL, but it never changes
+    WHO the parent is -- the last-REACTED zone on that side stays in
+    charge, even once SPENT, even after a Weekly-close body-breach kills
+    it, until a newer zone on that same side is actually touched by price.
+    This is why the same sell_parent/buy_parent id often persists across
+    many consecutive gates below, including through control flips to the
+    opposite side and back.
 
-    Gate 2 -- BUY_ONLY (RB zone #3, AIRB), 2026-02-16 -> 02-19 16:01 Riyadh:
-      RB2 (the only countertrend zone) is dead, so control reverts to the
-      underlying UP trend at the next week's open. Zone #3 (AIRB, BUY,
-      zb=1.17652/zt=1.18095) is first TOUCHED mid-week (2026-02-17 18:28
-      Riyadh, "no respect") without ending BUY_ONLY -- a touch alone
-      doesn't flip control.
+    Gate boundaries (WHEN control changes) were established gate-by-gate
+    through direct verification exactly as for gates 1-7 (documented
+    in-line through 2026-09-24's history in RB_RULES_LEARNED.md): each
+    boundary is either an RB reaction (an opposing zone's impact, which
+    opens BOTH), an RB's own anchor breaking or a Weekly-close body-breach
+    (which closes one side of BOTH), or a real-time MSS/swing-confirm
+    continuation event (which starts/stops a single-direction campaign,
+    reacting to whichever side that event protects). Two recurring
+    resolution rules for BOTH: (1) if the just-impacted zone gets a clean
+    "respect" reaction (a later swing confirms at/near the exact impact
+    price with no break of its own anchor in between), control flips FULLY
+    to that side at the swing-confirm minute, not just staying BOTH until
+    the anchor eventually breaks; (2) if a stopping continuation event
+    (e.g. a swing confirming) coincides in the SAME M1 minute as a fresh
+    zone impact on the side that event would otherwise stop, the impact
+    overrides the stop -- control continues/opens BOTH instead.
 
-      Ends the moment MSS actually confirms: MSS does NOT require a close
-      -- a 1-pip wick exceedance of the protecting swing point is enough,
-      real-time, whatever the timeframe (SPEC clarification, user-given).
-      The swing protecting this BUY leg is AIRB #3's own anchor low,
-      1.17652 (confirmed swing, weekly_rb_swings.csv). First M1 wick
-      below it: 2026-02-19 16:01 Riyadh (low 1.17645, close 1.17648 --
-      same minute also closes through, so no ambiguity here between the
-      wick and close reads). This is BEFORE the week's own close
-      (02-23 01:00 Riyadh) -- an earlier draft of this gate incorrectly
-      used the week's close as the boundary; a real H4 RB (#91) got
-      authorized BUY on 2026-02-20 18:12 Riyadh under that wrong boundary
-      even though the real-time MSS-down had already confirmed the day
-      before. Corrected here.
-
-    Gate 3 -- SELL_ONLY, no anchor zone, 2026-02-19 16:01 -> 03-03 17:24
-    Riyadh:
-      Starts at the same 2026-02-19 16:01 Riyadh MSS-down confirmation
-      above. (The week-of-2026-02-16's own close, 1.17921, is also below
-      the PRIOR week's low, 1.18086 -- a real structural fact, but it is
-      a CONSEQUENCE of the same real-time move, not the trigger: the
-      trigger already fired days earlier via the wick-exceedance rule.)
-      Read as: AIRB #3 failed to hold, trend flipped bearish, BUY_ONLY
-      ends. RB2 (the old SELL parent) already died in gate 1, but the
-      "parent" isn't blank -- parent-in-charge is the LAST RB zone on the
-      current bias side, whether or not it has been impacted yet (user
-      rule, 2026-09-23: "get the RB in charge from the last RB that has
-      the same direction as our bias"). The last SELL zone that exists by
-      2026-02-19 16:01 is zone #4 (Weekly ORB, bearish, top=1.19283,
-      bottom=1.18722, confirmed/promoted at this exact same MSS-down
-      minute) -- so zone #4, not RB2, is gate 3's sell parent.
-
-    Gate 4 -- BOTH, 2026-03-03 17:24 -> 17:26 Riyadh (2 minutes):
-      RB1 (W ORB #1, BUY, zb=1.15692/zt=1.15797) is impacted at 2026-03-03
-      17:24 Riyadh, opening BOTH directions per RB1's buy side alongside
-      the ongoing sell thesis (sell side still in charge of zone #4, per
-      the same last-RB-on-that-side rule).
-
-    Gate 5 -- SELL_ONLY, resumes 2026-03-03 17:26 Riyadh:
-      Just 2 minutes after RB1's impact, price breaks below RB1's own
-      floor (1.15692 -- RB1's own swing-low anchor, confirmed week of
-      2026-01-19) at 2026-03-03 17:26 Riyadh (low 1.15667) -- RB1's
-      protecting swing low is violated, snapping control back to
-      SELL_ONLY. Zone #4 is still the last (and only) SELL zone in
-      existence through the end of this gate -- no newer SELL zone is
-      born until zone #6 (origin week 2026-03-23, well after this gate
-      ends) -- so zone #4 stays the sell parent here too.
-
-      Stops at 2026-03-23 14:06 Riyadh: the first real-time minute price
-      exceeds the PRIOR week's high (week-of-2026-03-16, high=1.16159) --
-      high=1.1619 at that minute. User-confirmed as the actual rule (NOT
-      the later, formally-confirmed engine SWING HIGH at 1.16394/week of
-      2026-03-30, which lags this real-time break by a week).
-
-    NONE, 2026-03-23 14:06 -> 03-30 12:17 Riyadh:
-      No live SELL RB anchor yet (zone #6 doesn't exist until the swing high
-      that creates it confirms). Confirmed against the fixed
-      weekly_rb_swings.csv real-minute export (2026-09-24 fix): the
-      week-of-2026-03-23 swing high (1.16394) confirms at the exact M1
-      minute 2026-03-30 12:17 Riyadh -- not the week-open label previously
-      (wrongly) shown for it.
-
-    Gate 6a -- SELL_ONLY, 2026-03-30 12:17 -> 04-08 01:32 Riyadh:
-      Resumes selling the moment that swing high confirms real-time. Zone
-      #6 (Weekly AIRB, SELL, zb=1.15348/zt=1.16394) is created at this same
-      minute and is the new last (most recent) SELL zone in existence, so
-      it's the sell parent -- same "last RB on the current bias side" rule
-      already applied to zone #4 in gates 3-5.
-
-    Gate 6b -- SELL_ONLY, 2026-04-08 01:32 -> 01:36 Riyadh (4 minutes):
-      Zone #6 (still AIRB, not yet promoted) is impacted at 01:32 (first M1
-      high, 1.16298, crossing its own zb 1.15348) -- confirmed against raw
-      M1 data. Control stays SELL_ONLY (an AIRB touch alone doesn't flip
-      control, same as zone #3 in gate 2), split into its own gate purely
-      to mark the impact boundary in the record.
-
-    Gate 7 -- BUY_ONLY, 2026-04-08 01:36 -> 04-29 21:37 Riyadh (correction,
-    2026-09-24): 4 minutes after zone #6's impact, price wicks above its
-    own top -- the same swing high (1.16394) that created it -- at 01:36.
-    User corrected the original call here: this is NOT a stop to NONE, it's
-    a trend SHIFT to up. No opposing (BUY) RB gets impacted to justify BOTH
-    -- the only live, never-impacted BUY zone is far away (zone #7 itself is
-    born this same minute, not yet eligible; the nearest pre-existing live
-    SELL zone, #4, tops out at zb=1.18722, and price's real max in this
-    whole window is only 1.18488, confirmed against raw M1 data -- so #4 is
-    never touched). So BUY_ONLY opens with no opposing-impact anchor. Per
-    the "last RB on the current bias side" rule, zone #7 (Weekly IRB, BUY,
-    zb=1.14427/zt=1.15005, triggered this exact minute 2026-04-08 01:36) is
-    the newest BUY zone in existence, so it's the buy parent -- despite
-    itself not being eligible/impacted yet (same pattern as zone #4 in
-    gates 3-5).
-
-      Stops at 2026-04-29 21:37 Riyadh: the engine's formally-confirmed
-      SWING HIGH at 1.18488 (peak itself printed 2026-04-17 13:12 UTC /
-      16:12 Riyadh, confirmed two-sided on 2026-04-29 18:37 UTC / 21:37
-      Riyadh once price pulled back enough) -- verified against the fixed
-      weekly_rb_swings.csv real-minute export. Unlike an MSS/structural
-      break (real-time, single wick), a swing-high stop is inherently the
-      engine's own two-sided confirmation event -- there is no earlier
-      real-time equivalent to prefer here. Goes to NONE at that minute.
-      Next gate not yet given -- out of scope for this delivery."""
+    Full parent history so far (each id's FIRST reaction time, i.e. the
+    moment it actually starts being parent):
+      SELL: #2 (2026-02-09 15:07) -> #6 (2026-04-08 01:32) -> #8
+        (2026-05-06 13:45) -> #15 (2026-07-29 21:53) -> #13 (2026-08-07
+        15:34) -> #12 (2026-08-19 16:29, current).
+      BUY: none until #3 (2026-02-17 18:28) -> #1 (2026-03-03 17:24) ->
+        #9 (2026-05-14 18:00) -> #11 (2026-06-05 16:00) -> #7 (2026-06-08
+        12:31) -> #5 (2026-06-19 07:57) -> #14 (2026-07-23 15:43, current).
+    Note this corrects two things already shipped before the rule's final
+    form was nailed down: gate 2 (2026-02-16 -> 02-17 18:28) has NO buy
+    parent -- zone #3 is only created then, not reacted to until 02-17
+    18:28 -- and gate 7 (2026-04-08 01:36 -> 04-29 21:37)'s buy parent is
+    #1 (RB1, last reacted 2026-03-03), not #7 -- zone #7 was created that
+    same minute but not actually touched by price until 2026-06-08."""
     rtz = ZoneInfo("Asia/Riyadh")
 
     def rt(y: int, mo: int, d: int, h: int, mi: int) -> datetime:
@@ -221,15 +150,39 @@ def build_manual_rb_gates() -> List[Tuple[datetime, datetime, str, str, str]]:
 
     return [
         (rt(2026, 2, 9, 15, 7), rt(2026, 2, 16, 1, 0), "SELL_ONLY", "2", ""),
-        (rt(2026, 2, 16, 1, 0), rt(2026, 2, 19, 16, 1), "BUY_ONLY", "", "3"),
-        (rt(2026, 2, 19, 16, 1), rt(2026, 3, 3, 17, 24), "SELL_ONLY", "4", ""),
-        (rt(2026, 3, 3, 17, 24), rt(2026, 3, 3, 17, 26), "BOTH", "4", "1"),
-        (rt(2026, 3, 3, 17, 26), rt(2026, 3, 23, 14, 6), "SELL_ONLY", "4", ""),
-        (rt(2026, 3, 23, 14, 6), rt(2026, 3, 30, 12, 17), "NONE", "", ""),
-        (rt(2026, 3, 30, 12, 17), rt(2026, 4, 8, 1, 32), "SELL_ONLY", "6", ""),
-        (rt(2026, 4, 8, 1, 32), rt(2026, 4, 8, 1, 36), "SELL_ONLY", "6", ""),
-        (rt(2026, 4, 8, 1, 36), rt(2026, 4, 29, 21, 37), "BUY_ONLY", "", "7"),
-        (rt(2026, 4, 29, 21, 37), rt(2026, 9, 11, 22, 5), "NONE", "", ""),
+        (rt(2026, 2, 16, 1, 0), rt(2026, 2, 17, 18, 28), "BUY_ONLY", "2", ""),
+        (rt(2026, 2, 17, 18, 28), rt(2026, 2, 19, 16, 1), "BUY_ONLY", "2", "3"),
+        (rt(2026, 2, 19, 16, 1), rt(2026, 3, 3, 17, 24), "SELL_ONLY", "2", "3"),
+        (rt(2026, 3, 3, 17, 24), rt(2026, 3, 3, 17, 26), "BOTH", "2", "1"),
+        (rt(2026, 3, 3, 17, 26), rt(2026, 3, 23, 14, 6), "SELL_ONLY", "2", "1"),
+        (rt(2026, 3, 23, 14, 6), rt(2026, 3, 30, 12, 17), "NONE", "2", "1"),
+        (rt(2026, 3, 30, 12, 17), rt(2026, 4, 8, 1, 32), "SELL_ONLY", "2", "1"),
+        (rt(2026, 4, 8, 1, 32), rt(2026, 4, 8, 1, 36), "SELL_ONLY", "6", "1"),
+        (rt(2026, 4, 8, 1, 36), rt(2026, 4, 29, 21, 37), "BUY_ONLY", "6", "1"),
+        (rt(2026, 4, 29, 21, 37), rt(2026, 5, 6, 13, 45), "NONE", "6", "1"),
+        (rt(2026, 5, 6, 13, 45), rt(2026, 5, 11, 1, 0), "BOTH", "8", "1"),
+        (rt(2026, 5, 11, 1, 0), rt(2026, 5, 14, 18, 0), "BUY_ONLY", "8", "1"),
+        (rt(2026, 5, 14, 18, 0), rt(2026, 5, 15, 3, 38), "BUY_ONLY", "8", "9"),
+        (rt(2026, 5, 15, 3, 38), rt(2026, 5, 29, 17, 51), "SELL_ONLY", "8", "9"),
+        (rt(2026, 5, 29, 17, 51), rt(2026, 6, 5, 16, 0), "NONE", "8", "9"),
+        (rt(2026, 6, 5, 16, 0), rt(2026, 6, 5, 16, 51), "BOTH", "8", "11"),
+        (rt(2026, 6, 5, 16, 51), rt(2026, 6, 8, 12, 31), "SELL_ONLY", "8", "11"),
+        (rt(2026, 6, 8, 12, 31), rt(2026, 6, 15, 0, 29), "BOTH", "8", "7"),
+        (rt(2026, 6, 15, 0, 29), rt(2026, 6, 17, 22, 24), "BUY_ONLY", "8", "7"),
+        (rt(2026, 6, 17, 22, 24), rt(2026, 6, 19, 7, 57), "SELL_ONLY", "8", "7"),
+        (rt(2026, 6, 19, 7, 57), rt(2026, 6, 23, 11, 17), "BOTH", "8", "5"),
+        (rt(2026, 6, 23, 11, 17), rt(2026, 7, 14, 15, 30), "SELL_ONLY", "8", "5"),
+        (rt(2026, 7, 14, 15, 30), rt(2026, 7, 23, 15, 43), "NONE", "8", "5"),
+        (rt(2026, 7, 23, 15, 43), rt(2026, 7, 27, 1, 0), "BOTH", "8", "14"),
+        (rt(2026, 7, 27, 1, 0), rt(2026, 7, 29, 21, 53), "SELL_ONLY", "8", "14"),
+        (rt(2026, 7, 29, 21, 53), rt(2026, 7, 30, 13, 43), "SELL_ONLY", "15", "14"),
+        (rt(2026, 7, 30, 13, 43), rt(2026, 8, 7, 15, 34), "BUY_ONLY", "15", "14"),
+        (rt(2026, 8, 7, 15, 34), rt(2026, 8, 19, 15, 36), "BOTH", "13", "14"),
+        (rt(2026, 8, 19, 15, 36), rt(2026, 8, 19, 16, 29), "BUY_ONLY", "13", "14"),
+        (rt(2026, 8, 19, 16, 29), rt(2026, 8, 20, 9, 45), "BOTH", "12", "14"),
+        (rt(2026, 8, 20, 9, 45), rt(2026, 8, 31, 0, 4), "BUY_ONLY", "12", "14"),
+        (rt(2026, 8, 31, 0, 4), rt(2026, 9, 9, 9, 15), "NONE", "12", "14"),
+        (rt(2026, 9, 9, 9, 15), rt(2026, 9, 11, 22, 5), "BUY_ONLY", "12", "14"),
     ]
 
 
