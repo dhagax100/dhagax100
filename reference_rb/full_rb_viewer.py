@@ -189,13 +189,31 @@ def build_manual_rb_gates() -> List[Tuple[datetime, datetime, str, str, str]]:
       control, same as zone #3 in gate 2), split into its own gate purely
       to mark the impact boundary in the record.
 
-    NONE from 2026-04-08 01:36 Riyadh:
-      4 minutes after impact, price wicks above zone #6's own top -- the
-      exact same swing high (1.16394) that created it -- at 01:36 (M1 high
-      1.16402). That's the real-time MSS_UP exceedance (confirmed against
-      the fixed weekly_rb_swings.csv export, same minute). Zone #6's own
-      supportive swing is taken, stopping the sell campaign. Next gate not
-      yet given -- out of scope for this delivery."""
+    Gate 7 -- BUY_ONLY, 2026-04-08 01:36 -> 04-29 21:37 Riyadh (correction,
+    2026-09-24): 4 minutes after zone #6's impact, price wicks above its
+    own top -- the same swing high (1.16394) that created it -- at 01:36.
+    User corrected the original call here: this is NOT a stop to NONE, it's
+    a trend SHIFT to up. No opposing (BUY) RB gets impacted to justify BOTH
+    -- the only live, never-impacted BUY zone is far away (zone #7 itself is
+    born this same minute, not yet eligible; the nearest pre-existing live
+    SELL zone, #4, tops out at zb=1.18722, and price's real max in this
+    whole window is only 1.18488, confirmed against raw M1 data -- so #4 is
+    never touched). So BUY_ONLY opens with no opposing-impact anchor. Per
+    the "last RB on the current bias side" rule, zone #7 (Weekly IRB, BUY,
+    zb=1.14427/zt=1.15005, triggered this exact minute 2026-04-08 01:36) is
+    the newest BUY zone in existence, so it's the buy parent -- despite
+    itself not being eligible/impacted yet (same pattern as zone #4 in
+    gates 3-5).
+
+      Stops at 2026-04-29 21:37 Riyadh: the engine's formally-confirmed
+      SWING HIGH at 1.18488 (peak itself printed 2026-04-17 13:12 UTC /
+      16:12 Riyadh, confirmed two-sided on 2026-04-29 18:37 UTC / 21:37
+      Riyadh once price pulled back enough) -- verified against the fixed
+      weekly_rb_swings.csv real-minute export. Unlike an MSS/structural
+      break (real-time, single wick), a swing-high stop is inherently the
+      engine's own two-sided confirmation event -- there is no earlier
+      real-time equivalent to prefer here. Goes to NONE at that minute.
+      Next gate not yet given -- out of scope for this delivery."""
     rtz = ZoneInfo("Asia/Riyadh")
 
     def rt(y: int, mo: int, d: int, h: int, mi: int) -> datetime:
@@ -210,7 +228,8 @@ def build_manual_rb_gates() -> List[Tuple[datetime, datetime, str, str, str]]:
         (rt(2026, 3, 23, 14, 6), rt(2026, 3, 30, 12, 17), "NONE", "", ""),
         (rt(2026, 3, 30, 12, 17), rt(2026, 4, 8, 1, 32), "SELL_ONLY", "6", ""),
         (rt(2026, 4, 8, 1, 32), rt(2026, 4, 8, 1, 36), "SELL_ONLY", "6", ""),
-        (rt(2026, 4, 8, 1, 36), rt(2026, 9, 11, 22, 5), "NONE", "", ""),
+        (rt(2026, 4, 8, 1, 36), rt(2026, 4, 29, 21, 37), "BUY_ONLY", "", "7"),
+        (rt(2026, 4, 29, 21, 37), rt(2026, 9, 11, 22, 5), "NONE", "", ""),
     ]
 
 
