@@ -173,6 +173,32 @@ Note: `reference/weekly_ob_generator.py`'s own `weekly_ob_swings.csv`
 export (OB project, lines ~810-813) has the identical defect, unfixed --
 flagged, not touched, since that engine is marked locked/complete.
 
+## The real answer: too much data for one Pine script, added --window-start/--window-end (2026-09-24)
+
+CE10295 persisted even after ALL three layers were converted to
+`pack_array` (zero `array.from(` anywhere, verified). User asked directly:
+what is this error, how did OB solve it, why hadn't this been fixed after
+several tries. Honest answer, given plainly: CE10295 is Pine's ceiling on
+the TOTAL SIZE/complexity of a script, not specifically statement count or
+element count -- `pack_array` reduced AST node count, but the actual DATA
+(122 H4 RBs + 152 5m trades, all their prices/times/labels) didn't get any
+smaller, so the ceiling was still being hit. OB never solved this at RB's
+scale -- OB's own rendered window always stayed small (one zone's
+~6-13-week span), so it never had to.
+
+**The real fix**: show less at once. Added `--window-start`/`--window-end`
+to `full_rb_viewer.py` -- narrows which H4 RBs/trades/labels get DRAWN in
+the `.pine` file, on top of (never widening) the known-gates span. The
+CSVs (`h4_rb_ledger.csv`, `five_bso_rb_ledger.csv`, `weekly_rb_ledger.csv`)
+always contain the COMPLETE, unwindowed history regardless -- only the
+Pine chart itself is scoped down. Verified directly: full window = 99,716
+characters in the generated `.pine`; `--window-start 2026-08-01` alone
+cuts it to 52,660 characters (122 H4 RBs -> 32 shown, 152 trades -> 38
+drawn) -- character count scales with the actual row count, confirming
+this (not any encoding trick) is the real lever for staying under
+whatever Pine's true ceiling is. Use e.g.:
+`python full_rb_viewer.py ..\EURUSD_m1_BidAndAsk.csv --window-start 2026-08-01`
+
 ## CE10295 for a third time -- the Weekly layer was never converted (2026-09-24)
 
 User: "this is your last chance to fix this." Fair -- the CE10295 fix had

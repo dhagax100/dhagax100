@@ -61,6 +61,18 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--h4-anchor-hour", type=int, default=17, choices=range(24), help="NY-LOCAL hour the 4H grid starts from, DST-aware -- see h4_ob_engine.h4_grid_start().")
     p.add_argument("--h4-pine-rbs", type=int, default=200, choices=range(1, 451))
     p.add_argument("--h4-pine-labels", type=int, default=80, choices=range(1, 161))
+    p.add_argument("--window-start", default=None,
+                    help="Only draw H4 RBs/trades/labels impacted on or after this date/time "
+                         "(e.g. 2026-08-01 or '2026-08-01 09:00'), in --display-tz. Narrows the "
+                         "known-gates window -- doesn't change what's computed, only what's drawn "
+                         "in the .pine file. The CSVs (h4_rb_ledger.csv, five_bso_rb_ledger.csv, "
+                         "weekly_rb_ledger.csv) always contain the FULL history regardless. Added "
+                         "2026-09-24 because the whole-dataset render (122 H4 RBs, 152 5m trades) "
+                         "is simply too much data for one Pine script to hold, no matter how it's "
+                         "encoded -- see docs_rb/RB_RULES_LEARNED.md.")
+    p.add_argument("--window-end", default=None,
+                    help="Only draw H4 RBs/trades/labels impacted before this date/time, in "
+                         "--display-tz. See --window-start.")
     return p.parse_args()
 
 
@@ -378,6 +390,31 @@ def main() -> int:
     # span -- the last gate before the final trailing NONE marks that end.
     window_start = gates[0][0]
     window_end = gates[-1][0] if gates[-1][2] == "NONE" else gates[-1][1]
+
+    # --window-start/--window-end (2026-09-24): narrow the drawn slice on
+    # top of the known-gates span above -- never widen it. The whole-
+    # dataset render (122 H4 RBs, 152 5m trades) is too much data for one
+    # Pine script regardless of encoding; this lets the user pick a
+    # smaller slice to actually view while the CSVs above still hold the
+    # complete, unwindowed history. See docs_rb/RB_RULES_LEARNED.md.
+    def parse_window_arg(s: str) -> datetime:
+        s = s.strip()
+        for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(s, fmt).replace(tzinfo=display_tz)
+            except ValueError:
+                continue
+        raise SystemExit(f"--window-start/--window-end: could not parse {s!r} "
+                          f"(use 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM')")
+
+    if args.window_start:
+        window_start = max(window_start, parse_window_arg(args.window_start))
+    if args.window_end:
+        window_end = min(window_end, parse_window_arg(args.window_end))
+    if window_start >= window_end:
+        raise SystemExit(f"--window-start/--window-end leaves an empty window: "
+                          f"{window_start} -> {window_end}")
+
     focused_drawn = [d for d in drawn if window_start <= d[0].impact_time < window_end]
     h4_extra_lines = build_h4_rb_extra_lines(h4_engine, h4_bars, focused_drawn, args.h4_pine_rbs, display_tz,
                                               window_start, window_end, args.h4_pine_labels)
