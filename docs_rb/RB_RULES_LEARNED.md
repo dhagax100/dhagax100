@@ -39,6 +39,29 @@ boundary describable as "trend flips" or "MSS" must be checked for the
 first wick (not close) breach of the relevant protecting swing, not a
 candle-close event on any timeframe.
 
+## Known issue flagged, NOT fixed yet — weekly-open-candle wick RBs (2026-09-24)
+
+H4 RB #168 (Parent W #6, SELL, bottom=1.15195, top=1.15226, trigger
+2026-04-06 01:05 Riyadh, eligible/impact 2026-04-06 05:17 Riyadh) is wrong.
+User: "you gave a random color swing high and swing low inside the wick, so
+that the wick was considered as RB which is wrong and the sole reason is it
+is weekly open candle." The zone was built from the wick of the Monday
+00:00 (weekly-open) candle — same family of issue as the OB weekly-gap
+problem investigated earlier this segment, but here it produced a false
+swing-pivot pick on the open candle itself rather than a gap-range error.
+
+**Decision: do not fix now.** User: "We do not need to fix it now we will
+take care of all the issues of midnight candles and their gaps later. we
+just need to record their info for later." This entry is that record.
+
+`[RB-KNOWN-ISSUE]` Midnight/weekly-open candles can produce false
+swing-high/swing-low picks purely from their own wick, generating a
+spurious H4 (and potentially Weekly) RB zone. Root cause not yet
+diagnosed — deferred, grouped with the broader "midnight candles and
+their gaps" cleanup to be done later, together with the open OB gap
+question. Do not treat any RB zone whose trigger/origin candle sits at a
+weekly (or possibly daily) open as trustworthy until this is fixed.
+
 ## Real bug caught by the user questioning a swing-confirm timestamp (2026-09-24)
 
 Asked whether a swing high was confirmed at 2026-03-30 12:17 Riyadh; I first
