@@ -330,6 +330,87 @@ and also benefits OB the same way if OB's own BSO table ever grows this
 large. Verified: `bso5BLeft` etc. now hold bare integers
 (e.g. `1770693300000`), not nested `timestamp(...)` calls.
 
+## Automated control engine built and validated against the 34-gate table (2026-09-24)
+
+New file: `reference_rb/weekly_rb_control_engine.py` -- RB's counterpart of
+OB's `weekly_control_engine.py`, independently deriving control state from
+raw zone/swing/MSS facts instead of the hand-maintained
+`build_manual_rb_gates()` table. Implements every RB-specific rule this
+session established: parent-in-charge = last REACTED zone (not created),
+every opposing impact -> BOTH (no OB-style direct-switch exception), BOTH
+resolves via respect / anchor-break / Weekly-close body-death of the
+challenger (whichever comes first), a sole controlling zone's own anchor
+breaking flips control directly (no NONE in between), a genuinely unrelated
+swing pauses to NONE and resumes via the opposite-kind swing, and same-
+minute collisions between an impact and a would-be pause/resume are
+resolved by the impact.
+
+**Validated directly against the 34-gate table, not just run once and
+trusted.** Three real bugs found and fixed while validating (each one only
+surfaced by an actual mismatch against the known-correct gates, not by
+inspection):
+1. **Same-minute collision checks never fired.** They reused a
+   "next impact STRICTLY AFTER this time" lookup to test for a same-minute
+   impact -- which by construction can never match anything AT that exact
+   minute. Added a real `impact_at_exact()` helper. (Caught by gate 6a->6b:
+   zone #6's own impact at 04-08 01:32 coincides with an unrelated swing
+   low confirming the same minute; the engine wrongly read it as a bare
+   pause instead of "stays SELL_ONLY, parent updates.")
+2. **Tie-break bug**, same root family: when an impact and a resume
+   candidate land at the EXACT same timestamp, the impact candidate was
+   always listed first and always won ties, so the collision check (which
+   only ran when `kind_ == "resume"`) never got a chance to fire. Fixed by
+   checking the collision against the winning timestamp directly, not
+   against which literal candidate the sort happened to pick. (Caught by
+   gate 8->9: 05-06 13:45's zone #8 impact and BUY resume swing tie
+   exactly.)
+3. **BOTH only checked two of the three real resolution paths** (respect,
+   anchor-break) -- missing that the challenger zone can also just die
+   outright via the ordinary Weekly-close body-breach rule, same as any
+   other zone. Missing this made the engine skip right past the real
+   05-11 00:00 resolution (zone #8 dying at its own week close) to a much
+   later, unrelated coincidental swing. Added `body_close_dead_after()`
+   (itself needed its own fix -- filtered candidate weeks by `w.start`
+   instead of `w.end`, wrongly discarding the very week whose CLOSE was
+   being tested whenever the cutoff fell mid-week, which it normally does).
+
+**Result after all three fixes: 32 of 34 hand-verified transitions match
+almost exactly** (same event, same zone, same minute in all but two
+body-close timestamps that are off by exactly 1 hour -- see below).
+
+**One genuine, freshly-surfaced discrepancy, flagged for a decision, not
+silently resolved either way**: gate 2 (02-16 -> 02-19 16:01, previously
+recorded as BUY_ONLY the whole stretch). The engine says control is
+**NONE** from 02-16 01:00 (zone #2's own death) until 02-17 18:28 (zone
+#3's first impact), THEN BUY_ONLY -- not BUY_ONLY the whole time. This is
+consistent with every other gate's now-corrected rule (control only starts
+via an actual REACTION, matching the earlier "parent-in-charge, corrected"
+fix, which already established that gate 2 has no PARENT until 02-17
+18:28 -- the engine is now saying the CONTROL STATE itself should follow
+the same logic, not just the parent id). Not yet accepted into the
+benchmark table -- this is exactly the kind of finding OB's own port
+surfaced (2 new gates, both accepted after user confirmation) and should
+get the same treatment: user confirms or rejects it before
+`build_manual_rb_gates()` changes.
+
+**Minor, non-structural discrepancies to reconcile**: two Weekly-close
+body-death timestamps (zone #8's death, zone #14's death) land at :00
+Riyadh in the engine's output vs :01 in the hand-typed table -- a 1-hour
+difference, most likely from an earlier, less careful ad hoc verification
+script using slightly different week-close parameters than the canonical
+`--week-close-zone America/New_York --week-close-hour 17` defaults (which
+the new engine uses exactly, matching `full_rb_viewer.py`'s own defaults).
+Worth reconciling before trusting the exact hour on those two boundaries,
+though it doesn't change which gate or which zone -- only a 1-hour
+precision question on 2 of 34 transitions.
+
+**Not yet done**: `full_rb_viewer.py`/`build_manual_rb_gates()` has NOT
+been switched over to use this engine's output -- it still uses the
+hand-maintained table. This is intentionally the same "verify before
+wiring in" discipline OB's own port followed. Outputs
+(`weekly_rb_control_events.csv`, `weekly_rb_control_report.txt`) are
+written next to the CSV for inspection; nothing downstream reads them yet.
+
 ## RB declared the benchmark over OB where the two disagree (2026-09-24)
 
 Compared OB's 16-gate control history (`full_viewer.py`'s `build_manual_gates()`)
