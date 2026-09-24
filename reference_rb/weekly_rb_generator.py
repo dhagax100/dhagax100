@@ -500,16 +500,28 @@ def write_ledger(base: Path, engine: WeeklyRBEngine, display_zone: ZoneInfo) -> 
             ))
     with (base / "weekly_rb_swings.csv").open("w", newline="", encoding="utf-8") as f:
         wr = csv.writer(f)
+        # confirm_utc/confirm_riyadh are the exact 1m confirmation minute
+        # (Event.at for a SWING, the first real M1 break of the broken
+        # level for an MSS -- via break_time(), mirroring the engine's own
+        # trigger-timing convention) -- NOT the containing week's scheduled
+        # open. Real bug, user-caught (2026-09-24): this column used to
+        # print engine.w[e.confirm].start / engine.w[x.at].start, which is
+        # only the week LABEL a confirmation is attributed to, not when it
+        # actually happened -- e.g. the 1.16394 swing high is attributed to
+        # week-of-2026-03-30, but the real M1 confirmation minute is
+        # 2026-03-30 12:17, not that week's 00:00 open.
         wr.writerow(["record", "kind", "origin_utc", "origin_riyadh", "confirm_utc", "confirm_riyadh", "price"])
         for e in engine.events:
+            confirm_at = e.at if e.at is not None else engine.w[e.confirm].start
             wr.writerow(["SWING", "HIGH" if e.kind == 0 else "LOW",
                          wob.iso(engine.w[e.swing].start), wob.display_iso(engine.w[e.swing].start, display_zone),
-                         wob.iso(engine.w[e.confirm].start), wob.display_iso(engine.w[e.confirm].start, display_zone),
+                         wob.iso(confirm_at), wob.display_iso(confirm_at, display_zone),
                          f"{e.price:.5f}"])
         for x in engine.msses:
+            confirm_at = engine.break_time(x.at, x.up, x.price) or engine.w[x.at].start
             wr.writerow(["MSS_UP" if x.up else "MSS_DOWN", "",
                          wob.iso(engine.w[x.broken].start), wob.display_iso(engine.w[x.broken].start, display_zone),
-                         wob.iso(engine.w[x.at].start), wob.display_iso(engine.w[x.at].start, display_zone),
+                         wob.iso(confirm_at), wob.display_iso(confirm_at, display_zone),
                          f"{x.price:.5f}"])
 
 

@@ -39,6 +39,33 @@ boundary describable as "trend flips" or "MSS" must be checked for the
 first wick (not close) breach of the relevant protecting swing, not a
 candle-close event on any timeframe.
 
+## Real bug caught by the user questioning a swing-confirm timestamp (2026-09-24)
+
+Asked whether a swing high was confirmed at 2026-03-30 12:17 Riyadh; I first
+said no, reading `weekly_rb_swings.csv`'s `confirm_riyadh` column, which
+showed 2026-03-30 00:00 (week-open) for that swing. User correctly pushed
+back: that column was never the real confirmation minute -- it's just the
+containing week's scheduled boundary. Checked `write_ledger()` in
+`weekly_rb_generator.py`: it wrote `engine.w[e.confirm].start` (a SWING's
+confirm week label) and `engine.w[x.at].start` (an MSS's break week label)
+instead of the engine's own stored exact-minute facts. Re-ran the engine
+directly and confirmed the real minute for that swing high (1.16394) is
+2026-03-30 12:17 -- exactly the RB #5/#6 trigger minute already logged
+above, and independently reproduces the MSS_DOWN gate-2/3 boundary
+(2026-02-19 16:01) already hand-verified for the real bug entry below.
+
+`[RB-NEW]` **Fixed**: `weekly_rb_swings.csv`'s `confirm_utc`/`confirm_riyadh`
+now use the SWING `Event.at` (already an exact 1m timestamp, just never
+exported) directly, and the MSS row now computes its exact break minute via
+`engine.break_time(x.at, x.up, x.price)` (same helper the RB trigger-timing
+code already uses) instead of printing the week's own open time. `origin_*`
+columns are untouched -- those correctly label which week's candle the
+pivot itself sits on, a week-level fact, not a confirmation-timing one.
+
+Note: `reference/weekly_ob_generator.py`'s own `weekly_ob_swings.csv`
+export (OB project, lines ~810-813) has the identical defect, unfixed --
+flagged, not touched, since that engine is marked locked/complete.
+
 ## Real bug caught by the user from the H4 table (2026-09-23)
 
 H4 RB #143 (SELL, gate 5, 2026-03-23) showed `Parent W: -` (blank). User
