@@ -173,6 +173,58 @@ Note: `reference/weekly_ob_generator.py`'s own `weekly_ob_swings.csv`
 export (OB project, lines ~810-813) has the identical defect, unfixed --
 flagged, not touched, since that engine is marked locked/complete.
 
+## Parent-in-charge rule, corrected: REACTED, not just created (2026-09-24)
+
+The earlier "last RB on the current bias side" rule (below, 2026-09-23) was
+WRONG in one critical way: it picked the last zone CREATED on that side,
+even if price never actually touched it yet. User correction, verbatim:
+"you need to distinguish between events caused and RB reaction caused
+control gates. if price reacted off sell RB, the parent RB is in control
+but if just continuation of trend (like swing high confirmation or swing
+low exceedance of course kept us selling), the last reacted RB is in
+control even if it was spent and even if it had candle body close."
+
+`[RB-NEW]` **Parent-in-charge rule, final form**: the parent updates ONLY
+when price actually REACTS off (impacts/touches) a zone on that side --
+never merely because a new zone was created/triggered, and never merely
+because a structural/swing/MSS continuation event fires. A continuation
+event (structural break, RB-anchor break, swing-high/low confirm/exceed)
+NEVER changes the parent by itself -- it keeps whatever zone was last
+actually impacted on that side in charge, even if that zone is already
+SPENT and even if it already died via the Weekly-close body-breach rule.
+
+Re-derived the full sell-parent history under this corrected rule
+(re-walked every sell-side gate from scratch): only 4 real sell parents
+exist so far, each starting at that zone's own impact minute, not its
+creation/trigger minute:
+- **#2** from 2026-02-09 15:07 (zone #2's own impact -- gate 1 opens).
+- **#6** from 2026-04-08 01:32 (zone #6's first touch) -- #2 stayed
+  parent through gates 3, 4-sell-side, 5, 6a even though zone #4 was
+  created in that window and zone #6 was created at 6a's own start
+  (03-30 12:17) -- NEITHER was ever reacted to before this point, so
+  neither was ever parent.
+- **#8** from 2026-05-06 13:45 (zone #8's own impact, opening gate 9's
+  sell side) -- stayed parent through every later sell-side gate
+  (11, the 06-05/06-08/06-19 BOTH sell-sides, the 06-17/06-23 SELL_ONLY
+  resumptions, the 07-23 BOTH sell-side, the 07-27 reversion) even
+  though zones #10, #12, #13 were all created in that stretch --
+  none of them had been touched by price yet.
+- **#15** from 2026-07-29 21:53 (zone #15's own impact -- a real
+  reaction, coinciding by pure timing coincidence with the confirmation
+  of an unrelated swing low, not a causal link).
+
+Zone #13 was NEVER actually a sell parent at any point, despite two of my
+own answers claiming it was -- caught and corrected by the user before
+being written into code. **Bookkeeping instruction from the user,
+verbatim**: "if it was not known before, you should consider recording and
+bookkeeping it. I do not want to explain myself in the future" -- this
+entry exists specifically so this distinction never has to be re-explained.
+Any future "who is the parent" question must be re-derived by walking
+every gate's own IMPACT events, not by re-reading `build_manual_rb_gates()`
+(the code still records the WRONG pre-correction parents for this window
+as of this entry -- not yet re-written to match; check this doc, not the
+code, until it is).
+
 ## Real bug caught by the user from the H4 table (2026-09-23)
 
 H4 RB #143 (SELL, gate 5, 2026-03-23) showed `Parent W: -` (blank). User
