@@ -99,6 +99,7 @@ class WeeklyRBEngine:
         self.msses: List["wob.MSS"] = []
         self.zones: List[RBZone] = []
         self.active: List[int] = []
+        self._claimed_pairs: set = set()  # (candle, bull) -- see claimed()
         self.sw_highs: List[int] = []
         self.sw_lows: List[int] = []
         self.peak = self.trough = 0
@@ -184,8 +185,15 @@ class WeeklyRBEngine:
         candle X never gets promoted (stranded/impacted first) and the
         armed extreme later still breaks with self.last_l/last_h still
         unchanged (== X), the normal IRB fallback would otherwise anchor
-        on that exact same candle again."""
-        return any(z.candle == candle and z.bullish == bull for z in self.zones)
+        on that exact same candle again. O(1) set lookup, not a rescan of
+        self.zones -- the linear scan (`any(... for z in self.zones)`) was
+        the real cause of the multi-minute runtime the user reported: it
+        was called once per candidate zone as self.zones kept growing, so
+        the total cost was O(n^2) in the number of zones/candidates (confirmed
+        by profiling: 202M genexpr iterations for ~20.7k calls on the full
+        9-gate dataset, almost exactly the triangular-number signature of a
+        growing-list rescan). Fixed 2026-09-24 -- see RB_RULES_LEARNED.md."""
+        return (candle, bull) in self._claimed_pairs
 
     def add_rb_from_swing(self, idx: int, is_high: bool, trigger_k: int, origin_type: int,
                            trigger_time: Optional[datetime], state: Optional[int] = None) -> int:
@@ -215,6 +223,7 @@ class WeeklyRBEngine:
                    eligible_time=eligible_time, created_state=actual_state)
         self.zones.append(z)
         self.active.append(len(self.zones) - 1)
+        self._claimed_pairs.add((idx, bull_of_this))
         return len(self.zones) - 1
 
     def try_bull_arb(self, preg: int, armed_swh: int, new_swl_i: int, k: int, at: Optional[datetime]) -> None:
@@ -534,12 +543,33 @@ def rb_colour(z: RBZone) -> str:
     return "color.blue" if z.bullish else "color.black"
 
 
+def pine_epoch(t: datetime) -> str:
+    """Bare UTC epoch-millisecond integer literal. Pine's own `time`/
+    `time_close` built-ins ARE epoch-ms ints, so this is exactly equivalent
+    to `wob.pine_time(t)` (`timestamp("GMT+0", Y, M, D, h, mi)`) wherever
+    the result only needs to be a time VALUE, not a readable timestamp() call
+    -- but it costs the compiler ONE AST node instead of six (one function
+    call + 5 int args). Array-packing alone (the original CE10295 fix,
+    still correct and still in place) caps the number of Pine STATEMENTS,
+    but each array.from(...) literal's own element count still scales the
+    compiled node count with the data -- widening the gates window kept
+    growing that past Pine's ceiling again. Fixed for real 2026-09-24: every
+    array literal that previously packed one wob.pine_time(...)/6-node call
+    per element now packs one pine_epoch(...)/1-node literal per element
+    instead -- same array, ~5x fewer nodes, permanent regardless of how many
+    RB zones/swings/MSS get drawn later. See RB_RULES_LEARNED.md."""
+    return str(int(t.astimezone(timezone.utc).timestamp() * 1000))
+
+
 def write_rb_pine(base: Path, engine: WeeklyRBEngine, label_cap: int, rb_cap: int, table_cap: int,
                    display_zone: ZoneInfo, extra_lines: Optional[List[str]] = None, out_name: str = "weekly_rb_viewer.pine") -> None:
     """Array-packed from the start (see the CE10295/CE10205/CE10013 lesson
     already recorded in docs/TRADING_SYSTEM_HANDOFF.md's OB history): one
     statement per FIELD, one runtime for-loop to draw, regardless of how
-    many RB zones exist. Never unroll one label.new/box.new per item."""
+    many RB zones exist. Never unroll one label.new/box.new per item. Time
+    VALUES inside those arrays use pine_epoch() (bare int literal), not
+    wob.pine_time() (a 6-node timestamp() call) -- see pine_epoch's own
+    docstring for why."""
     sh = [e for e in engine.events if e.kind == 0][-label_cap:]
     sl = [e for e in engine.events if e.kind == 1][-label_cap:]
     ms = engine.msses[-label_cap:]
@@ -576,13 +606,13 @@ def write_rb_pine(base: Path, engine: WeeklyRBEngine, label_cap: int, rb_cap: in
 
     struct_x, struct_y, struct_txt, struct_col, struct_low = [], [], [], [], []
     for e in sh:
-        struct_x.append(wob.pine_time(engine.w[e.swing].start)); struct_y.append(f"{e.price:.5f}")
+        struct_x.append(pine_epoch(engine.w[e.swing].start)); struct_y.append(f"{e.price:.5f}")
         struct_txt.append("\"▲\""); struct_col.append("color.blue"); struct_low.append("false")
     for e in sl:
-        struct_x.append(wob.pine_time(engine.w[e.swing].start)); struct_y.append(f"{e.price:.5f}")
+        struct_x.append(pine_epoch(engine.w[e.swing].start)); struct_y.append(f"{e.price:.5f}")
         struct_txt.append("\"▼\""); struct_col.append("color.black"); struct_low.append("true")
     for m in ms:
-        struct_x.append(wob.pine_time(engine.w[m.broken].start))
+        struct_x.append(pine_epoch(engine.w[m.broken].start))
         struct_y.append(f"{m.price:.5f}")
         struct_txt.append("\"✕\""); struct_col.append("color.blue" if m.up else "color.black")
         struct_low.append("false" if m.up else "true")
@@ -604,16 +634,16 @@ def write_rb_pine(base: Path, engine: WeeklyRBEngine, label_cap: int, rb_cap: in
         if z.impact_time is not None:
             name = f"impact_x_{z.id}"
             impact_vars[z.id] = name
-            stamp = wob.pine_time(z.impact_time)
+            stamp = pine_epoch(z.impact_time)
             impact_watchers += [f"var int {name} = na", f"if time <= {stamp} and {stamp} < time_close", f"    {name} := time"]
 
     rb_left, rb_top, rb_bottom, rb_right_expr, rb_col, rb_rank, rb_audit, rb_has_line = [], [], [], [], [], [], [], []
     for z in shown:
         wk = engine.w[z.candle]
         fallback_right = z.impact_time or (engine.w[z.stop].start if 0 <= z.stop < len(engine.w) else right_edge)
-        right = f"(na({impact_vars[z.id]}) ? {wob.pine_time(fallback_right)} : {impact_vars[z.id]})" if z.impact_time is not None else wob.pine_time(fallback_right)
+        right = f"(na({impact_vars[z.id]}) ? {pine_epoch(fallback_right)} : {impact_vars[z.id]})" if z.impact_time is not None else pine_epoch(fallback_right)
         rank_from_last = len(engine.zones) - z.id + 1
-        rb_left.append(wob.pine_time(wk.start)); rb_top.append(f"{z.zt:.5f}"); rb_bottom.append(f"{z.zb:.5f}")
+        rb_left.append(pine_epoch(wk.start)); rb_top.append(f"{z.zt:.5f}"); rb_bottom.append(f"{z.zb:.5f}")
         rb_right_expr.append(right); rb_col.append(rb_colour(z)); rb_rank.append(str(rank_from_last))
         rb_audit.append(f"\"#{z.id} {status(z)} {'BUY' if z.bullish else 'SELL'}\"")
         rb_has_line.append("true" if z.impact_time is not None else "false")

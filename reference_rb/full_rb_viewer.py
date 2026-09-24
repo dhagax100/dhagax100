@@ -260,13 +260,13 @@ def build_h4_rb_extra_lines(h4_engine: rb.WeeklyRBEngine, h4_bars: List["wob.Wee
     ms = [m for m in h4_engine.msses if in_window(h4_bars[m.broken].start)][-label_cap:]
     struct_x, struct_y, struct_txt, struct_col, struct_low = [], [], [], [], []
     for e in sh:
-        struct_x.append(fv.pine_time(h4_bars[e.swing].start)); struct_y.append(f"{e.price:.5f}")
+        struct_x.append(rb.pine_epoch(h4_bars[e.swing].start)); struct_y.append(f"{e.price:.5f}")
         struct_txt.append("\"▲\""); struct_col.append("color.blue"); struct_low.append("false")
     for e in sl:
-        struct_x.append(fv.pine_time(h4_bars[e.swing].start)); struct_y.append(f"{e.price:.5f}")
+        struct_x.append(rb.pine_epoch(h4_bars[e.swing].start)); struct_y.append(f"{e.price:.5f}")
         struct_txt.append("\"▼\""); struct_col.append("color.black"); struct_low.append("true")
     for m in ms:
-        struct_x.append(fv.pine_time(h4_bars[m.broken].start))
+        struct_x.append(rb.pine_epoch(h4_bars[m.broken].start))
         struct_y.append(f"{m.price:.5f}")
         struct_txt.append("\"✕\""); struct_col.append("color.blue" if m.up else "color.black")
         struct_low.append("false" if m.up else "true")
@@ -277,20 +277,20 @@ def build_h4_rb_extra_lines(h4_engine: rb.WeeklyRBEngine, h4_bars: List["wob.Wee
         if z.impact_time is not None:  # guaranteed: authorized => impacted => impact_time set
             name = f"h4rbimpact_x_{z.id}"
             impact_vars[z.id] = name
-            stamp = fv.pine_time(z.impact_time)
+            stamp = rb.pine_epoch(z.impact_time)
             impact_watchers += [f"var int {name} = na", f"if time <= {stamp} and {stamp} < time_close", f"    {name} := time"]
 
     lefts, tops, bottoms, right_exprs, bulls, labels, parents, sides, bots5, tops5, trigs, eligs, impacts = ([] for _ in range(13))
     for z, parent_id in shown:
         origin = h4_bars[z.candle]
         fallback_right = h4_bars[z.stop].start  # guaranteed valid: authorized => impacted => z.stop set
-        lefts.append(fv.pine_time(origin.start))
+        lefts.append(rb.pine_epoch(origin.start))
         tops.append(f"{z.zt:.5f}")
         bottoms.append(f"{z.zb:.5f}")
         if z.id in impact_vars:
-            right_exprs.append(f"(na({impact_vars[z.id]}) ? {fv.pine_time(fallback_right)} : {impact_vars[z.id]})")
+            right_exprs.append(f"(na({impact_vars[z.id]}) ? {rb.pine_epoch(fallback_right)} : {impact_vars[z.id]})")
         else:
-            right_exprs.append(fv.pine_time(fallback_right))
+            right_exprs.append(rb.pine_epoch(fallback_right))
         bulls.append("true" if z.bullish else "false")
         label_text = f"#{z.id} {'BUY' if z.bullish else 'SELL'} (W{parent_id})"
         labels.append(f"\"{fv.pine_text(label_text)}\"")

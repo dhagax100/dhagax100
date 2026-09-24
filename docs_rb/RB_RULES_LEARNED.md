@@ -39,6 +39,55 @@ boundary describable as "trend flips" or "MSS" must be checked for the
 first wick (not close) breach of the relevant protecting swing, not a
 candle-close event on any timeframe.
 
+## Real fixes — Pine CE10295 (permanent) and CLI runtime O(n^2) bug (2026-09-24)
+
+**CE10295 "main body is too long"**, recurring even though array-packing (the
+original fix, documented earlier in `docs/TRADING_SYSTEM_HANDOFF.md`'s OB
+history) was already in place everywhere. Array-packing caps the number of
+Pine STATEMENTS, but each `array.from(...)` literal's own element count
+still scales the compiled AST node count with the data -- as the manual
+gates window widened (38 H4 RBs, 52 drawn, hundreds of swing/MSS events),
+that kept growing past Pine's ceiling again, same failure, same symptom.
+Root cause of the SIZE, not just the statement count: every time-valued
+array element was `wob.pine_time(t)` / `fv.pine_time(t)` --
+`timestamp("GMT+0", Y, M, D, h, mi)` -- a 6-node function call (1 call + 5
+int args) for every single element. **Fixed for real**: added `pine_epoch(t)`
+in `weekly_rb_generator.py` (bare UTC epoch-millisecond integer literal --
+exactly equivalent, since Pine's own `time`/`time_close` built-ins already
+ARE epoch-ms ints) and swapped it in everywhere a bulk array literal or
+per-item time comparison previously used `pine_time`, in both
+`weekly_rb_generator.py`'s own Weekly layer and `full_rb_viewer.py`'s H4
+layer (`rb.pine_epoch`). One node instead of six per time value, same
+array, ~5x fewer AST nodes for every time-heavy array (`structX`,
+`h4RbStructX`, `rbLeft`/`h4RbLeft`, impact watchers) -- scales the same way
+regardless of how much wider the gates window gets later, not just a fix
+for today's data size. Verified: `structX`'s array now holds bare integers
+(e.g. `1766959200000`) instead of nested `timestamp(...)` calls; 38
+authorized H4 RBs / 38 shown unchanged (rendering-only change, zero effect
+on computed facts).
+
+**CLI runtime, real O(n^2) bug**: `claimed()` rescanned the ENTIRE (ever-
+growing) `self.zones` list on every single candidate zone check
+(`any(z.candle == candle and z.bullish == bull for z in self.zones)`).
+Profiled directly: 232.9M function calls, 139s wall time, with 202M of
+those calls being that one genexpr's iterations across ~20.7k `claimed()`
+calls -- the triangular-number signature (~n^2/2) of a linear rescan inside
+a growing loop. The 5-minute engine (tens of thousands of bars, run purely
+to extract swing/MSS events for BSO) was the dominant contributor, since
+it creates by far the most candidate zones. **Fixed**: replaced the full-
+list rescan with an O(1) `set` lookup (`self._claimed_pairs`), populated
+alongside `self.zones.append(...)` in `add_rb_from_swing`. Verified:
+function-call count dropped from 232.9M to 30.9M (the 202M genexpr calls
+gone entirely), 38/38 authorized unchanged (pure speed fix, zero output
+change). Remaining runtime (~50s on this machine, still profiled at ~83s
+of `finish_events_and_lifecycle`'s own per-bar/per-active-zone loop body)
+is genuinely proportional to (bars x concurrently-active zones) -- real,
+necessary work on the 5m timeframe's huge bar count, not a bug found so
+far. Flagged, not touched further -- a real algorithmic redesign there
+(e.g. only re-checking zones whose range could plausibly be touched by a
+given bar) would need its own careful review before risking a change to
+the actual computed results.
+
 ## Real bug fixed — ARB/ORB stranding used the wrong ("near-side") condition (2026-09-24)
 
 H4 RB #163 (SELL, W6, zb=1.16187/zt=1.16268) never stranded in the engine
