@@ -330,6 +330,43 @@ and also benefits OB the same way if OB's own BSO table ever grows this
 large. Verified: `bso5BLeft` etc. now hold bare integers
 (e.g. `1770693300000`), not nested `timestamp(...)` calls.
 
+## RB declared the benchmark over OB where the two disagree (2026-09-24)
+
+Compared OB's 16-gate control history (`full_viewer.py`'s `build_manual_gates()`)
+against RB's 34-gate history directly, timestamp by timestamp, over their
+shared window (2026-04-14 onward, both derived from the SAME underlying
+swing/MSS engine).
+
+**Where they agree** (pure swing/MSS-driven boundaries, no zone impact
+involved): exact match on NONE 07-14 15:30 -> 07-23 15:43; exact match on
+SELL_ONLY end times 05-29 17:51, 06-15 00:29, 07-14 15:30, 07-29 21:53;
+exact match on SELL_ONLY resuming 06-05 16:51. Confirms both projects
+correctly share the identical underlying swing/MSS facts.
+
+**Where they diverge** (any zone-impact-driven transition): OB's zones
+(range-scanned) and RB's zones (single swing-pivot wick) are different
+physical objects even off the same swing skeleton, so they react to price
+at different times, sometimes flipping which side is "in control"
+entirely:
+- 2026-04-14 -> 04-29: OB says SELL_ONLY, RB says BUY_ONLY.
+- 2026-06-15 -> 06-17: OB says NONE, RB says BUY_ONLY.
+- 2026-07-30 -> 08-19: OB mostly SELL_ONLY/NONE, RB mostly BUY_ONLY/BOTH.
+- **Terminal state, 2026-08-24 -> end of data (09-11)**: OB ends flat
+  (NONE, no live zone). RB ends BUY_ONLY, parent #14. The two projects
+  disagree about the entire final ~3 weeks of the dataset.
+
+**User's explicit ruling, verbatim**: "we need to record this and consider
+RB more accurate if we will have to pick one because I had the enough
+time and clear mind to guide you and I am sure every gate is correct. so,
+consider it benchmark." **RB is the benchmark going forward wherever the
+two disagree** -- all 34 RB gates are user-confirmed correct, walked and
+verified live, gate by gate, in this session. This does NOT mean OB's own
+16 gates are wrong (never re-verified against this finding) -- it means
+if a future decision has to pick one project's read of a given stretch,
+RB's is the one to trust. Flagged for whoever next touches OB's own gate
+history: the divergent windows above are worth a second look there, but
+that re-verification is OB's own task, not done as part of this entry.
+
 ## Full gate history written into code, corrected rule applied everywhere (2026-09-24)
 
 `build_manual_rb_gates()` now covers the ENTIRE loaded dataset: 2026-02-09
