@@ -717,3 +717,12 @@ entries (14 ENTERED, 15 H4_RB_BREACHED).
 - Whether RB's simpler "wick impact + stranding only" lifecycle ever
   produces a gate-relevant case OB's close-through rule would have
   caught (or vice versa) — no case has surfaced yet.
+
+## 2026-09-26 — dataset closed out (34/34 gates, chart-verified)
+
+All 34 gates walked to the end of the 2026 CSV, chart-verified, and
+cross-checked by an independent automated engine (`weekly_rb_control_engine.py`)
+that matches this table exactly, to the minute. Final trade result:
+90 entries (22 TP, 68 SL), net -2.00R. Full writeup, terminal state, and
+handoff checklist: see `RB_HANDOFF.md`'s 2026-09-26 entry. No open
+questions above were resolved by this sweep — they remain as listed.

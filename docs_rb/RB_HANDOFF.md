@@ -93,3 +93,33 @@ This is fixed in the shared file, so both OB and RB inherit it automatically. Re
 cd reference_rb
 python3 full_rb_viewer.py ../data/EURUSD_m1_BidAndAsk.csv
 ```
+
+## Session update — 2026-09-26 (all 34 gates walked and chart-verified; automated engine built and validated; 2026 dataset now fully closed out)
+
+**Full 34-gate control history walked, gate by gate, from RB zone #2's first impact (2026-02-09 15:07 Riyadh) to the end of the 2026 CSV (2026-09-11 22:05 Riyadh)**, using the same discipline as the OB side's own closeout: raw M1/Weekly data first, chart screenshots second, code only once both agreed. All 34 gates are recorded in `build_manual_rb_gates()` in `reference_rb/full_rb_viewer.py`.
+
+**Corrected mid-way through this sweep**: the parent-in-charge rule was wrong in its first form (last zone *created* on a side) and was replaced with the correct rule (last zone that actually *reacted* -- was impacted -- on that side). All 34 gates were re-derived under the corrected rule; two gates (2 and 7) had their recorded parent changed as a direct result.
+
+**Automated cross-check built**: `reference_rb/weekly_rb_control_engine.py`, a from-scratch derivation of the same 34 gates straight from raw data, independent of the hand-typed table. Three real engine bugs were found and fixed during validation (a same-minute collision-detection blind spot, a tie-break ordering bug, and a missing third BOTH-resolution path for ordinary Weekly-close body-death), plus one genuine hand-table gap (gate 2's early NONE window, since the dataset starts mid-campaign with no prior-year direction available) and two 1-hour timestamp slips (zone #8's and #14's Weekly-close death times). **After all fixes, the automated engine matches all 34 hand-verified gates exactly, to the minute.** RB is the more heavily user-verified of the two POI systems and is the declared benchmark over OB wherever the two disagree (explicit user ruling, 2026-09-24).
+
+**Full entry history reviewed, all 90 entries, start to finish** (RB zone #2's first impact through end of data):
+
+- 22 wins (TP, +3.00R each), 68 losses (SL, -1.00R each). Win rate 24.4%.
+- **Net: -2.00R over the full dataset** (2026-02-09 15:07 through 09-11 22:05 end of data).
+- Side split: 47 SELL entries, 43 BUY entries -- both directions traded, unlike the OB side's dataset where every entry was SELL.
+- 449 H4 RBs computed, 120 authorized (inside a real control gate), 150 5m entry attempts on those authorized RBs: 90 ENTERED, 59 H4_RB_BREACHED (zone breached before an entry trigger), 1 NO_ENTRY_IN_DATA (dataset ended first).
+
+**2026 dataset now fully closed out.** Every control gate from RB zone #2's first impact to the last 1-minute bar in the CSV is verified: 34 gates, all reproduced automatically by `weekly_rb_control_engine.py`, all cross-checked against `h4_rb_ledger.csv`/`five_bso_rb_ledger.csv`. Final state at end of file: **control = BUY_ONLY** (parent RB zone #12, challenger #14 still alive but not in charge), no open or pending H4 RB carrying forward past the CSV's last minute.
+
+**How to close out this RB/dataset and hand off cleanly, for whoever (or whichever future session) picks this up next:**
+1. **Nothing needs to be "closed" in code** -- there is no open position, no armed zone, no pending RB at the end of the CSV. The engine's own state at the last processed minute already IS the terminal state (BUY_ONLY, zone #12 in charge). Nothing to flatten or cancel.
+2. **When new data is appended** (a newer EURUSD CSV extending past 2026-09-11), don't reprocess from scratch and don't assume continuity is automatic: rerun the full pipeline (`weekly_rb_generator.py` -> `weekly_rb_control_engine.py` -> `full_rb_viewer.py`) against the new file end-to-end, since the locked engines are stateless recomputations over the whole file, not incremental. Then re-verify starting from this exact known-good terminal state (control=BUY_ONLY, parent #12, challenger #14, last event 2026-09-09 09:15) forward -- treat everything before 09-11 22:05 as already locked and don't re-litigate it, only chart-verify the new tail.
+3. **This file (`docs_rb/RB_HANDOFF.md`) and `docs_rb/RB_RULES_LEARNED.md` are the continuity record.** A new session or new dataset picks up by reading them end to end, not by re-deriving any of gates 1-34 from raw data again.
+4. **`full_rb_viewer.py` still runs on the hand-typed `build_manual_rb_gates()` table, not the automated engine's output** -- deliberate, mirrors the OB project's own "verify before wiring in" precedent. They match exactly, so switching later is a mechanical change, not a re-derivation, whenever it's wanted.
+5. Still-open, unrelated to this closure: the OB-side phantom Sunday-reopen H4 candle and ~3-pip live-feed discrepancy (see `docs/TRADING_SYSTEM_HANDOFF.md`) apply equally here, since RB reuses the same shared H4/5m engines. Neither blocks calling the 2026 RB dataset closed.
+
+**Run order unchanged**:
+```
+cd reference_rb
+python3 full_rb_viewer.py ../data/EURUSD_m1_BidAndAsk.csv
+```
