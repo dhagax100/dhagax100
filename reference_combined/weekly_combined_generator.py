@@ -48,7 +48,7 @@ import argparse
 import sys
 from bisect import bisect_left
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional
 from zoneinfo import ZoneInfo
@@ -1002,6 +1002,151 @@ def fvg_status(z) -> str:
     return FVG_STATE[z.pre_spent_state if z.state == 3 else z.state]
 
 
+def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int, ob_cap: int, rb_cap: int,
+                         fvg_cap: int, display_zone: ZoneInfo, out_name: str = "weekly_combined_viewer.pine") -> None:
+    """ONE pine file: the shared swing/regime/MSS structure drawn ONCE, with
+    OB, RB and FVG zones all overlaid on top of it -- mirrors
+    Main_Indicator_v1.pine's own single-chart layout, instead of three
+    separate viewer files each redrawing the identical swing/MSS labels on
+    their own. Array-packed throughout (pack_array/pine_epoch/colour_ternary,
+    reused unchanged from weekly_rb_generator.py -- same CE10295 avoidance
+    discipline as every other pine writer in this project).
+
+    Visual convention per POI type (matches each one's own standalone
+    viewer, so a zone looks the same whether you're looking at this combined
+    chart or its own individual one): OB = hollow box, solid border. RB =
+    hollow box, dashed border. FVG = filled box (85% transparency), solid
+    border. All three still use each POI's own established colour rule
+    (state 0=blue/black by side, 1=green, 2=red, 4=orange)."""
+    pack_array = wrb.pack_array
+    pine_epoch = wrb.pine_epoch
+    colour_ternary = wrb.colour_ternary
+    COLOUR_CODE = wrb._COLOUR_CODE
+
+    sh = [e for e in engine.events if e.kind == 0][-label_cap:]
+    sl = [e for e in engine.events if e.kind == 1][-label_cap:]
+    ms = engine.msses[-label_cap:]
+    right_edge = engine.m[-1].t + timedelta(days=365)
+
+    lines = [
+        "//@version=6",
+        "indicator(\"FXCM Weekly OB+RB+FVG Combined - Python Reference\", overlay=true, max_labels_count=500, max_boxes_count=500, max_lines_count=500)",
+        "// GENERATED FROM 1-MINUTE FXCM BID DATA. ONE shared swing/regime/MSS pass",
+        "// drives OB, RB and FVG together (mirrors Main_Indicator_v1.pine's own",
+        "// single-chart structure) -- not three separate re-derivations merged after.",
+        "float lowGap = ta.atr(14) * 0.08",
+        "bool onWeekly = timeframe.period == \"1W\"",
+        "bool onH4 = timeframe.period == \"240\"",
+        "bool onFive = timeframe.period == \"5\"",
+        "bool on1m = timeframe.period == \"1\"",
+    ]
+
+    # ---- shared swing/MSS labels, drawn ONCE ----
+    struct_x, struct_y, struct_txt, struct_col, struct_low = [], [], [], [], []
+    for e in sh:
+        struct_x.append(pine_epoch(engine.w[e.swing].start)); struct_y.append(e.price)
+        struct_txt.append("▲"); struct_col.append("B"); struct_low.append(False)
+    for e in sl:
+        struct_x.append(pine_epoch(engine.w[e.swing].start)); struct_y.append(e.price)
+        struct_txt.append("▼"); struct_col.append("K"); struct_low.append(True)
+    for m in ms:
+        struct_x.append(pine_epoch(engine.w[m.broken].start))
+        struct_y.append(m.price)
+        struct_txt.append("✕"); struct_col.append("B" if m.up else "K")
+        struct_low.append(not m.up)
+
+    def _box_arrays(zones, left_of, prefix_label):
+        left, top, bottom, fallback_right, impact_stamp, has_impact, col, audit = ([] for _ in range(8))
+        for z in zones:
+            if getattr(z, "rejected", False):
+                continue
+            wk = engine.w[left_of(z)]
+            fb_right = z.impact_time or (engine.w[z.stop].start if 0 <= z.stop < len(engine.w) else right_edge)
+            left.append(pine_epoch(wk.start)); top.append(z.zt); bottom.append(z.zb)
+            fallback_right.append(pine_epoch(fb_right))
+            impact_stamp.append(pine_epoch(z.impact_time) if z.impact_time is not None else None)
+            has_impact.append(z.impact_time is not None)
+            audit.append(f"{prefix_label} #{z.id} {'BUY' if z.bullish else 'SELL'}")
+        return left, top, bottom, fallback_right, impact_stamp, has_impact, col, audit
+
+    ob_shown = engine.ob_zones[-ob_cap:]
+    ob_left, ob_top, ob_bottom, ob_fallback_right, ob_impact_stamp, ob_has_impact, ob_col, ob_audit = _box_arrays(ob_shown, lambda z: z.candle, "OB")
+    for z in ob_shown:
+        if not z.rejected:
+            ob_col.append(COLOUR_CODE[wob.pine_colour(z)])
+
+    rb_shown = engine.rb_zones[-rb_cap:]
+    rb_left, rb_top, rb_bottom, rb_fallback_right, rb_impact_stamp, rb_has_impact, rb_col, rb_audit = _box_arrays(rb_shown, lambda z: z.candle, "RB")
+    for z in rb_shown:
+        rb_col.append(COLOUR_CODE[wrb.rb_colour(z)])
+
+    fvg_shown = engine.fvg_zones[-fvg_cap:]
+    fvg_left, fvg_top, fvg_bottom, fvg_fallback_right, fvg_impact_stamp, fvg_has_impact, fvg_col, fvg_audit = _box_arrays(fvg_shown, lambda z: z.left, "FVG")
+    for z in fvg_shown:
+        fvg_col.append(COLOUR_CODE[wfvg.fvg_colour(z)])
+
+    lines += [
+        *pack_array("structX", "int", struct_x),
+        *pack_array("structY", "float", struct_y),
+        *pack_array("structTxt", "string", struct_txt),
+        *pack_array("structColCode", "string", struct_col),
+        *pack_array("structLow", "bool", struct_low),
+        *pack_array("obLeft", "int", ob_left), *pack_array("obTop", "float", ob_top), *pack_array("obBottom", "float", ob_bottom),
+        *pack_array("obFallbackRight", "int", ob_fallback_right), *pack_array("obImpactStamp", "int", ob_impact_stamp),
+        *pack_array("obHasImpact", "bool", ob_has_impact), *pack_array("obColCode", "string", ob_col), *pack_array("obAudit", "string", ob_audit),
+        *pack_array("rbLeft", "int", rb_left), *pack_array("rbTop", "float", rb_top), *pack_array("rbBottom", "float", rb_bottom),
+        *pack_array("rbFallbackRight", "int", rb_fallback_right), *pack_array("rbImpactStamp", "int", rb_impact_stamp),
+        *pack_array("rbHasImpact", "bool", rb_has_impact), *pack_array("rbColCode", "string", rb_col), *pack_array("rbAudit", "string", rb_audit),
+        *pack_array("fvgLeft", "int", fvg_left), *pack_array("fvgTop", "float", fvg_top), *pack_array("fvgBottom", "float", fvg_bottom),
+        *pack_array("fvgFallbackRight", "int", fvg_fallback_right), *pack_array("fvgImpactStamp", "int", fvg_impact_stamp),
+        *pack_array("fvgHasImpact", "bool", fvg_has_impact), *pack_array("fvgColCode", "string", fvg_col), *pack_array("fvgAudit", "string", fvg_audit),
+        f"var array<int> obImpactX = array.new<int>({len(ob_left)}, na)",
+        "for hi = 0 to array.size(obImpactStamp) - 1",
+        "    if array.get(obHasImpact, hi)",
+        "        hiStamp = array.get(obImpactStamp, hi)",
+        "        if na(array.get(obImpactX, hi)) and time <= hiStamp and hiStamp < time_close",
+        "            array.set(obImpactX, hi, time)",
+        f"var array<int> rbImpactX = array.new<int>({len(rb_left)}, na)",
+        "for hi = 0 to array.size(rbImpactStamp) - 1",
+        "    if array.get(rbHasImpact, hi)",
+        "        hiStamp = array.get(rbImpactStamp, hi)",
+        "        if na(array.get(rbImpactX, hi)) and time <= hiStamp and hiStamp < time_close",
+        "            array.set(rbImpactX, hi, time)",
+        f"var array<int> fvgImpactX = array.new<int>({len(fvg_left)}, na)",
+        "for hi = 0 to array.size(fvgImpactStamp) - 1",
+        "    if array.get(fvgHasImpact, hi)",
+        "        hiStamp = array.get(fvgImpactStamp, hi)",
+        "        if na(array.get(fvgImpactX, hi)) and time <= hiStamp and hiStamp < time_close",
+        "            array.set(fvgImpactX, hi, time)",
+        "if barstate.islast",
+        "    if onWeekly",
+        "        for i = 0 to array.size(structX) - 1",
+        f"            structCol = {colour_ternary('array.get(structColCode, i)')}",
+        "            structYY = array.get(structLow, i) ? array.get(structY, i) - lowGap : array.get(structY, i)",
+        "            label.new(array.get(structX, i), structYY, array.get(structTxt, i), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=structCol, size=size.small)",
+        "    if onWeekly or onH4 or onFive",
+        "        for i = 0 to array.size(obLeft) - 1",
+        "            obRight = array.get(obHasImpact, i) and not na(array.get(obImpactX, i)) ? array.get(obImpactX, i) : array.get(obFallbackRight, i)",
+        f"            obCol = {colour_ternary('array.get(obColCode, i)')}",
+        "            box.new(array.get(obLeft, i), array.get(obTop, i), obRight, array.get(obBottom, i), border_color=obCol, border_width=1, bgcolor=na, xloc=xloc.bar_time)",
+        "            if array.get(obHasImpact, i)",
+        "                line.new(obRight, array.get(obBottom, i), obRight, array.get(obTop, i), xloc=xloc.bar_time, extend=extend.both, color=color.new(color.red, 30), width=1)",
+        "        for i = 0 to array.size(rbLeft) - 1",
+        "            rbRight = array.get(rbHasImpact, i) and not na(array.get(rbImpactX, i)) ? array.get(rbImpactX, i) : array.get(rbFallbackRight, i)",
+        f"            rbCol = {colour_ternary('array.get(rbColCode, i)')}",
+        "            box.new(array.get(rbLeft, i), array.get(rbTop, i), rbRight, array.get(rbBottom, i), border_color=rbCol, border_width=1, border_style=line.style_dashed, bgcolor=na, xloc=xloc.bar_time)",
+        "            if array.get(rbHasImpact, i)",
+        "                line.new(rbRight, array.get(rbBottom, i), rbRight, array.get(rbTop, i), xloc=xloc.bar_time, extend=extend.both, color=color.new(color.red, 30), width=1)",
+        "        for i = 0 to array.size(fvgLeft) - 1",
+        "            fvgRight = array.get(fvgHasImpact, i) and not na(array.get(fvgImpactX, i)) ? array.get(fvgImpactX, i) : array.get(fvgFallbackRight, i)",
+        f"            fvgCol = {colour_ternary('array.get(fvgColCode, i)')}",
+        "            box.new(array.get(fvgLeft, i), array.get(fvgTop, i), fvgRight, array.get(fvgBottom, i), border_color=fvgCol, border_width=1, bgcolor=color.new(fvgCol, 85), xloc=xloc.bar_time)",
+        "            if array.get(fvgHasImpact, i)",
+        "                line.new(fvgRight, array.get(fvgBottom, i), fvgRight, array.get(fvgTop, i), xloc=xloc.bar_time, extend=extend.both, color=color.new(color.red, 30), width=1)",
+    ]
+    (base / out_name).write_text("\n".join(lines), encoding="utf-8")
+
+
 def write_report(base: Path, minutes, weeks, e: WeeklyCombinedEngine, args, display_zone: ZoneInfo) -> None:
     n_high = sum(1 for x in e.events if x.kind == 0)
     n_low = sum(1 for x in e.events if x.kind == 1)
@@ -1103,11 +1248,14 @@ def main() -> int:
         wfvg.write_ledger(base, fvg_view, display_tz)
         wfvg.write_fvg_pine(base, fvg_view, args.pine_labels, args.pine_fvgs, args.pine_table, display_tz)
 
+        write_combined_pine(base, engine, args.pine_labels, args.pine_obs, args.pine_rbs, args.pine_fvgs, display_tz)
+
         write_report(base, minutes, weeks, engine, args, display_tz)
         print("Created:")
         print("  weekly_ob_ledger.csv / weekly_ob_swings.csv / weekly_ob_viewer.pine")
         print("  weekly_rb_ledger.csv / weekly_rb_swings.csv / weekly_rb_viewer.pine")
         print("  weekly_fvg_ledger.csv / weekly_fvg_swings.csv / weekly_fvg_viewer.pine")
+        print("  weekly_combined_viewer.pine  <-- ONE chart: shared swings/MSS + all three POI types")
         print("  weekly_combined_report.txt")
         print(f"Processed {len(minutes):,} minutes and {len(weeks)} weeks (single shared pass).")
         print(f"OB zones={len(engine.ob_zones)}  RB zones={len(engine.rb_zones)}  FVG zones={len(engine.fvg_zones)}")
