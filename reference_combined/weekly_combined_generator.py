@@ -1141,6 +1141,8 @@ def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int
         "            fvgRight = array.get(fvgHasImpact, i) and not na(array.get(fvgImpactX, i)) ? array.get(fvgImpactX, i) : array.get(fvgFallbackRight, i)",
         f"            fvgCol = {colour_ternary('array.get(fvgColCode, i)')}",
         "            box.new(array.get(fvgLeft, i), array.get(fvgTop, i), fvgRight, array.get(fvgBottom, i), border_color=fvgCol, border_width=1, bgcolor=color.new(fvgCol, 85), xloc=xloc.bar_time)",
+        "            fvgMidY = (array.get(fvgTop, i) + array.get(fvgBottom, i)) / 2",
+        "            line.new(array.get(fvgLeft, i), fvgMidY, fvgRight, fvgMidY, xloc=xloc.bar_time, color=color.gray, style=line.style_dotted, width=1)",
         "            if array.get(fvgHasImpact, i)",
         "                line.new(fvgRight, array.get(fvgBottom, i), fvgRight, array.get(fvgTop, i), xloc=xloc.bar_time, extend=extend.both, color=color.new(color.red, 30), width=1)",
     ]
