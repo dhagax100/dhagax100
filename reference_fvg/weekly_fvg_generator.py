@@ -244,6 +244,22 @@ class WeeklyFVGEngine:
                 return m.t
         return None
 
+    def week_extreme_time(self, k: int, want_low: bool) -> Optional[datetime]:
+        """Exact M1 minute week k's own low (want_low=True) or high
+        (want_low=False) actually printed -- the real trigger moment for a
+        continuous-scan IFVG (STEP 1b): that zone has no break or swing
+        event causing it, only week k's own extreme completing the gap
+        (l3c = w[k].l for a bullish gap, h3c = w[k].h for a bearish one).
+        Same technique already used elsewhere in this project
+        (event_time/high_first) to pin a defining moment to its exact
+        tick, rather than falling back to the week's scheduled open."""
+        wk = self.w[k]
+        target = wk.l if want_low else wk.h
+        for m in self.m[wk.first:wk.last]:
+            if (m.l <= target) if want_low else (m.h >= target):
+                return m.t
+        return None
+
     # ===================================================================
     # FVG-SPECIFIC: zone construction (genuine 3-candle range scan, per the
     # confirmed pine spec -- unlike RB's single-wick anchor).
@@ -534,12 +550,14 @@ class WeeklyFVGEngine:
         if self.regime == 1 and k >= 2 and k > self.fvg_bull_scan_upto:
             h1c, l3c = self.w[k - 2].h, self.w[k].l
             if h1c < l3c:
-                self.add_fvg(k - 2, h1c, l3c, True, k, 0, self.w[k].start, self.last_l)
+                trig_at = self.week_extreme_time(k, True) or self.w[k].start
+                self.add_fvg(k - 2, h1c, l3c, True, k, 0, trig_at, self.last_l)
             self.fvg_bull_scan_upto = k
         if self.regime == 2 and k >= 2 and k > self.fvg_bear_scan_upto:
             l1c, h3c = self.w[k - 2].l, self.w[k].h
             if l1c > h3c:
-                self.add_fvg(k - 2, h3c, l1c, False, k, 0, self.w[k].start, self.last_h)
+                trig_at = self.week_extreme_time(k, False) or self.w[k].start
+                self.add_fvg(k - 2, h3c, l1c, False, k, 0, trig_at, self.last_h)
             self.fvg_bear_scan_upto = k
 
         self.finish_events_and_lifecycle(k, before, total, c_h, c_l)
