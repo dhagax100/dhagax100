@@ -1003,7 +1003,7 @@ def fvg_status(z) -> str:
 
 
 def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int, ob_cap: int, rb_cap: int,
-                         fvg_cap: int, display_zone: ZoneInfo, out_name: str = "weekly_combined_viewer.pine") -> None:
+                         fvg_cap: int, table_cap: int, display_zone: ZoneInfo, out_name: str = "weekly_combined_viewer.pine") -> None:
     """ONE pine file: the shared swing/regime/MSS structure drawn ONCE, with
     OB, RB and FVG zones all overlaid on top of it -- mirrors
     Main_Indicator_v1.pine's own single-chart layout, instead of three
@@ -1035,6 +1035,8 @@ def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int
         "// drives OB, RB and FVG together (mirrors Main_Indicator_v1.pine's own",
         "// single-chart structure) -- not three separate re-derivations merged after.",
         "float lowGap = ta.atr(14) * 0.08",
+        "string focusPoi = input.string(\"ALL\", \"Focus POI\", options=[\"ALL\", \"OB\", \"RB\", \"FVG\"], group=\"Combined settings\", tooltip=\"ALL draws every POI type and shows every row in the table. Choosing one shows only that type's boxes and table rows.\")",
+        f"var table ledger = table.new(position.top_right, 11, {table_cap + 1}, border_width=1)",
         "bool onWeekly = timeframe.period == \"1W\"",
         "bool onH4 = timeframe.period == \"240\"",
         "bool onFive = timeframe.period == \"5\"",
@@ -1085,6 +1087,43 @@ def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int
     for z in fvg_shown:
         fvg_col.append(COLOUR_CODE[wfvg.fvg_colour(z)])
 
+    # ---- combined ledger table rows: OB+RB+FVG merged, newest (by origin
+    # week) first, capped to table_cap TOTAL rows across all three types.
+    # The "Focus POI" toggle filters which rows actually render at draw
+    # time (Pine can't know the runtime input value in Python), so every
+    # row is packed regardless, tagged with its own POI type.
+    def _table_rows(zones, left_of, status_fn, colour_fn, poi_label):
+        rows = []
+        for z in zones:
+            if getattr(z, "rejected", False):
+                continue
+            wk = engine.w[left_of(z)]
+            rows.append((wk.start, dict(
+                poi=poi_label, id=f"#{z.id}", type=status_fn(z), side="BUY" if z.bullish else "SELL",
+                bottom=f"{z.zb:.5f}", top=f"{z.zt:.5f}",
+                origin=wob.display_iso(wk.start, display_zone),
+                trigger=wob.display_iso(z.trigger_time, display_zone),
+                eligible=wob.display_iso(z.eligible_time, display_zone),
+                impact=wob.display_iso(z.impact_time, display_zone),
+                status=status_fn(z), bg=COLOUR_CODE[colour_fn(z)],
+            )))
+        return rows
+
+    all_rows = (
+        _table_rows(engine.ob_zones, lambda z: z.candle, ob_status, wob.pine_colour, "OB")
+        + _table_rows(engine.rb_zones, lambda z: z.candle, rb_status, wrb.rb_colour, "RB")
+        + _table_rows(engine.fvg_zones, lambda z: z.left, fvg_status, wfvg.fvg_colour, "FVG")
+    )
+    all_rows.sort(key=lambda pair: pair[0], reverse=True)
+    table_rows = [r for _, r in all_rows[:table_cap]]
+
+    t_poi, t_id, t_type, t_side, t_bottom, t_top, t_origin, t_trigger, t_eligible, t_impact, t_status, t_bg = ([] for _ in range(12))
+    for r in table_rows:
+        t_poi.append(r["poi"]); t_id.append(r["id"]); t_type.append(r["type"]); t_side.append(r["side"])
+        t_bottom.append(r["bottom"]); t_top.append(r["top"]); t_origin.append(r["origin"])
+        t_trigger.append(r["trigger"]); t_eligible.append(r["eligible"]); t_impact.append(r["impact"])
+        t_status.append(r["status"]); t_bg.append(r["bg"])
+
     lines += [
         *pack_array("structX", "int", struct_x),
         *pack_array("structY", "float", struct_y),
@@ -1100,6 +1139,10 @@ def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int
         *pack_array("fvgLeft", "int", fvg_left), *pack_array("fvgTop", "float", fvg_top), *pack_array("fvgBottom", "float", fvg_bottom),
         *pack_array("fvgFallbackRight", "int", fvg_fallback_right), *pack_array("fvgImpactStamp", "int", fvg_impact_stamp),
         *pack_array("fvgHasImpact", "bool", fvg_has_impact), *pack_array("fvgColCode", "string", fvg_col), *pack_array("fvgAudit", "string", fvg_audit),
+        *pack_array("tPoi", "string", t_poi), *pack_array("tId", "string", t_id), *pack_array("tType", "string", t_type),
+        *pack_array("tSide", "string", t_side), *pack_array("tBottom", "string", t_bottom), *pack_array("tTop", "string", t_top),
+        *pack_array("tOrigin", "string", t_origin), *pack_array("tTrigger", "string", t_trigger), *pack_array("tEligible", "string", t_eligible),
+        *pack_array("tImpact", "string", t_impact), *pack_array("tStatus", "string", t_status), *pack_array("tBgCode", "string", t_bg),
         f"var array<int> obImpactX = array.new<int>({len(ob_left)}, na)",
         "for hi = 0 to array.size(obImpactStamp) - 1",
         "    if array.get(obHasImpact, hi)",
@@ -1125,26 +1168,49 @@ def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int
         "            structYY = array.get(structLow, i) ? array.get(structY, i) - lowGap : array.get(structY, i)",
         "            label.new(array.get(structX, i), structYY, array.get(structTxt, i), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=structCol, size=size.small)",
         "    if onWeekly or onH4 or onFive",
-        "        for i = 0 to array.size(obLeft) - 1",
-        "            obRight = array.get(obHasImpact, i) and not na(array.get(obImpactX, i)) ? array.get(obImpactX, i) : array.get(obFallbackRight, i)",
-        f"            obCol = {colour_ternary('array.get(obColCode, i)')}",
-        "            box.new(array.get(obLeft, i), array.get(obTop, i), obRight, array.get(obBottom, i), border_color=obCol, border_width=1, bgcolor=na, xloc=xloc.bar_time)",
-        "            if array.get(obHasImpact, i)",
-        "                line.new(obRight, array.get(obBottom, i), obRight, array.get(obTop, i), xloc=xloc.bar_time, extend=extend.both, color=color.new(color.red, 30), width=1)",
-        "        for i = 0 to array.size(rbLeft) - 1",
-        "            rbRight = array.get(rbHasImpact, i) and not na(array.get(rbImpactX, i)) ? array.get(rbImpactX, i) : array.get(rbFallbackRight, i)",
-        f"            rbCol = {colour_ternary('array.get(rbColCode, i)')}",
-        "            box.new(array.get(rbLeft, i), array.get(rbTop, i), rbRight, array.get(rbBottom, i), border_color=rbCol, border_width=1, border_style=line.style_dashed, bgcolor=na, xloc=xloc.bar_time)",
-        "            if array.get(rbHasImpact, i)",
-        "                line.new(rbRight, array.get(rbBottom, i), rbRight, array.get(rbTop, i), xloc=xloc.bar_time, extend=extend.both, color=color.new(color.red, 30), width=1)",
-        "        for i = 0 to array.size(fvgLeft) - 1",
-        "            fvgRight = array.get(fvgHasImpact, i) and not na(array.get(fvgImpactX, i)) ? array.get(fvgImpactX, i) : array.get(fvgFallbackRight, i)",
-        f"            fvgCol = {colour_ternary('array.get(fvgColCode, i)')}",
-        "            box.new(array.get(fvgLeft, i), array.get(fvgTop, i), fvgRight, array.get(fvgBottom, i), border_color=fvgCol, border_width=1, bgcolor=color.new(fvgCol, 85), xloc=xloc.bar_time)",
-        "            fvgMidY = (array.get(fvgTop, i) + array.get(fvgBottom, i)) / 2",
-        "            line.new(array.get(fvgLeft, i), fvgMidY, fvgRight, fvgMidY, xloc=xloc.bar_time, color=color.gray, style=line.style_dotted, width=1)",
-        "            if array.get(fvgHasImpact, i)",
-        "                line.new(fvgRight, array.get(fvgBottom, i), fvgRight, array.get(fvgTop, i), xloc=xloc.bar_time, extend=extend.both, color=color.new(color.red, 30), width=1)",
+        "        if focusPoi == \"ALL\" or focusPoi == \"OB\"",
+        "            for i = 0 to array.size(obLeft) - 1",
+        "                obRight = array.get(obHasImpact, i) and not na(array.get(obImpactX, i)) ? array.get(obImpactX, i) : array.get(obFallbackRight, i)",
+        f"                obCol = {colour_ternary('array.get(obColCode, i)')}",
+        "                box.new(array.get(obLeft, i), array.get(obTop, i), obRight, array.get(obBottom, i), border_color=obCol, border_width=1, bgcolor=na, xloc=xloc.bar_time)",
+        "                if array.get(obHasImpact, i)",
+        "                    line.new(obRight, array.get(obBottom, i), obRight, array.get(obTop, i), xloc=xloc.bar_time, extend=extend.both, color=color.new(color.red, 30), width=1)",
+        "        if focusPoi == \"ALL\" or focusPoi == \"RB\"",
+        "            for i = 0 to array.size(rbLeft) - 1",
+        "                rbRight = array.get(rbHasImpact, i) and not na(array.get(rbImpactX, i)) ? array.get(rbImpactX, i) : array.get(rbFallbackRight, i)",
+        f"                rbCol = {colour_ternary('array.get(rbColCode, i)')}",
+        "                box.new(array.get(rbLeft, i), array.get(rbTop, i), rbRight, array.get(rbBottom, i), border_color=rbCol, border_width=1, border_style=line.style_dashed, bgcolor=na, xloc=xloc.bar_time)",
+        "                if array.get(rbHasImpact, i)",
+        "                    line.new(rbRight, array.get(rbBottom, i), rbRight, array.get(rbTop, i), xloc=xloc.bar_time, extend=extend.both, color=color.new(color.red, 30), width=1)",
+        "        if focusPoi == \"ALL\" or focusPoi == \"FVG\"",
+        "            for i = 0 to array.size(fvgLeft) - 1",
+        "                fvgRight = array.get(fvgHasImpact, i) and not na(array.get(fvgImpactX, i)) ? array.get(fvgImpactX, i) : array.get(fvgFallbackRight, i)",
+        f"                fvgCol = {colour_ternary('array.get(fvgColCode, i)')}",
+        "                box.new(array.get(fvgLeft, i), array.get(fvgTop, i), fvgRight, array.get(fvgBottom, i), border_color=fvgCol, border_width=1, bgcolor=color.new(fvgCol, 85), xloc=xloc.bar_time)",
+        "                fvgMidY = (array.get(fvgTop, i) + array.get(fvgBottom, i)) / 2",
+        "                line.new(array.get(fvgLeft, i), fvgMidY, fvgRight, fvgMidY, xloc=xloc.bar_time, color=color.gray, style=line.style_dotted, width=1)",
+        "                if array.get(fvgHasImpact, i)",
+        "                    line.new(fvgRight, array.get(fvgBottom, i), fvgRight, array.get(fvgTop, i), xloc=xloc.bar_time, extend=extend.both, color=color.new(color.red, 30), width=1)",
+        "    if onWeekly",
+        f"        table.clear(ledger, 0, 0, 10, {table_cap})",
+        "        headers = array.from(\"POI\", \"ID\", \"Type\", \"Side\", \"Bottom\", \"Top\", \"Origin (RYD)\", \"Trigger (RYD)\", \"Eligible (RYD)\", \"Impact (RYD)\", \"Status\")",
+        "        for c = 0 to array.size(headers) - 1",
+        "            table.cell(ledger, c, 0, array.get(headers, c), text_color=color.white, bgcolor=color.new(color.green, 15))",
+        "        rowN = 0",
+        "        for i = 0 to array.size(tId) - 1",
+        f"            if rowN < {table_cap} and (focusPoi == \"ALL\" or array.get(tPoi, i) == focusPoi)",
+        "                rowN += 1",
+        "                table.cell(ledger, 0, rowN, array.get(tPoi, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 1, rowN, array.get(tId, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 2, rowN, array.get(tType, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 3, rowN, array.get(tSide, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 4, rowN, array.get(tBottom, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 5, rowN, array.get(tTop, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 6, rowN, array.get(tOrigin, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 7, rowN, array.get(tTrigger, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 8, rowN, array.get(tEligible, i), text_color=color.black, bgcolor=na)",
+        "                table.cell(ledger, 9, rowN, array.get(tImpact, i), text_color=color.black, bgcolor=na)",
+        f"                table.cell(ledger, 10, rowN, array.get(tStatus, i), text_color=color.black, bgcolor=color.new({colour_ternary('array.get(tBgCode, i)')}, 80))",
     ]
     (base / out_name).write_text("\n".join(lines), encoding="utf-8")
 
@@ -1250,7 +1316,7 @@ def main() -> int:
         wfvg.write_ledger(base, fvg_view, display_tz)
         wfvg.write_fvg_pine(base, fvg_view, args.pine_labels, args.pine_fvgs, args.pine_table, display_tz)
 
-        write_combined_pine(base, engine, args.pine_labels, args.pine_obs, args.pine_rbs, args.pine_fvgs, display_tz)
+        write_combined_pine(base, engine, args.pine_labels, args.pine_obs, args.pine_rbs, args.pine_fvgs, args.pine_table, display_tz)
 
         write_report(base, minutes, weeks, engine, args, display_tz)
         print("Created:")
