@@ -318,13 +318,34 @@ def main() -> int:
     five_fvg = wfvg.WeeklyFVGEngine(minutes, five_bars); five_fvg.run()
     five_events_by_type = {"OB": five_ob.events, "RB": five_rb.events, "FVG": five_fvg.events}
 
+    # Real bug, user-caught (2026-09-26): two DIFFERENT H4 POI zones (often
+    # nested continuation FVGs/OBs/RBs created by a strong trending leg) can
+    # get impacted by the SAME real candle. Since the 5m entry search only
+    # depends on impact_time, both zones then resolve to the IDENTICAL
+    # underlying trade (same resting swing, entry time/price, SL/TP) --
+    # counted twice in the ledger otherwise. Dedupe by the trade's own
+    # signature (side, resting swing, entry time/price, exit time/result):
+    # the first POI to reach a given signature keeps the row; a later POI
+    # reaching the SAME signature is merged into that row's parent label
+    # instead of appended as a second row.
     bso_results = []
+    seen: Dict[tuple, int] = {}
     for z, parent_id, ptype in focused:
         five_events = five_events_by_type[ptype]
         invalidated_at, invalidation_reason = bso.structural_invalid_at(z, z.impact_time, h4_bars, h4_bar_starts, h4_engines[ptype].events, minutes, mt)
         attempts = bso.run_bso_chain(z, z.impact_time, five_bar_starts, five_events, minutes, mt, invalidated_at)
         for res in attempts:
-            bso_results.append((z, z.impact_time, f"{ptype}{parent_id}" if parent_id else "", invalidation_reason, res))
+            label = f"{ptype}{parent_id}" if parent_id else ""
+            key = (z.bullish, res.get("resting_at"), res.get("entry_time"), res.get("entry_price"),
+                   res.get("exit_time"), res.get("result"))
+            if key in seen:
+                idx = seen[key]
+                dz, dit, dlabel, dreason, dres = bso_results[idx]
+                if label and label not in dlabel.split("+"):
+                    bso_results[idx] = (dz, dit, f"{dlabel}+{label}" if dlabel else label, dreason, dres)
+                continue
+            seen[key] = len(bso_results)
+            bso_results.append((z, z.impact_time, label, invalidation_reason, res))
 
     bso_extra_lines = [
         line.replace('"Weekly OB"', '"Weekly POI"').replace('"4H OB"', '"4H POI"')
