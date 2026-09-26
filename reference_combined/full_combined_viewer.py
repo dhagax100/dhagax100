@@ -178,8 +178,11 @@ def build_h4_combined_extra_lines(rows: List[Tuple[object, str, str]], h4_bars_b
         impact_stamps.append(pine_epoch(z.impact_time))
         bulls.append(z.bullish)
         ids.append(f"{ptype}#{z.id}")
-        parents.append(f"{ptype}{parent_id}" if parent_id else '-')
-        labels.append(f"{ptype}#{z.id} {'BUY' if z.bullish else 'SELL'} (W{ptype}{parent_id})")
+        # parent_id already carries its own type prefix (e.g. "FVG#1", from
+        # the unified control gate's own parent label) -- same double-
+        # prefix bug fixed here as in the 5m BSO label below.
+        parents.append(parent_id if parent_id else '-')
+        labels.append(f"{ptype}#{z.id} {'BUY' if z.bullish else 'SELL'} (W{parent_id})")
         sides.append('BUY' if z.bullish else 'SELL')
         bots5.append(f"{z.zb:.5f}"); tops5.append(f"{z.zt:.5f}")
         trigs.append(wob.display_iso(z.trigger_time, display_tz))
@@ -335,7 +338,24 @@ def main() -> int:
         invalidated_at, invalidation_reason = bso.structural_invalid_at(z, z.impact_time, h4_bars, h4_bar_starts, h4_engines[ptype].events, minutes, mt)
         attempts = bso.run_bso_chain(z, z.impact_time, five_bar_starts, five_events, minutes, mt, invalidated_at)
         for res in attempts:
-            label = f"{ptype}{parent_id}" if parent_id else ""
+            # Real bug fixed 2026-09-26 (user-caught): parent_id ALREADY
+            # carries its own type prefix (it comes straight from the
+            # unified control gate's parent label, e.g. "FVG#1") -- this
+            # used to prepend the H4 ZONE's OWN type on top of that,
+            # producing garbage like "RBFVG#1" for an RB zone whose weekly
+            # parent is FVG#1. parent_id is the correct, complete label
+            # already; nothing needs to be prepended to it.
+            label = parent_id
+            # Real bug fixed 2026-09-26 (user-caught): five_bso_engine's
+            # generic run_bso()/run_bso_chain() hardcode "H4_OB_BREACHED"
+            # (written for OB, reused verbatim for RB/FVG too) -- an RB or
+            # FVG zone breaching showed the literal OB label. Relabel by
+            # this row's own ptype, same idea as reference_rb's rb_relabel
+            # / reference_fvg's fvg_relabel, generalized across all three.
+            res = dict(res)
+            for k in ("stage", "result"):
+                if res.get(k) == "H4_OB_BREACHED":
+                    res[k] = f"H4_{ptype}_BREACHED"
             key = (z.bullish, res.get("resting_at"), res.get("entry_time"), res.get("entry_price"),
                    res.get("exit_time"), res.get("result"))
             if key in seen:
