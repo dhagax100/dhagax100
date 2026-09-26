@@ -189,6 +189,23 @@ class WeeklyCombinedEngine:
                      trigger, -1, -1, None, None, -1, state, state, state)
         if 0 <= protect_idx < len(self.w):
             z.protect_level = self.w[protect_idx].l if bull else self.w[protect_idx].h
+        # AOB/AIFOB triggers are the specific event that already exists at
+        # creation. Persist it now so later rows cannot select another event
+        # with the same weekly index and kind. (Real bug fixed 2026-09-26:
+        # this block was dropped when ob_add_zone was first ported here --
+        # missed because the initial regression check compared candle/zb/zt/
+        # bullish/trigger/eligible/stop/state/rejected/protect_level/
+        # stop_reason only, not these audit-only trigger_* fields. Caught by
+        # a full ledger diff against the standalone engine, not by that
+        # first check -- see reference_combined's own commit history.)
+        if state in (1, 4):
+            kind = (0 if bull else 1) if state == 1 else (1 if bull else 0)
+            event = next((e for e in reversed(self.events) if e.confirm == trigger and e.kind == kind), None)
+            if event is not None:
+                z.trigger_time, z.trigger_price = event.at, event.price
+                z.trigger_swing_price = event.price
+                z.trigger_level_role = "event swing level"
+                z.trigger_swing_week, z.trigger_confirm_week, z.trigger_path = event.swing, event.confirm, "created event"
         z.created_state = state
         self.ob_zones.append(z)
         self.ob_active.append(len(self.ob_zones) - 1)
@@ -912,6 +929,60 @@ class WeeklyCombinedEngine:
             self.process(k)
 
 
+class _OBEngineView:
+    """Thin duck-typed adapter so wob.write_ledger/write_ob_pine/write_report
+    (written against a standalone WeeklyOBEngine) can run unchanged against
+    this combined engine's shared state + self.ob_zones. Only the attribute
+    surface those functions actually touch (checked directly: zones, events,
+    msses, m, w, mt, first_touch) is exposed -- nothing is re-implemented."""
+
+    def __init__(self, combo: "WeeklyCombinedEngine"):
+        self._c = combo
+        self.zones = combo.ob_zones
+        self.events = combo.events
+        self.msses = combo.msses
+        self.m = combo.m
+        self.w = combo.w
+        self.mt = combo.mt
+
+    def first_touch(self, start, k, bull, zb, zt):
+        return self._c.first_touch(start, k, bull, zb, zt)
+
+
+class _RBEngineView:
+    def __init__(self, combo: "WeeklyCombinedEngine"):
+        self._c = combo
+        self.zones = combo.rb_zones
+        self.events = combo.events
+        self.msses = combo.msses
+        self.m = combo.m
+        self.w = combo.w
+        self.mt = combo.mt
+
+    def first_touch(self, start, k, bull, zb, zt):
+        return self._c.first_touch(start, k, bull, zb, zt)
+
+    def break_time(self, k, bull, level):
+        return self._c.break_time(k, bull, level)
+
+
+class _FVGEngineView:
+    def __init__(self, combo: "WeeklyCombinedEngine"):
+        self._c = combo
+        self.zones = combo.fvg_zones
+        self.events = combo.events
+        self.msses = combo.msses
+        self.m = combo.m
+        self.w = combo.w
+        self.mt = combo.mt
+
+    def first_touch(self, start, k, bull, zb, zt):
+        return self._c.first_touch(start, k, bull, zb, zt)
+
+    def break_time(self, k, bull, level):
+        return self._c.break_time(k, bull, level)
+
+
 def ob_status(z) -> str:
     return OB_STATE[z.pre_spent_state if z.state == 3 else z.state]
 
@@ -982,6 +1053,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--week-close-zone", default="America/New_York")
     p.add_argument("--week-close-hour", type=int, default=17, choices=range(24))
     p.add_argument("--display-tz", default="Asia/Riyadh")
+    p.add_argument("--pine-labels", type=int, default=120, choices=range(1, 161))
+    p.add_argument("--pine-obs", type=int, default=120, choices=range(1, 451))
+    p.add_argument("--pine-rbs", type=int, default=150, choices=range(1, 451))
+    p.add_argument("--pine-fvgs", type=int, default=150, choices=range(1, 451))
+    p.add_argument("--pine-table", type=int, default=20, choices=range(1, 21))
+    p.add_argument("--box-body-minutes", type=int, default=60, choices=(1, 5, 15, 30, 60))
+    p.add_argument("--origin-first-price", choices=("open", "close"), default="close")
+    p.add_argument("--origin-body-offset-minutes", type=int, default=0, choices=range(-240, 241))
     return p.parse_args()
 
 
@@ -1000,8 +1079,28 @@ def main() -> int:
         weeks = wob.aggregate_weeks(minutes, close_tz, args.week_close_hour)
         engine = WeeklyCombinedEngine(minutes, weeks)
         engine.run()
+
+        # Reuse each POI type's own already-verified ledger/pine writers,
+        # unchanged, against this single shared pass's zones -- proves the
+        # combined engine's output is visually inspectable exactly like the
+        # three standalone generators, not a new drawing path to re-verify.
+        ob_view = _OBEngineView(engine)
+        wob.write_ledger(base, ob_view, args.box_body_minutes, display_tz, args.origin_first_price, args.origin_body_offset_minutes)
+        wob.write_ob_pine(base, ob_view, args.pine_labels, args.pine_obs, args.pine_table, args.box_body_minutes, display_tz, args.origin_first_price, args.origin_body_offset_minutes)
+
+        rb_view = _RBEngineView(engine)
+        wrb.write_ledger(base, rb_view, display_tz)
+        wrb.write_rb_pine(base, rb_view, args.pine_labels, args.pine_rbs, args.pine_table, display_tz)
+
+        fvg_view = _FVGEngineView(engine)
+        wfvg.write_ledger(base, fvg_view, display_tz)
+        wfvg.write_fvg_pine(base, fvg_view, args.pine_labels, args.pine_fvgs, args.pine_table, display_tz)
+
         write_report(base, minutes, weeks, engine, args, display_tz)
         print("Created:")
+        print("  weekly_ob_ledger.csv / weekly_ob_swings.csv / weekly_ob_viewer.pine")
+        print("  weekly_rb_ledger.csv / weekly_rb_swings.csv / weekly_rb_viewer.pine")
+        print("  weekly_fvg_ledger.csv / weekly_fvg_swings.csv / weekly_fvg_viewer.pine")
         print("  weekly_combined_report.txt")
         print(f"Processed {len(minutes):,} minutes and {len(weeks)} weeks (single shared pass).")
         print(f"OB zones={len(engine.ob_zones)}  RB zones={len(engine.rb_zones)}  FVG zones={len(engine.fvg_zones)}")
