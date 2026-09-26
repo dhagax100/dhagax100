@@ -330,6 +330,32 @@ and also benefits OB the same way if OB's own BSO table ever grows this
 large. Verified: `bso5BLeft` etc. now hold bare integers
 (e.g. `1770693300000`), not nested `timestamp(...)` calls.
 
+## Gate 2 finding accepted; two NONE windows added (2026-09-26)
+
+Follow-up to the automated engine's gate-2 finding above. User's decision,
+given the two options put to them (assert the pre-existing uptrend anyway,
+or stay honest about having no reacted zone): **"take gate 2 here to none
+and mention we considered that we did not have a direction before."**
+
+`build_manual_rb_gates()` now has two NONE windows where BUY_ONLY was
+previously asserted on assumption alone, with no zone having reacted yet
+to justify it:
+- **2026-01-02 09:31 (start of the loaded M1 data) -> 02-09 15:07** (zone
+  #2's own impact): no zone reacts anywhere before this. The pre-2026
+  uptrend context (used only as background for why gate 1 is
+  "countertrend") is NOT asserted as a live BUY_ONLY campaign here --
+  nothing in the data itself proves one existed.
+- **2026-02-16 01:00 (zone #2 dies) -> 02-17 18:28** (zone #3's first
+  reaction): previously "the only countertrend zone died, so control
+  reverts to the underlying uptrend" -- same gap, same fix.
+
+This is the same discipline held everywhere else in this project: never
+assert control without an actual reaction behind it. Verified: H4 RBs #80
+and #82 (both BUY, impacted inside the old 02-16->02-17 window) now
+correctly show `control_at_impact=NONE, authorized=False` -- previously
+wrongly authorized. Full-dataset counts: 449 H4 RBs computed, 120
+authorized (was 122), 150 5m BSO rows (was 152, 90 ENTERED unchanged).
+
 ## Automated control engine built and validated against the 34-gate table (2026-09-24)
 
 New file: `reference_rb/weekly_rb_control_engine.py` -- RB's counterpart of

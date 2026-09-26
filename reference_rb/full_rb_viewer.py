@@ -154,15 +154,41 @@ def build_manual_rb_gates() -> List[Tuple[datetime, datetime, str, str, str]]:
     parent -- zone #3 is only created then, not reacted to until 02-17
     18:28 -- and gate 7 (2026-04-08 01:36 -> 04-29 21:37)'s buy parent is
     #1 (RB1, last reacted 2026-03-03), not #7 -- zone #7 was created that
-    same minute but not actually touched by price until 2026-06-08."""
+    same minute but not actually touched by price until 2026-06-08.
+
+    CORRECTED 2026-09-26 (built and validated an automated control engine,
+    weekly_rb_control_engine.py, against this exact 34-gate table -- see
+    docs_rb/RB_RULES_LEARNED.md's "Automated control engine" entry): the
+    engine's own strict application of "control only starts via an actual
+    reaction" surfaced a genuine inconsistency at the very start of the
+    dataset. Two windows were previously labeled with a direction (BUY_ONLY)
+    on the assumption of an underlying uptrend, with NO zone ever having
+    reacted yet to justify it -- inconsistent with every other gate in this
+    table, all of which require a real reaction. User's explicit decision,
+    given two options (assert the pre-existing uptrend anyway, vs. stay
+    honest about having no reacted zone to point to): "take gate 2 here to
+    none and mention we considered that we did not have a direction before."
+    Both windows are now NONE:
+      - 2026-01-02 09:31 (start of the loaded M1 data) -> 02-09 15:07
+        (zone #2's own impact, gate 1's start): no zone has reacted yet
+        anywhere in the dataset. Not asserting the pre-2026 uptrend context
+        (used only as background for why gate 1 is "countertrend") as a
+        live BUY_ONLY campaign, since nothing in the data itself reacts to
+        prove one existed.
+      - 2026-02-16 01:00 (zone #2 dies) -> 02-17 18:28 (zone #3's first
+        reaction): previously asserted BUY_ONLY immediately on zone #2's
+        death alone ("the only countertrend zone is dead, so control
+        reverts to the underlying uptrend") -- no BUY zone had reacted yet
+        at that point either. Same fix, same reasoning."""
     rtz = ZoneInfo("Asia/Riyadh")
 
     def rt(y: int, mo: int, d: int, h: int, mi: int) -> datetime:
         return datetime(y, mo, d, h, mi, tzinfo=rtz)
 
     return [
+        (rt(2026, 1, 2, 9, 31), rt(2026, 2, 9, 15, 7), "NONE", "", ""),
         (rt(2026, 2, 9, 15, 7), rt(2026, 2, 16, 1, 0), "SELL_ONLY", "2", ""),
-        (rt(2026, 2, 16, 1, 0), rt(2026, 2, 17, 18, 28), "BUY_ONLY", "2", ""),
+        (rt(2026, 2, 16, 1, 0), rt(2026, 2, 17, 18, 28), "NONE", "2", ""),
         (rt(2026, 2, 17, 18, 28), rt(2026, 2, 19, 16, 1), "BUY_ONLY", "2", "3"),
         (rt(2026, 2, 19, 16, 1), rt(2026, 3, 3, 17, 24), "SELL_ONLY", "2", "3"),
         (rt(2026, 3, 3, 17, 24), rt(2026, 3, 3, 17, 26), "BOTH", "2", "1"),
