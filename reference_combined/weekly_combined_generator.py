@@ -1027,7 +1027,24 @@ def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int
     sl = [e for e in engine.events if e.kind == 1][-label_cap:]
     ms = engine.msses[-label_cap:]
     right_edge = engine.m[-1].t + timedelta(days=365)
-    max_rank = max(1, len(engine.ob_zones), len(engine.rb_zones), len(engine.fvg_zones))
+
+    # ---- global rank: 1 = the single most recent zone of ANY type (by
+    # origin week), 2 = the one before that, and so on -- lets "POI from
+    # last" mean the same thing under Focus POI = ALL that it means for a
+    # single type: a chronological "how far back" count, just across all
+    # three types at once instead of within one. Per-type rank (below,
+    # unchanged) still applies whenever a specific type is focused.
+    global_entries = []
+    for z in engine.ob_zones:
+        if not z.rejected:
+            global_entries.append((engine.w[z.candle].start, "OB", z.id))
+    for z in engine.rb_zones:
+        global_entries.append((engine.w[z.candle].start, "RB", z.id))
+    for z in engine.fvg_zones:
+        global_entries.append((engine.w[z.left].start, "FVG", z.id))
+    global_entries.sort(key=lambda e: e[0], reverse=True)
+    global_rank_map = {(poi, zid): idx + 1 for idx, (_, poi, zid) in enumerate(global_entries)}
+    max_global_rank = max(1, len(global_entries))
 
     lines = [
         "//@version=6",
@@ -1037,8 +1054,8 @@ def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int
         "// single-chart structure) -- not three separate re-derivations merged after.",
         "float lowGap = ta.atr(14) * 0.08",
         "string focusPoi = input.string(\"ALL\", \"Focus POI\", options=[\"ALL\", \"OB\", \"RB\", \"FVG\"], group=\"Combined settings\", tooltip=\"ALL draws every POI type and shows every row in the table. Choosing one shows only that type's boxes and table rows.\")",
-        "bool inspectOnePoi = input.bool(false, \"Inspect one POI only\", group=\"Combined settings\", tooltip=\"Only applies when Focus POI above is OB, RB or FVG (not ALL) -- narrows that type down to a single zone, picked by 'POI from last' below.\")",
-        f"int poiFromLast = input.int(1, \"POI from last\", minval=1, maxval={max_rank}, group=\"Combined settings\", tooltip=\"1 = the latest zone of the focused type, 2 = the one before it, and so on.\")",
+        "bool inspectOnePoi = input.bool(false, \"Inspect one POI only\", group=\"Combined settings\", tooltip=\"Narrows down to a single zone, picked by 'POI from last' below. With Focus POI = ALL, ranking is across all three types combined (1 = the most recent zone of any kind); with a specific type picked, ranking is within that type only.\")",
+        f"int poiFromLast = input.int(1, \"POI from last\", minval=1, maxval={max_global_rank}, group=\"Combined settings\", tooltip=\"1 = the latest zone (of the focused type if one is picked above, or of ANY type if Focus POI is ALL), 2 = the one before it, and so on.\")",
         f"var table ledger = table.new(position.top_right, 11, {table_cap + 1}, border_width=1)",
         "bool onWeekly = timeframe.period == \"1W\"",
         "bool onH4 = timeframe.period == \"240\"",
@@ -1061,7 +1078,7 @@ def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int
         struct_low.append(not m.up)
 
     def _box_arrays(zones, total_count, left_of, prefix_label):
-        left, top, bottom, fallback_right, impact_stamp, has_impact, col, audit, rank = ([] for _ in range(9))
+        left, top, bottom, fallback_right, impact_stamp, has_impact, col, audit, rank, grank = ([] for _ in range(10))
         for z in zones:
             if getattr(z, "rejected", False):
                 continue
@@ -1073,21 +1090,22 @@ def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int
             has_impact.append(z.impact_time is not None)
             audit.append(f"{prefix_label} #{z.id} {'BUY' if z.bullish else 'SELL'}")
             rank.append(total_count - z.id + 1)
-        return left, top, bottom, fallback_right, impact_stamp, has_impact, col, audit, rank
+            grank.append(global_rank_map[(prefix_label, z.id)])
+        return left, top, bottom, fallback_right, impact_stamp, has_impact, col, audit, rank, grank
 
     ob_shown = engine.ob_zones[-ob_cap:]
-    ob_left, ob_top, ob_bottom, ob_fallback_right, ob_impact_stamp, ob_has_impact, ob_col, ob_audit, ob_rank = _box_arrays(ob_shown, len(engine.ob_zones), lambda z: z.candle, "OB")
+    ob_left, ob_top, ob_bottom, ob_fallback_right, ob_impact_stamp, ob_has_impact, ob_col, ob_audit, ob_rank, ob_grank = _box_arrays(ob_shown, len(engine.ob_zones), lambda z: z.candle, "OB")
     for z in ob_shown:
         if not z.rejected:
             ob_col.append(COLOUR_CODE[wob.pine_colour(z)])
 
     rb_shown = engine.rb_zones[-rb_cap:]
-    rb_left, rb_top, rb_bottom, rb_fallback_right, rb_impact_stamp, rb_has_impact, rb_col, rb_audit, rb_rank = _box_arrays(rb_shown, len(engine.rb_zones), lambda z: z.candle, "RB")
+    rb_left, rb_top, rb_bottom, rb_fallback_right, rb_impact_stamp, rb_has_impact, rb_col, rb_audit, rb_rank, rb_grank = _box_arrays(rb_shown, len(engine.rb_zones), lambda z: z.candle, "RB")
     for z in rb_shown:
         rb_col.append(COLOUR_CODE[wrb.rb_colour(z)])
 
     fvg_shown = engine.fvg_zones[-fvg_cap:]
-    fvg_left, fvg_top, fvg_bottom, fvg_fallback_right, fvg_impact_stamp, fvg_has_impact, fvg_col, fvg_audit, fvg_rank = _box_arrays(fvg_shown, len(engine.fvg_zones), lambda z: z.left, "FVG")
+    fvg_left, fvg_top, fvg_bottom, fvg_fallback_right, fvg_impact_stamp, fvg_has_impact, fvg_col, fvg_audit, fvg_rank, fvg_grank = _box_arrays(fvg_shown, len(engine.fvg_zones), lambda z: z.left, "FVG")
     for z in fvg_shown:
         fvg_col.append(COLOUR_CODE[wfvg.fvg_colour(z)])
 
@@ -1111,7 +1129,7 @@ def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int
                 eligible=wob.display_iso(z.eligible_time, display_zone),
                 impact=wob.display_iso(z.impact_time, display_zone),
                 status=status_fn(z), bg=COLOUR_CODE[colour_fn(z)],
-                rank=total_count - z.id + 1,
+                rank=total_count - z.id + 1, grank=global_rank_map[(poi_label, z.id)],
             )))
         return rows
 
@@ -1123,12 +1141,12 @@ def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int
     all_rows.sort(key=lambda pair: pair[0], reverse=True)
     table_rows = [r for _, r in all_rows[:table_cap]]
 
-    t_poi, t_id, t_type, t_side, t_bottom, t_top, t_origin, t_trigger, t_eligible, t_impact, t_status, t_bg, t_rank = ([] for _ in range(13))
+    t_poi, t_id, t_type, t_side, t_bottom, t_top, t_origin, t_trigger, t_eligible, t_impact, t_status, t_bg, t_rank, t_grank = ([] for _ in range(14))
     for r in table_rows:
         t_poi.append(r["poi"]); t_id.append(r["id"]); t_type.append(r["type"]); t_side.append(r["side"])
         t_bottom.append(r["bottom"]); t_top.append(r["top"]); t_origin.append(r["origin"])
         t_trigger.append(r["trigger"]); t_eligible.append(r["eligible"]); t_impact.append(r["impact"])
-        t_status.append(r["status"]); t_bg.append(r["bg"]); t_rank.append(r["rank"])
+        t_status.append(r["status"]); t_bg.append(r["bg"]); t_rank.append(r["rank"]); t_grank.append(r["grank"])
 
     lines += [
         *pack_array("structX", "int", struct_x),
@@ -1139,20 +1157,20 @@ def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int
         *pack_array("obLeft", "int", ob_left), *pack_array("obTop", "float", ob_top), *pack_array("obBottom", "float", ob_bottom),
         *pack_array("obFallbackRight", "int", ob_fallback_right), *pack_array("obImpactStamp", "int", ob_impact_stamp),
         *pack_array("obHasImpact", "bool", ob_has_impact), *pack_array("obColCode", "string", ob_col), *pack_array("obAudit", "string", ob_audit),
-        *pack_array("obRank", "int", ob_rank),
+        *pack_array("obRank", "int", ob_rank), *pack_array("obGRank", "int", ob_grank),
         *pack_array("rbLeft", "int", rb_left), *pack_array("rbTop", "float", rb_top), *pack_array("rbBottom", "float", rb_bottom),
         *pack_array("rbFallbackRight", "int", rb_fallback_right), *pack_array("rbImpactStamp", "int", rb_impact_stamp),
         *pack_array("rbHasImpact", "bool", rb_has_impact), *pack_array("rbColCode", "string", rb_col), *pack_array("rbAudit", "string", rb_audit),
-        *pack_array("rbRank", "int", rb_rank),
+        *pack_array("rbRank", "int", rb_rank), *pack_array("rbGRank", "int", rb_grank),
         *pack_array("fvgLeft", "int", fvg_left), *pack_array("fvgTop", "float", fvg_top), *pack_array("fvgBottom", "float", fvg_bottom),
         *pack_array("fvgFallbackRight", "int", fvg_fallback_right), *pack_array("fvgImpactStamp", "int", fvg_impact_stamp),
         *pack_array("fvgHasImpact", "bool", fvg_has_impact), *pack_array("fvgColCode", "string", fvg_col), *pack_array("fvgAudit", "string", fvg_audit),
-        *pack_array("fvgRank", "int", fvg_rank),
+        *pack_array("fvgRank", "int", fvg_rank), *pack_array("fvgGRank", "int", fvg_grank),
         *pack_array("tPoi", "string", t_poi), *pack_array("tId", "string", t_id), *pack_array("tType", "string", t_type),
         *pack_array("tSide", "string", t_side), *pack_array("tBottom", "string", t_bottom), *pack_array("tTop", "string", t_top),
         *pack_array("tOrigin", "string", t_origin), *pack_array("tTrigger", "string", t_trigger), *pack_array("tEligible", "string", t_eligible),
         *pack_array("tImpact", "string", t_impact), *pack_array("tStatus", "string", t_status), *pack_array("tBgCode", "string", t_bg),
-        *pack_array("tRank", "int", t_rank),
+        *pack_array("tRank", "int", t_rank), *pack_array("tGRank", "int", t_grank),
         f"var array<int> obImpactX = array.new<int>({len(ob_left)}, na)",
         "for hi = 0 to array.size(obImpactStamp) - 1",
         "    if array.get(obHasImpact, hi)",
@@ -1180,7 +1198,7 @@ def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int
         "    if onWeekly or onH4 or onFive",
         "        if focusPoi == \"ALL\" or focusPoi == \"OB\"",
         "            for i = 0 to array.size(obLeft) - 1",
-        "                if not inspectOnePoi or focusPoi == \"ALL\" or array.get(obRank, i) == poiFromLast",
+        "                if not inspectOnePoi or (focusPoi == \"ALL\" ? array.get(obGRank, i) == poiFromLast : array.get(obRank, i) == poiFromLast)",
         "                    obRight = array.get(obHasImpact, i) and not na(array.get(obImpactX, i)) ? array.get(obImpactX, i) : array.get(obFallbackRight, i)",
         f"                    obCol = {colour_ternary('array.get(obColCode, i)')}",
         "                    box.new(array.get(obLeft, i), array.get(obTop, i), obRight, array.get(obBottom, i), border_color=obCol, border_width=1, bgcolor=na, xloc=xloc.bar_time)",
@@ -1188,7 +1206,7 @@ def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int
         "                        line.new(obRight, array.get(obBottom, i), obRight, array.get(obTop, i), xloc=xloc.bar_time, extend=extend.both, color=color.new(color.red, 30), width=1)",
         "        if focusPoi == \"ALL\" or focusPoi == \"RB\"",
         "            for i = 0 to array.size(rbLeft) - 1",
-        "                if not inspectOnePoi or focusPoi == \"ALL\" or array.get(rbRank, i) == poiFromLast",
+        "                if not inspectOnePoi or (focusPoi == \"ALL\" ? array.get(rbGRank, i) == poiFromLast : array.get(rbRank, i) == poiFromLast)",
         "                    rbRight = array.get(rbHasImpact, i) and not na(array.get(rbImpactX, i)) ? array.get(rbImpactX, i) : array.get(rbFallbackRight, i)",
         f"                    rbCol = {colour_ternary('array.get(rbColCode, i)')}",
         "                    box.new(array.get(rbLeft, i), array.get(rbTop, i), rbRight, array.get(rbBottom, i), border_color=rbCol, border_width=1, border_style=line.style_dashed, bgcolor=na, xloc=xloc.bar_time)",
@@ -1196,7 +1214,7 @@ def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int
         "                        line.new(rbRight, array.get(rbBottom, i), rbRight, array.get(rbTop, i), xloc=xloc.bar_time, extend=extend.both, color=color.new(color.red, 30), width=1)",
         "        if focusPoi == \"ALL\" or focusPoi == \"FVG\"",
         "            for i = 0 to array.size(fvgLeft) - 1",
-        "                if not inspectOnePoi or focusPoi == \"ALL\" or array.get(fvgRank, i) == poiFromLast",
+        "                if not inspectOnePoi or (focusPoi == \"ALL\" ? array.get(fvgGRank, i) == poiFromLast : array.get(fvgRank, i) == poiFromLast)",
         "                    fvgRight = array.get(fvgHasImpact, i) and not na(array.get(fvgImpactX, i)) ? array.get(fvgImpactX, i) : array.get(fvgFallbackRight, i)",
         f"                    fvgCol = {colour_ternary('array.get(fvgColCode, i)')}",
         "                    box.new(array.get(fvgLeft, i), array.get(fvgTop, i), fvgRight, array.get(fvgBottom, i), border_color=fvgCol, border_width=1, bgcolor=color.new(fvgCol, 85), xloc=xloc.bar_time)",
@@ -1211,7 +1229,7 @@ def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int
         "            table.cell(ledger, c, 0, array.get(headers, c), text_color=color.white, bgcolor=color.new(color.green, 15))",
         "        rowN = 0",
         "        for i = 0 to array.size(tId) - 1",
-        f"            if rowN < {table_cap} and (focusPoi == \"ALL\" or array.get(tPoi, i) == focusPoi) and (not inspectOnePoi or focusPoi == \"ALL\" or array.get(tRank, i) == poiFromLast)",
+        f"            if rowN < {table_cap} and (focusPoi == \"ALL\" or array.get(tPoi, i) == focusPoi) and (not inspectOnePoi or (focusPoi == \"ALL\" ? array.get(tGRank, i) == poiFromLast : array.get(tRank, i) == poiFromLast))",
         "                rowN += 1",
         "                table.cell(ledger, 0, rowN, array.get(tPoi, i), text_color=color.black, bgcolor=na)",
         "                table.cell(ledger, 1, rowN, array.get(tId, i), text_color=color.black, bgcolor=na)",
