@@ -1139,7 +1139,16 @@ def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int
         + _table_rows(engine.fvg_zones, lambda z: z.left, fvg_status, wfvg.fvg_colour, "FVG")
     )
     all_rows.sort(key=lambda pair: pair[0], reverse=True)
-    table_rows = [r for _, r in all_rows[:table_cap]]
+    # Do NOT truncate to table_cap here: that would silently drop any row
+    # older than the newest table_cap ones from the packed arrays entirely,
+    # so "Inspect one POI only" could never find/show a rank beyond
+    # table_cap (real bug, user-caught: rank 32 drew its box fine -- boxes
+    # aren't capped this way -- but the table stayed empty, because that
+    # row had already been thrown away in Python before Pine ever got to
+    # filter by rank). table_cap still limits how many rows are ever
+    # DISPLAYED at once (via the runtime "rowN < table_cap" check below),
+    # it just must not limit which rows are searchable.
+    table_rows = [r for _, r in all_rows]
 
     t_poi, t_id, t_type, t_side, t_bottom, t_top, t_origin, t_trigger, t_eligible, t_impact, t_status, t_bg, t_rank, t_grank = ([] for _ in range(14))
     for r in table_rows:
