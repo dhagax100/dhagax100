@@ -120,6 +120,21 @@ class Zone:
     # rejected immediately, same as any other zone whose support fails
     # before it ever gets eligible. Reset to -1 once checked either way.
     same_bar_origin_guard: int = -1
+    # STRUCTURAL_BREACH (added 2026-09-26, mirrors FVG's own protect_level --
+    # see docs_fvg/FVG_RULES_LEARNED.md): the supporting swing's own price (a
+    # LOW for a bullish zone, a HIGH for a bearish one), snapshotted at
+    # creation from whichever swing was the latest confirmed one of that kind
+    # (self.last_l / self.last_h) at that exact moment. A POI stops being used
+    # the instant this level is exceeded in real time, independent of
+    # eligibility and of stranding's own formal-confirmation timing -- exactly
+    # the concept five_bso_engine.py's structural_invalid_at() already calls
+    # "swing_break" for OB's H4 layer, applied here for the first time
+    # directly at the Weekly zone's own lifecycle. Not updated on promotion
+    # (AOB->IFOB, AIFOB->IFOB): the zone keeps the protect_level it was born
+    # with. Untouched (kept None) for zones created before this field existed
+    # is not a concern here since this is a fresh addition, not a migration.
+    protect_level: Optional[float] = None
+    stop_reason: str = ""  # "IMPACT" | "STRAND" | "STRUCTURAL_BREACH" | ""
 
 
 def parse_args() -> argparse.Namespace:
@@ -255,6 +270,16 @@ class WeeklyOBEngine:
             if (m.l < zt) if bull else (m.h > zb): return m.t
         return None
 
+    def break_time(self, k: int, bull: bool, level: float) -> Optional[datetime]:
+        """Exact M1 minute price first breaks the given level within week k
+        -- used by STRUCTURAL_BREACH to find the real crossing moment of a
+        zone's protect_level (mirrors reference_rb/reference_fvg's own
+        break_time)."""
+        wk = self.w[k]
+        for m in self.m[wk.first:wk.last]:
+            if (m.h > level) if bull else (m.l < level): return m.t
+        return None
+
     def high_first(self, k: int) -> bool:
         wk = self.w[k]; hi = lo = None
         for x in self.m[wk.first:wk.last]:
@@ -271,9 +296,11 @@ class WeeklyOBEngine:
         dest = self.sw_highs if kind == 0 else self.sw_lows
         if not dest or dest[-1] != swing: dest.append(swing)
 
-    def add_zone(self, candle: int, bull: bool, trigger: int, state: int) -> int:
+    def add_zone(self, candle: int, bull: bool, trigger: int, state: int, protect_idx: int = -1) -> int:
         wk = self.w[candle]
         z = Zone(len(self.zones) + 1, candle, min(wk.o, wk.c), max(wk.o, wk.c), bull, trigger, -1, -1, None, None, -1, state, state, state)
+        if 0 <= protect_idx < len(self.w):
+            z.protect_level = self.w[protect_idx].l if bull else self.w[protect_idx].h
         # AOB/AIFOB triggers are the specific event that already exists at
         # creation.  Persist it now so later rows cannot select another event
         # with the same weekly index and kind.
@@ -363,7 +390,7 @@ class WeeklyOBEngine:
         # reused verbatim for the H4 layer (five_bso_engine.py), the same gap
         # produced duplicate H4 OBs on the same box.
         if best >= 0 and self.w[best].l > price and not self.claimed(best, False):
-            z = self.zones[self.add_zone(best, False, k, 1)]
+            z = self.zones[self.add_zone(best, False, k, 1, self.last_h)]
             if k > 0 and self.w[k - 1].h > z.zt: z.rejected = True
             elif k > 0: z.eligible = k; z.eligible_kind = 1; z.eligible_time = self.event_time(1, k); z.eligible_price = self.w[k - 1].h; z.eligible_swing_price = price
 
@@ -372,19 +399,19 @@ class WeeklyOBEngine:
         if any(self.w[v].l <= self.w[armed_l].l for v in range(armed_l + 1, new_high + 1)): return
         best = self.best(min(armed_l - 1, new_high), max(armed_l - 1, new_high), True)
         if best >= 0 and self.w[best].h < price and not self.claimed(best, True):
-            z = self.zones[self.add_zone(best, True, k, 1)]
+            z = self.zones[self.add_zone(best, True, k, 1, self.last_l)]
             if k > 0 and self.w[k - 1].l < z.zb: z.rejected = True
             elif k > 0: z.eligible = k; z.eligible_kind = 0; z.eligible_time = self.event_time(0, k); z.eligible_price = self.w[k - 1].l; z.eligible_swing_price = price
 
     def try_bull_aifob(self, preg: int, had_h: bool, armed_h: int, last_low: int, new_low: int, k: int) -> int:
         if preg != 1 or not had_h or armed_h < 0 or last_low < 0 or self.w[k].l < self.w[new_low].l: return -1
         best = self.best(min(last_low, new_low, armed_h - 1), max(last_low, new_low, armed_h - 1), True)
-        return self.add_zone(best, True, k, 4) if best >= 0 and not self.claimed(best, True) else -1
+        return self.add_zone(best, True, k, 4, self.last_l) if best >= 0 and not self.claimed(best, True) else -1
 
     def try_bear_aifob(self, preg: int, had_l: bool, armed_l: int, last_high: int, new_high: int, k: int) -> int:
         if preg != 2 or not had_l or armed_l < 0 or last_high < 0 or self.w[k].h > self.w[new_high].h: return -1
         best = self.best(min(last_high, new_high, armed_l - 1), max(last_high, new_high, armed_l - 1), False)
-        return self.add_zone(best, False, k, 4) if best >= 0 and not self.claimed(best, False) else -1
+        return self.add_zone(best, False, k, 4, self.last_h) if best >= 0 and not self.claimed(best, False) else -1
 
     def add_ifob(self, bull: bool, k: int, swing: int, last_opposite: int) -> None:
         lo, hi = min(last_opposite, k, swing), max(last_opposite, k, swing)
@@ -402,7 +429,7 @@ class WeeklyOBEngine:
         locked_best = self.best(lo, hi, bull)
         best = self.best_ifob_origin(lo, hi, bull)
         if best >= 0 and not self.claimed(best, bull):
-            idx = self.add_zone(best, bull, k, 0)
+            idx = self.add_zone(best, bull, k, 0, self.last_l if bull else self.last_h)
             z = self.zones[idx]
             if best == k:
                 z.same_bar_origin_guard = last_opposite
@@ -541,12 +568,27 @@ class WeeklyOBEngine:
                 for ev in self.events[before:total]:
                     if ev.confirm == k and ((z.bullish and ev.kind == 1 and ev.price > z.zt) or (not z.bullish and ev.kind == 0 and ev.price < z.zb)):
                         strand_ev = ev; break
-            if touch and strand_ev is not None and strand_ev.at is not None and strand_ev.at < touch:
-                z.state = 2
-            elif touch:
-                z.pre_spent_state = z.state; z.state = 3; z.stop = k; z.impact_time = touch
-            elif strand_ev is not None:
-                z.state = 2
+            # STRUCTURAL_BREACH (added 2026-09-26): a fourth candidate, NOT
+            # gated by eligibility -- a POI stops being used the instant its
+            # own protect_level (the supporting swing it was created against)
+            # is exceeded in real time, whether or not it was ever eligible.
+            # Mirrors reference_fvg/weekly_fvg_generator.py's identical logic.
+            breach_at = None
+            if z.state in (0,1,4) and z.protect_level is not None:
+                breach_at = self.break_time(k, not z.bullish, z.protect_level)
+            candidates = []
+            if touch is not None: candidates.append(("IMPACT", touch))
+            if strand_ev is not None and strand_ev.at is not None: candidates.append(("STRAND", strand_ev.at))
+            if breach_at is not None: candidates.append(("STRUCTURAL_BREACH", breach_at))
+            if candidates:
+                candidates.sort(key=lambda pair: pair[1])
+                reason, at = candidates[0]
+                if reason in ("STRAND", "STRUCTURAL_BREACH"):
+                    z.state = 2; z.stop_reason = reason
+                else:
+                    z.pre_spent_state = z.state; z.state = 3; z.stop = k; z.impact_time = at; z.stop_reason = reason
+            elif touch is None and strand_ev is not None:
+                z.state = 2; z.stop_reason = "STRAND"
         self.active = [i for i in self.active if not self.zones[i].rejected and self.zones[i].state != 3]
 
     def process(self, k: int) -> None:
@@ -1119,7 +1161,11 @@ def write_report(base: Path, minutes: List[Minute], weeks: List[Week], warnings:
     counts = {name: 0 for name in ("IFOB", "AOB", "AIFOB", "OOB", "SPENT", "REJECTED")}
     for z in e.zones:
         counts[status(z)] += 1
-    rows = ["WEEKLY OB REFERENCE RUN", f"input={args.csv_file}", f"price_side={args.price_side}", f"input_timezone={args.input_tz}", f"display_timezone={args.display_tz} (display only; internal calculation remains UTC)", f"weekly_aggregation=Sunday {args.week_close_hour:02d}:00 {args.week_close_zone}", f"display_body=first/last observed {args.box_body_minutes}-minute candle bodies assembled from the explicit source window offset {args.origin_body_offset_minutes}m; first origin price={args.origin_first_price}; missing minutes are neither filled nor used as a blocker", "event_facts=trigger and eligibility facts are captured at their lifecycle transition; ledger reports stored or fallback provenance", f"minute_coverage={iso(minutes[0].t)} to {iso(minutes[-1].t)}", f"minutes={len(minutes):,}; weeks={len(weeks):,}; swing_highs={n_high:,}; swing_lows={n_low:,}; mss_up={n_up:,}; mss_down={n_down:,}; gaps_outside_weekend={gaps}", "", "OB LIFECYCLE COUNTS", *[f"{name}={counts[name]}" for name in counts], "", "Colors: IFOB BUY=blue; IFOB SELL=black; AOB=green; AIFOB=orange; OOB=red; SPENT keeps its preceding color; REJECTED is ledger-only."]
+    reasons = {"IMPACT": 0, "STRAND": 0, "STRUCTURAL_BREACH": 0}
+    for z in e.zones:
+        if z.stop_reason in reasons:
+            reasons[z.stop_reason] += 1
+    rows = ["WEEKLY OB REFERENCE RUN", f"input={args.csv_file}", f"price_side={args.price_side}", f"input_timezone={args.input_tz}", f"display_timezone={args.display_tz} (display only; internal calculation remains UTC)", f"weekly_aggregation=Sunday {args.week_close_hour:02d}:00 {args.week_close_zone}", f"display_body=first/last observed {args.box_body_minutes}-minute candle bodies assembled from the explicit source window offset {args.origin_body_offset_minutes}m; first origin price={args.origin_first_price}; missing minutes are neither filled nor used as a blocker", "event_facts=trigger and eligibility facts are captured at their lifecycle transition; ledger reports stored or fallback provenance", f"minute_coverage={iso(minutes[0].t)} to {iso(minutes[-1].t)}", f"minutes={len(minutes):,}; weeks={len(weeks):,}; swing_highs={n_high:,}; swing_lows={n_low:,}; mss_up={n_up:,}; mss_down={n_down:,}; gaps_outside_weekend={gaps}", "", "OB LIFECYCLE COUNTS", *[f"{name}={counts[name]}" for name in counts], "", "DEATH-CAUSE BREAKDOWN (final stop_reason, OOB+SPENT only)", *[f"{name}={reasons[name]}" for name in reasons], "", "Colors: IFOB BUY=blue; IFOB SELL=black; AOB=green; AIFOB=orange; OOB=red; SPENT keeps its preceding color; REJECTED is ledger-only."]
     if warnings: rows += ["", "WARNINGS"] + warnings[:50]
     (base / "weekly_ob_report.txt").write_text("\n".join(rows)+"\n", encoding="utf-8")
 

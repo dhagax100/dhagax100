@@ -86,6 +86,19 @@ class RBZone:
     created_state: int = -1              # immutable creation type, for audit (mirrors OB's created_state)
     promotion_from_state: int = -1       # mirrors OB's promotion_from_state; -1 = never promoted
     promotion_time: Optional[datetime] = None
+    # STRUCTURAL_BREACH (added 2026-09-26, mirrors OB/FVG's identical field --
+    # see docs_fvg/FVG_RULES_LEARNED.md and reference/weekly_ob_generator.py):
+    # the supporting swing's own price, snapshotted at creation from whichever
+    # swing was the latest confirmed one of the protecting kind (self.last_l /
+    # self.last_h) at that exact moment. For RB specifically this usually
+    # equals the zone's own box edge (RB's box IS built directly from a
+    # swing-pivot candle's wick -- confirmed NOT a bug, see
+    # docs_rb/RB_RULES_LEARNED.md and docs_fvg/FVG_RULES_LEARNED.md item 2),
+    # but the field is still tracked explicitly (not inferred from zb/zt) so
+    # STRUCTURAL_BREACH's own real-time, eligibility-independent timing stays
+    # a distinct, auditable candidate from IMPACT/STRAND, same as OB/FVG.
+    protect_level: Optional[float] = None
+    stop_reason: str = ""  # "IMPACT" | "STRAND" | "STRUCTURAL_BREACH" | ""
 
 
 class WeeklyRBEngine:
@@ -196,7 +209,8 @@ class WeeklyRBEngine:
         return (candle, bull) in self._claimed_pairs
 
     def add_rb_from_swing(self, idx: int, is_high: bool, trigger_k: int, origin_type: int,
-                           trigger_time: Optional[datetime], state: Optional[int] = None) -> int:
+                           trigger_time: Optional[datetime], state: Optional[int] = None,
+                           protect_idx: int = -1) -> int:
         bull_of_this = not is_high
         if self.claimed(idx, bull_of_this):
             return -1
@@ -221,6 +235,8 @@ class WeeklyRBEngine:
         z = RBZone(len(self.zones) + 1, idx, zb, zt, bull, trigger_k, eligible, -1,
                    actual_state, origin_type, actual_state, trigger_time=trigger_time,
                    eligible_time=eligible_time, created_state=actual_state)
+        if 0 <= protect_idx < len(self.w):
+            z.protect_level = self.w[protect_idx].l if bull else self.w[protect_idx].h
         self.zones.append(z)
         self.active.append(len(self.zones) - 1)
         self._claimed_pairs.add((idx, bull_of_this))
@@ -237,14 +253,14 @@ class WeeklyRBEngine:
             return
         if any(self.w[v].h >= self.w[armed_swh].h for v in range(armed_swh + 1, new_swl_i + 1)):
             return
-        self.add_rb_from_swing(armed_swh, True, k, 1, at)
+        self.add_rb_from_swing(armed_swh, True, k, 1, at, protect_idx=self.last_h)
 
     def try_bear_arb(self, preg: int, armed_swl: int, new_swh_i: int, k: int, at: Optional[datetime]) -> None:
         if preg != 2 or armed_swl < 0:
             return
         if any(self.w[v].l <= self.w[armed_swl].l for v in range(armed_swl + 1, new_swh_i + 1)):
             return
-        self.add_rb_from_swing(armed_swl, False, k, 1, at)
+        self.add_rb_from_swing(armed_swl, False, k, 1, at, protect_idx=self.last_l)
 
     # ===================================================================
     # AIRB (Aggressive-InFavor RB) -- mirrors OB's AIFOB exactly, adapted
@@ -271,12 +287,12 @@ class WeeklyRBEngine:
     def try_bull_airb(self, preg: int, had_h: bool, armed_h: int, last_low: int, new_low: int, k: int, at: Optional[datetime]) -> int:
         if preg != 1 or not had_h or armed_h < 0 or last_low < 0 or self.w[k].l < self.w[new_low].l:
             return -1
-        return self.add_rb_from_swing(new_low, False, k, 0, at, state=4)
+        return self.add_rb_from_swing(new_low, False, k, 0, at, state=4, protect_idx=self.last_l)
 
     def try_bear_airb(self, preg: int, had_l: bool, armed_l: int, last_high: int, new_high: int, k: int, at: Optional[datetime]) -> int:
         if preg != 2 or not had_l or armed_l < 0 or last_high < 0 or self.w[k].h > self.w[new_high].h:
             return -1
-        return self.add_rb_from_swing(new_high, True, k, 0, at, state=4)
+        return self.add_rb_from_swing(new_high, True, k, 0, at, state=4, protect_idx=self.last_h)
 
     def consume_break(self, bull: bool, k: int) -> bool:
         # Bull break consumes armed high (regime -> up). If a pending AIRB
@@ -307,7 +323,7 @@ class WeeklyRBEngine:
                 promoted = True
             self.pend_bull_airb = -1
             if not promoted and self.last_l >= 0:
-                self.add_rb_from_swing(self.last_l, False, k, 0, self.break_time(k, True, self.h_price))  # IRB, bullish (low wick)
+                self.add_rb_from_swing(self.last_l, False, k, 0, self.break_time(k, True, self.h_price), protect_idx=self.last_l)  # IRB, bullish (low wick)
             self.have_h = False
             return True
         if not self.have_l or self.w[k].l >= self.l_price:
@@ -328,7 +344,7 @@ class WeeklyRBEngine:
             promoted = True
         self.pend_bear_airb = -1
         if not promoted and self.last_h >= 0:
-            self.add_rb_from_swing(self.last_h, True, k, 0, self.break_time(k, False, self.l_price))  # IRB, bearish (high wick)
+            self.add_rb_from_swing(self.last_h, True, k, 0, self.break_time(k, False, self.l_price), protect_idx=self.last_h)  # IRB, bearish (high wick)
         self.have_l = False
         return True
 
@@ -412,15 +428,35 @@ class WeeklyRBEngine:
                     if stranded:
                         strand_ev = ev
                         break
-            if touch and strand_ev is not None and strand_ev.at is not None and strand_ev.at < touch:
+            # STRUCTURAL_BREACH (added 2026-09-26): a fourth candidate, NOT
+            # gated by eligibility -- mirrors OB's/FVG's identical logic
+            # (see reference/weekly_ob_generator.py's finish_events_and_
+            # lifecycle for the full reasoning).
+            breach_at = None
+            if z.state in (0, 1, 4) and z.protect_level is not None:
+                breach_at = self.break_time(k, not z.bullish, z.protect_level)
+            candidates = []
+            if touch is not None:
+                candidates.append(("IMPACT", touch))
+            if strand_ev is not None and strand_ev.at is not None:
+                candidates.append(("STRAND", strand_ev.at))
+            if breach_at is not None:
+                candidates.append(("STRUCTURAL_BREACH", breach_at))
+            if candidates:
+                candidates.sort(key=lambda pair: pair[1])
+                reason, at = candidates[0]
+                if reason in ("STRAND", "STRUCTURAL_BREACH"):
+                    z.state = 2
+                    z.stop_reason = reason
+                else:
+                    z.pre_spent_state = z.state
+                    z.state = 3
+                    z.stop = k
+                    z.impact_time = at
+                    z.stop_reason = reason
+            elif touch is None and strand_ev is not None:
                 z.state = 2
-            elif touch:
-                z.pre_spent_state = z.state
-                z.state = 3
-                z.stop = k
-                z.impact_time = touch
-            elif strand_ev is not None:
-                z.state = 2
+                z.stop_reason = "STRAND"
 
     def process(self, k: int) -> None:
         if k == 0:
@@ -833,6 +869,10 @@ def write_report(base: Path, minutes: List["wob.Minute"], weeks: List["wob.Week"
     counts = {name: 0 for name in ("IRB", "ARB", "ORB", "SPENT", "AIRB")}
     for z in e.zones:
         counts[status(z)] += 1
+    reasons = {"IMPACT": 0, "STRAND": 0, "STRUCTURAL_BREACH": 0}
+    for z in e.zones:
+        if z.stop_reason in reasons:
+            reasons[z.stop_reason] += 1
     rows = [
         "WEEKLY RB REFERENCE RUN", f"input={args.csv_file}", f"price_side={args.price_side}",
         f"weekly_aggregation=Sunday {args.week_close_hour:02d}:00 {args.week_close_zone}",
@@ -840,6 +880,7 @@ def write_report(base: Path, minutes: List["wob.Minute"], weeks: List["wob.Week"
         f"minute_coverage_riyadh={wob.display_iso(minutes[0].t, display_zone)} to {wob.display_iso(minutes[-1].t, display_zone)}",
         f"minutes={len(minutes):,}; weeks={len(weeks):,}; swing_highs={n_high:,}; swing_lows={n_low:,}; mss_up={n_up:,}; mss_down={n_down:,}",
         "", "RB LIFECYCLE COUNTS", *[f"{name}={counts[name]}" for name in counts],
+        "", "DEATH-CAUSE BREAKDOWN (final stop_reason, ORB+SPENT only)", *[f"{name}={reasons[name]}" for name in reasons],
         "", "Colors: IRB BUY=blue; IRB SELL=black; ARB=green (fixed); ORB=red (fixed).",
     ]
     if warnings:
