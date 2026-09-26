@@ -53,9 +53,16 @@ from pathlib import Path
 from typing import List, Optional
 from zoneinfo import ZoneInfo
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "reference"))
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "reference_rb"))
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "reference_fvg"))
+# Two supported layouts: (1) this repo's own folder structure -- separate
+# reference/, reference_rb/, reference_fvg/ siblings -- and (2) copying all
+# four .py files (this one plus weekly_ob_generator.py, weekly_rb_generator.py,
+# weekly_fvg_generator.py) flat into the SAME working folder together with
+# the CSV, same convention already used for weekly_rb_generator.py/
+# weekly_fvg_generator.py. Both are tried; the flat same-folder case is
+# checked first since that is the actual local workflow.
+_here = Path(__file__).resolve().parent
+for _p in (_here, _here.parent / "reference", _here.parent / "reference_rb", _here.parent / "reference_fvg"):
+    sys.path.insert(0, str(_p))
 import weekly_ob_generator as wob        # noqa: E402 -- Minute/Week/Event/MSS/Zone,
                                           # load_minutes, aggregate_weeks, iso helpers
 import weekly_rb_generator as wrb        # noqa: E402 -- RBZone
