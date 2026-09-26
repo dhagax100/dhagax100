@@ -21,3 +21,7 @@ data/five_bso_rb_ledger.csv
 data/full_rb_viewer.pine
 data/weekly_rb_control_events.csv
 data/weekly_rb_control_report.txt
+data/weekly_fvg_ledger.csv
+data/weekly_fvg_swings.csv
+data/weekly_fvg_viewer.pine
+data/weekly_fvg_report.txt
