@@ -330,6 +330,24 @@ and also benefits OB the same way if OB's own BSO table ever grows this
 large. Verified: `bso5BLeft` etc. now hold bare integers
 (e.g. `1770693300000`), not nested `timestamp(...)` calls.
 
+## Two 1-hour timestamp discrepancies fixed; engine now matches all 34 gates exactly (2026-09-26)
+
+Verified the two flagged 1-hour differences (zone #8's and zone #14's own
+Weekly-close death times) directly against the canonical week aggregation
+(`wob.aggregate_weeks(minutes, "America/New_York", 17)` -- the exact call
+`full_rb_viewer.py` itself uses): both weeks genuinely END at **:00
+Riyadh**, not :01 -- 2026-05-11 00:00 and 2026-07-27 00:00. The automated
+engine was right; the hand-typed table had a stale 1-hour error on both
+(most likely from an earlier, less careful ad hoc verification script
+that didn't use the canonical NY-local-17:00 week-close convention).
+
+Fixed both boundaries in `build_manual_rb_gates()`. Regenerated: same 120
+H4 RBs authorized, same 150 5m BSO rows -- nothing was actually impacted
+inside that 1-hour gap, so this was a pure precision fix with zero effect
+on any computed result. **`weekly_rb_control_engine.py`'s automated
+derivation now matches all 34 hand-verified gates exactly, to the
+minute** -- the validation this session set out to do is complete.
+
 ## Gate 2 finding accepted; two NONE windows added (2026-09-26)
 
 Follow-up to the automated engine's gate-2 finding above. User's decision,
