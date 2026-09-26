@@ -60,14 +60,34 @@ user supplied):
     into the gap ends it, regardless of state -- matches the pine source:
     an already-OFVG zone can still later be impacted, it can never
     re-strand).
-  - Same-week ordering when impact, stranding and close-through could all
-    apply: resolved by exact M1/event timestamp, earliest wins -- the same
-    discipline already used throughout OB/RB, extended to a third
-    candidate. A close-through's own "timestamp" is inherently the week's
-    own scheduled close (the LATEST possible moment in that week), so it
-    can only ever win when no impact or stranding happened earlier that
-    same week -- not a new rule, just the existing ordering discipline
-    applied one more time.
+  - **STRUCTURAL_BREACH: a fourth, genuinely new death cause, added per
+    explicit user direction (2026-09-26): a POI stops being used the
+    instant its supporting swing point is exceeded, in real time, full
+    stop -- not gated by eligibility, not waiting for a NEW swing to
+    formally confirm (that's STRAND's job).** This is the same concept
+    `five_bso_engine.py`'s `structural_invalid_at()` already calls
+    'swing_break' for OB/RB's own H4 layer ("the specific swing currently
+    protecting this OB gets exceeded, at the exact 1m moment it happens --
+    whether or not the core engine's own regime tracking classifies that
+    as a formal MSS") -- applied here directly at the Weekly zone's own
+    lifecycle, which OB/RB's own Weekly zones never had (there, this
+    concept only lived at the H4 layer). Each zone snapshots its own
+    "protecting" swing (a LOW for a bullish zone, a HIGH for a bearish
+    zone -- whichever was the latest confirmed swing of that kind at
+    creation) as `protect_level`; every week after, if price crosses that
+    exact level in real time, the zone dies immediately, whether or not it
+    was ever eligible, whether or not it was ever touched. An already-OFVG
+    zone can still later be impacted (same as OB/RB), but can't die twice
+    from this same cause.
+  - Same-week ordering when impact, stranding, close-through and
+    structural-breach could all apply: resolved by exact M1/event
+    timestamp, earliest wins -- the same discipline already used
+    throughout OB/RB, generalized from two candidates to four. A
+    close-through's own "timestamp" is inherently the week's own
+    scheduled close (the LATEST possible moment in that week), so it can
+    only ever win when nothing else happened earlier that same week --
+    not a new rule, just the existing ordering discipline applied one
+    more time.
   - No promotion machinery at all (no AIFOB/AIRB-style pending object):
     the pine source has no such state for FVG. `origin` is stamped once,
     forever, at creation.
@@ -135,7 +155,11 @@ class FVGZone:
     eligible_time: Optional[datetime] = None
     impact_time: Optional[datetime] = None
     trigger_time: Optional[datetime] = None
-    stop_reason: str = ""    # "IMPACT" | "CLOSE_THROUGH" | "" (still open, or stranded -- see `state`)
+    protect_level: Optional[float] = None  # supporting swing's own price (a LOW for a bullish
+                                            # zone, a HIGH for a bearish zone), snapshotted at
+                                            # creation -- see STRUCTURAL_BREACH in
+                                            # finish_events_and_lifecycle
+    stop_reason: str = ""    # "IMPACT" | "CLOSE_THROUGH" | "STRAND" | "STRUCTURAL_BREACH" | ""
 
 
 class WeeklyFVGEngine:
@@ -234,19 +258,34 @@ class WeeklyFVGEngine:
         return (left, bull) in self._claimed_pairs
 
     def add_fvg(self, left: int, zb: float, zt: float, bull: bool, trigger_k: int,
-                origin: int, trigger_time: Optional[datetime]) -> int:
+                origin: int, trigger_time: Optional[datetime], protect_idx: int = -1) -> int:
         if self.claimed(left, bull):
             return -1
         eligible = trigger_k if origin == 1 else -1
         eligible_time = trigger_time if origin == 1 else None
+        # STRUCTURAL_BREACH's own level: the supporting swing's price, a LOW
+        # for a bullish zone or a HIGH for a bearish zone, snapshotted at
+        # creation from whichever swing was actually the latest confirmed
+        # one of that kind at this moment (self.last_l/self.last_h) --
+        # same "last confirmed swing of the protecting kind" convention
+        # five_bso_engine.py's own structural_invalid_at() already uses for
+        # OB/RB's H4 layer (its 'swing_break' case), per explicit user
+        # direction: a POI stops being used the instant its supporting
+        # swing point is exceeded, in real time, independent of and often
+        # earlier than the stranding rule's own formal-confirmation timing.
+        protect_level = None
+        if 0 <= protect_idx < len(self.w):
+            protect_level = self.w[protect_idx].l if bull else self.w[protect_idx].h
         z = FVGZone(len(self.zones) + 1, left, zb, zt, bull, trigger_k, eligible, -1,
-                    origin, origin, origin, trigger_time=trigger_time, eligible_time=eligible_time)
+                    origin, origin, origin, trigger_time=trigger_time, eligible_time=eligible_time,
+                    protect_level=protect_level)
         self.zones.append(z)
         self.active.append(len(self.zones) - 1)
         self._claimed_pairs.add((left, bull))
         return len(self.zones) - 1
 
-    def try_create_ifvgs(self, lo: int, hi: int, bullish: bool, trigger_k: int, trigger_time: Optional[datetime]) -> None:
+    def try_create_ifvgs(self, lo: int, hi: int, bullish: bool, trigger_k: int,
+                         trigger_time: Optional[datetime], protect_idx: int) -> None:
         if hi < lo + 2:
             return
         for c3 in range(lo + 2, hi + 1):
@@ -254,14 +293,14 @@ class WeeklyFVGEngine:
             if bullish:
                 h1, l3 = self.w[c1].h, self.w[c3].l
                 if h1 < l3:
-                    self.add_fvg(c1, h1, l3, True, trigger_k, 0, trigger_time)
+                    self.add_fvg(c1, h1, l3, True, trigger_k, 0, trigger_time, protect_idx)
             else:
                 l1, h3 = self.w[c1].l, self.w[c3].h
                 if l1 > h3:
-                    self.add_fvg(c1, h3, l1, False, trigger_k, 0, trigger_time)
+                    self.add_fvg(c1, h3, l1, False, trigger_k, 0, trigger_time, protect_idx)
 
     def try_create_afvgs(self, lo: int, hi: int, bullish: bool, trigger_k: int,
-                         guard_price: float, trigger_time: Optional[datetime]) -> None:
+                         guard_price: float, trigger_time: Optional[datetime], protect_idx: int) -> None:
         if hi < lo + 2:
             return
         for c3 in range(lo + 2, hi + 1):
@@ -271,13 +310,13 @@ class WeeklyFVGEngine:
                 if l1 > h3:
                     l3 = self.w[c3].l
                     if l1 > guard_price and l3 > guard_price:
-                        self.add_fvg(c1, h3, l1, True, trigger_k, 1, trigger_time)
+                        self.add_fvg(c1, h3, l1, True, trigger_k, 1, trigger_time, protect_idx)
             else:
                 h1, l3 = self.w[c1].h, self.w[c3].l
                 if h1 < l3:
                     h3 = self.w[c3].h
                     if h1 < guard_price and h3 < guard_price:
-                        self.add_fvg(c1, h1, l3, False, trigger_k, 1, trigger_time)
+                        self.add_fvg(c1, h1, l3, False, trigger_k, 1, trigger_time, protect_idx)
 
     def try_bull_afvg(self, preg: int, armed_swh: int, new_swl_i: int, new_swl_p: float, k: int, at: Optional[datetime]) -> None:
         # Mirrors tryBullAFVG's range + reference-validity gate one-for-one.
@@ -288,7 +327,7 @@ class WeeklyFVGEngine:
         swl_ext = new_swl_i + 1 if new_swl_i + 1 <= k - 1 else new_swl_i
         lo = max(0, min(armed_swh - 1, swl_ext))
         hi = max(armed_swh - 1, swl_ext)
-        self.try_create_afvgs(lo, hi, True, k, new_swl_p, at)
+        self.try_create_afvgs(lo, hi, True, k, new_swl_p, at, self.last_l)
 
     def try_bear_afvg(self, preg: int, armed_swl: int, new_swh_i: int, new_swh_p: float, k: int, at: Optional[datetime]) -> None:
         if preg != 2 or armed_swl < 0:
@@ -298,7 +337,7 @@ class WeeklyFVGEngine:
         swh_ext = new_swh_i + 1 if new_swh_i + 1 <= k - 1 else new_swh_i
         lo = max(0, min(armed_swl - 1, swh_ext))
         hi = max(armed_swl - 1, swh_ext)
-        self.try_create_afvgs(lo, hi, False, k, new_swh_p, at)
+        self.try_create_afvgs(lo, hi, False, k, new_swh_p, at, self.last_h)
 
     def consume_break(self, bull: bool, k: int) -> bool:
         if bull:
@@ -310,7 +349,7 @@ class WeeklyFVGEngine:
             if self.last_l >= 0:
                 lo, hi = min(self.last_l, k, self.h_idx), max(self.last_l, k, self.h_idx)
                 bt = self.break_time(k, True, self.h_price)
-                self.try_create_ifvgs(lo, hi, True, k, bt)
+                self.try_create_ifvgs(lo, hi, True, k, bt, self.last_l)
                 self.fvg_bull_scan_upto = hi
             self.have_h = False
             return True
@@ -322,7 +361,7 @@ class WeeklyFVGEngine:
         if self.last_h >= 0:
             lo, hi = min(self.last_h, k, self.l_idx), max(self.last_h, k, self.l_idx)
             bt = self.break_time(k, False, self.l_price)
-            self.try_create_ifvgs(lo, hi, False, k, bt)
+            self.try_create_ifvgs(lo, hi, False, k, bt, self.last_h)
             self.fvg_bear_scan_upto = hi
         self.have_l = False
         return True
@@ -395,25 +434,54 @@ class WeeklyFVGEngine:
                     if stranded:
                         strand_ev = ev
                         break
-            if touch and strand_ev is not None and strand_ev.at is not None and strand_ev.at < touch:
-                z.state = 2
-            elif touch:
-                z.pre_spent_state = z.state
-                z.state = 3
-                z.stop = k
-                z.impact_time = touch
-                z.stop_reason = "IMPACT"
-            elif strand_ev is not None:
-                z.state = 2
-            elif z.origin == 0 and z.state == 0 and z.eligible != -1 and k >= z.eligible:
+            close_through_at = None
+            if z.origin == 0 and z.state == 0 and z.eligible != -1 and k >= z.eligible:
                 c = self.w[k].c
                 closed_through = (c < z.zb) if z.bullish else (c > z.zt)
                 if closed_through:
+                    close_through_at = self.w[k].end
+            # STRUCTURAL_BREACH: the supporting swing point itself gets
+            # exceeded, at the exact real-time minute it happens -- not
+            # gated by eligibility, not waiting for a new swing to formally
+            # confirm (that's what STRAND already is). Per explicit user
+            # direction: a POI stops being used the instant its supporting
+            # swing is exceeded, in real time, full stop -- the same
+            # concept five_bso_engine.py's structural_invalid_at() already
+            # calls 'swing_break' for OB/RB's own H4 layer, applied here
+            # directly at the Weekly zone's own lifecycle. Only meaningful
+            # while the zone is still live (state 0 or 1) -- an already-
+            # OFVG zone can still later be impacted, same as OB/RB, but it
+            # can't die twice from this same cause.
+            breach_at = None
+            if z.state in (0, 1) and z.protect_level is not None:
+                breach_at = self.break_time(k, not z.bullish, z.protect_level)
+            candidates = []
+            if touch is not None:
+                candidates.append(("IMPACT", touch))
+            if strand_ev is not None and strand_ev.at is not None:
+                candidates.append(("STRAND", strand_ev.at))
+            if close_through_at is not None:
+                candidates.append(("CLOSE_THROUGH", close_through_at))
+            if breach_at is not None:
+                candidates.append(("STRUCTURAL_BREACH", breach_at))
+            if candidates:
+                candidates.sort(key=lambda pair: pair[1])
+                reason, at = candidates[0]
+                if reason in ("STRAND", "STRUCTURAL_BREACH"):
+                    z.state = 2
+                    z.stop_reason = reason
+                else:
                     z.pre_spent_state = z.state
                     z.state = 3
                     z.stop = k
-                    z.impact_time = self.w[k].end
-                    z.stop_reason = "CLOSE_THROUGH"
+                    z.impact_time = at
+                    z.stop_reason = reason
+            elif touch is None and strand_ev is not None:
+                # strand_ev exists but its own M1 time couldn't be resolved
+                # -- still stranded, just not orderable against the others
+                # (mirrors OB/RB's own fallback for this same edge case).
+                z.state = 2
+                z.stop_reason = "STRAND"
 
     def process(self, k: int) -> None:
         if k == 0:
@@ -466,12 +534,12 @@ class WeeklyFVGEngine:
         if self.regime == 1 and k >= 2 and k > self.fvg_bull_scan_upto:
             h1c, l3c = self.w[k - 2].h, self.w[k].l
             if h1c < l3c:
-                self.add_fvg(k - 2, h1c, l3c, True, k, 0, self.w[k].start)
+                self.add_fvg(k - 2, h1c, l3c, True, k, 0, self.w[k].start, self.last_l)
             self.fvg_bull_scan_upto = k
         if self.regime == 2 and k >= 2 and k > self.fvg_bear_scan_upto:
             l1c, h3c = self.w[k - 2].l, self.w[k].h
             if l1c > h3c:
-                self.add_fvg(k - 2, h3c, l1c, False, k, 0, self.w[k].start)
+                self.add_fvg(k - 2, h3c, l1c, False, k, 0, self.w[k].start, self.last_h)
             self.fvg_bear_scan_upto = k
 
         self.finish_events_and_lifecycle(k, before, total, c_h, c_l)
@@ -773,7 +841,13 @@ def write_report(base: Path, minutes: List["wob.Minute"], weeks: List["wob.Week"
     n_up = sum(1 for x in e.msses if x.up)
     n_down = sum(1 for x in e.msses if not x.up)
     counts = {name: 0 for name in ("IFVG", "AFVG", "OFVG", "SPENT")}
-    reasons = {"IMPACT": 0, "CLOSE_THROUGH": 0}
+    # Every death cause a zone can carry, whether it ended as SPENT (IMPACT/
+    # CLOSE_THROUGH) or OFVG (STRAND/STRUCTURAL_BREACH) -- a zone's final
+    # stop_reason is whichever cause actually killed it last (an OFVG zone
+    # can still later be impacted, overwriting STRAND/STRUCTURAL_BREACH
+    # with IMPACT, same as OB/RB's own "already-stranded can still be
+    # impacted, never re-strand" convention).
+    reasons = {"IMPACT": 0, "CLOSE_THROUGH": 0, "STRAND": 0, "STRUCTURAL_BREACH": 0}
     for z in e.zones:
         counts[status(z)] += 1
         if z.stop_reason in reasons:
@@ -785,7 +859,7 @@ def write_report(base: Path, minutes: List["wob.Minute"], weeks: List["wob.Week"
         f"minute_coverage_riyadh={wob.display_iso(minutes[0].t, display_zone)} to {wob.display_iso(minutes[-1].t, display_zone)}",
         f"minutes={len(minutes):,}; weeks={len(weeks):,}; swing_highs={n_high:,}; swing_lows={n_low:,}; mss_up={n_up:,}; mss_down={n_down:,}",
         "", "FVG LIFECYCLE COUNTS", *[f"{name}={counts[name]}" for name in counts],
-        "", "SPENT REASON BREAKDOWN", *[f"{name}={reasons[name]}" for name in reasons],
+        "", "DEATH-CAUSE BREAKDOWN (final stop_reason)", *[f"{name}={reasons[name]}" for name in reasons],
         "", "Colors: IFVG BUY=blue; IFVG SELL=black; AFVG=green (fixed); OFVG=red (fixed).",
     ]
     if warnings:
