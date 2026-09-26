@@ -1003,7 +1003,8 @@ def fvg_status(z) -> str:
 
 
 def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int, ob_cap: int, rb_cap: int,
-                         fvg_cap: int, table_cap: int, display_zone: ZoneInfo, out_name: str = "weekly_combined_viewer.pine") -> None:
+                         fvg_cap: int, table_cap: int, display_zone: ZoneInfo, out_name: str = "weekly_combined_viewer.pine",
+                         extra_lines: Optional[List[str]] = None) -> None:
     """ONE pine file: the shared swing/regime/MSS structure drawn ONCE, with
     OB, RB and FVG zones all overlaid on top of it -- mirrors
     Main_Indicator_v1.pine's own single-chart layout, instead of three
@@ -1252,6 +1253,8 @@ def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int
         "                table.cell(ledger, 9, rowN, array.get(tImpact, i), text_color=color.black, bgcolor=na)",
         f"                table.cell(ledger, 10, rowN, array.get(tStatus, i), text_color=color.black, bgcolor=color.new({colour_ternary('array.get(tBgCode, i)')}, 80))",
     ]
+    if extra_lines:
+        lines += extra_lines
     (base / out_name).write_text("\n".join(lines), encoding="utf-8")
 
 
