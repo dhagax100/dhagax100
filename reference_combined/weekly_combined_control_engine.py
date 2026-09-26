@@ -70,6 +70,8 @@ class UnifiedZone:
     zb: float
     zt: float
     impact_time: Optional[datetime]
+    poi_type: str            # "OB" | "RB" | "FVG" -- decides which close-death rule applies
+    fvg_origin: Optional[int] = None  # 0=IFVG-style, 1=AFVG-style; only meaningful when poi_type=="FVG"
 
 
 @dataclass
@@ -107,11 +109,11 @@ def build_unified_zones(engine: "wc.WeeklyCombinedEngine") -> List[UnifiedZone]:
     for z in engine.ob_zones:
         if z.rejected:
             continue
-        out.append(UnifiedZone(f"OB#{z.id}", z.bullish, z.protect_level, z.zb, z.zt, z.impact_time))
+        out.append(UnifiedZone(f"OB#{z.id}", z.bullish, z.protect_level, z.zb, z.zt, z.impact_time, "OB"))
     for z in engine.rb_zones:
-        out.append(UnifiedZone(f"RB#{z.id}", z.bullish, z.protect_level, z.zb, z.zt, z.impact_time))
+        out.append(UnifiedZone(f"RB#{z.id}", z.bullish, z.protect_level, z.zb, z.zt, z.impact_time, "RB"))
     for z in engine.fvg_zones:
-        out.append(UnifiedZone(f"FVG#{z.id}", z.bullish, z.protect_level, z.zb, z.zt, z.impact_time))
+        out.append(UnifiedZone(f"FVG#{z.id}", z.bullish, z.protect_level, z.zb, z.zt, z.impact_time, "FVG", z.origin))
     return out
 
 
@@ -159,8 +161,29 @@ def run_control_walk(engine: "wc.WeeklyCombinedEngine", weeks: List["wob.Week"],
         return best.label if best is not None else ""
 
     def body_close_dead_after(z: UnifiedZone, start: datetime) -> Optional[datetime]:
+        # Real bug fixed 2026-09-26 (user-caught): this used to apply OB/RB's
+        # NEAR-edge "close lands back inside the box" rule to FVG zones too,
+        # verbatim, unchanged from RB's own control engine. That is wrong for
+        # FVG specifically -- a close back INSIDE a gap is normal, expected
+        # behavior (that's the whole point of an FVG: price is expected to
+        # trade back into it), not a stop sign. The real FVG-equivalent death
+        # signal is a FAR-edge close-through (fully past the WHOLE zone),
+        # matching FVG's own zone-lifecycle CLOSE_THROUGH rule exactly
+        # (weekly_fvg_generator.py's finish_events_and_lifecycle) -- and,
+        # same as that rule, it does NOT apply to AFVG zones (origin==1),
+        # which start already on the "wrong" side of price by design.
         wi = week_at(weeks, start)
         if wi is None:
+            return None
+        if z.poi_type == "FVG":
+            if z.fvg_origin == 1:
+                return None
+            for w in weeks[wi:]:
+                if w.end < start:
+                    continue
+                closed_through = (w.c < z.zb) if z.bullish else (w.c > z.zt)
+                if closed_through:
+                    return w.end
             return None
         for w in weeks[wi:]:
             if w.end < start:
