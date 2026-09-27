@@ -73,8 +73,18 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--pine-fvgs", type=int, default=150, choices=range(1, 451))
     p.add_argument("--pine-table", type=int, default=20, choices=range(1, 21))
     p.add_argument("--h4-anchor-hour", type=int, default=17, choices=range(24))
-    p.add_argument("--h4-pine-cap", type=int, default=200, choices=range(1, 451))
-    p.add_argument("--h4-pine-labels", type=int, default=80, choices=range(1, 161))
+    p.add_argument("--h4-pine-cap", type=int, default=60, choices=range(1, 451),
+                    help="How many of the most recent authorized 4H POIs to actually DRAW on the "
+                         "chart/table. Now that every gate is covered (not just gate 1), the full "
+                         "count can be in the hundreds -- packing all of them into the Pine script "
+                         "hits TradingView's CE10295 'main body too long' limit. This only limits "
+                         "the chart; the ledger CSVs always contain every POI and every trade "
+                         "regardless of this cap.")
+    p.add_argument("--h4-pine-labels", type=int, default=30, choices=range(1, 161))
+    p.add_argument("--bso-pine-cap", type=int, default=60,
+                    help="How many of the most recent 5m BSO entry attempts to actually DRAW on "
+                         "the chart/table (same reasoning as --h4-pine-cap). The ledger CSV "
+                         "(five_bso_combined_ledger.csv) always contains every attempt regardless.")
     p.add_argument("--window-start", default=None,
                     help="Only draw H4 opportunities/trades impacted on or after this date/time "
                          "(e.g. 2026-02-02 or '2026-02-02 16:03'), in --display-tz. Defaults to "
@@ -364,9 +374,15 @@ def main() -> int:
             seen[key] = len(bso_results)
             bso_results.append((z, z.impact_time, label, invalidation_reason, res, ptype))
 
+    # bso_results (all of it, every attempt) already went to the CSV ledger
+    # above. The chart/table only draws the most recent --bso-pine-cap of
+    # them -- with every gate covered now, the full count can run into the
+    # hundreds, and packing all of it into the Pine script hits
+    # TradingView's CE10295 "main body too long" limit.
+    bso_results_for_pine = bso_results[-args.bso_pine_cap:]
     bso_extra_lines = [
         line.replace('"Weekly OB"', '"Weekly POI"').replace('"4H OB"', '"4H POI"')
-        for line in fv.build_bso_extra_lines([r[:5] for r in bso_results], display_tz)
+        for line in fv.build_bso_extra_lines([r[:5] for r in bso_results_for_pine], display_tz)
     ]
 
     extra_lines = h4_extra_lines + bso_extra_lines
