@@ -128,6 +128,8 @@ def run_control_walk(engine: "wc.WeeklyCombinedEngine", weeks: List["wob.Week"],
     swing_lows = sorted([e for e in engine.events if e.kind == 1 and e.at is not None], key=lambda e: e.at)
     sh_times = [e.at for e in swing_highs]
     sl_times = [e.at for e in swing_lows]
+    sh_price = {e.at: e.price for e in swing_highs}
+    sl_price = {e.at: e.price for e in swing_lows}
 
     def next_swing(times: List[datetime], after: datetime) -> Optional[datetime]:
         i = bisect_left(times, after)
@@ -205,6 +207,12 @@ def run_control_walk(engine: "wc.WeeklyCombinedEngine", weeks: List["wob.Week"],
     challengers: List[UnifiedZone] = []
     pre_both_bull: Optional[bool] = None
     anchor_zone: Optional[UnifiedZone] = None
+    # Normally the anchor's own protect_level is the anchor-break threshold.
+    # But when a zone takes control by being RESPECTED, the thing that
+    # actually stopped the prior bias is that specific confirming swing --
+    # often a tighter, closer level than the zone's own protect_level. In
+    # that case anchor_level overrides protect_level as the break threshold.
+    anchor_level: Optional[float] = None
 
     guard = 0
     while t < end_of_data and guard < 5000:
@@ -241,6 +249,7 @@ def run_control_walk(engine: "wc.WeeklyCombinedEngine", weeks: List["wob.Week"],
                 z = payload
                 control = "BUY_ONLY" if z.bullish else "SELL_ONLY"
                 anchor_zone = z
+                anchor_level = None
                 paused_bull = None
                 log(at, "CAMPAIGN_START", f"Zone {z.label} impacted (from NONE) -> {control}", z.label, control)
                 t = at
@@ -248,6 +257,7 @@ def run_control_walk(engine: "wc.WeeklyCombinedEngine", weeks: List["wob.Week"],
             else:
                 control = "BUY_ONLY" if paused_bull else "SELL_ONLY"
                 anchor_zone = None
+                anchor_level = None
                 log(at, "SWING_RESUME", f"Swing {'high' if not paused_bull else 'low'} confirms -> {control}", None, control)
                 paused_bull = None
                 t = at
@@ -259,8 +269,10 @@ def run_control_walk(engine: "wc.WeeklyCombinedEngine", weeks: List["wob.Week"],
             parent_label = parent_at(control_bull, t)
             death_at = body_close_dead_after(next(z for z in impacts if z.label == parent_label), t) if parent_label else None
             anchor_break_at = None
-            if anchor_zone is not None and anchor_zone.protect_level is not None:
-                anchor_break_at = first_breach(mt, lo, hi, t, anchor_zone.protect_level, above=not control_bull)
+            if anchor_zone is not None:
+                level = anchor_level if anchor_level is not None else anchor_zone.protect_level
+                if level is not None:
+                    anchor_break_at = first_breach(mt, lo, hi, t, level, above=not control_bull)
             pause_at = next_swing(sh_times if control_bull else sl_times, t)
 
             cands = [c for c in (
@@ -286,6 +298,7 @@ def run_control_walk(engine: "wc.WeeklyCombinedEngine", weeks: List["wob.Week"],
                 same_side = impact_at_exact(control_bull, at)
                 if same_side is not None:
                     anchor_zone = same_side
+                    anchor_level = None
                     log(at, "ZONE_DEATH_BUT_REINFORCED", f"Zone {parent_label} dies, zone {same_side.label} impacts same minute -> stays {control}", same_side.label, control)
                     t = at
                     continue
@@ -293,13 +306,16 @@ def run_control_walk(engine: "wc.WeeklyCombinedEngine", weeks: List["wob.Week"],
                 control = "NONE"
                 paused_bull = None
                 anchor_zone = None
+                anchor_level = None
                 t = at
                 continue
             if kind_ == "anchor_break":
                 new_control = "SELL_ONLY" if control_bull else "BUY_ONLY"
-                log(at, "ANCHOR_BREAK_FLIP", f"Zone {anchor_zone.label}'s own protect_level breached -> {new_control}", anchor_zone.label, new_control)
+                level_desc = "its respecting swing" if anchor_level is not None else "own protect_level"
+                log(at, "ANCHOR_BREAK_FLIP", f"Zone {anchor_zone.label}'s {level_desc} breached -> {new_control}", anchor_zone.label, new_control)
                 control = new_control
                 anchor_zone = None
+                anchor_level = None
                 t = at
                 continue
             same_minute_opp = impact_at_exact(not control_bull, at)
@@ -313,6 +329,7 @@ def run_control_walk(engine: "wc.WeeklyCombinedEngine", weeks: List["wob.Week"],
             same_side_imp = impact_at_exact(control_bull, at)
             if same_side_imp is not None:
                 anchor_zone = same_side_imp
+                anchor_level = None
                 log(at, "PAUSE_OVERRIDDEN_BY_IMPACT", f"Swing confirms same minute zone {same_side_imp.label} impacts -> stays {control}", same_side_imp.label, control)
                 t = at
                 continue
@@ -320,6 +337,7 @@ def run_control_walk(engine: "wc.WeeklyCombinedEngine", weeks: List["wob.Week"],
             paused_bull = control_bull
             control = "NONE"
             anchor_zone = None
+            anchor_level = None
             t = at
             continue
 
@@ -360,6 +378,12 @@ def run_control_walk(engine: "wc.WeeklyCombinedEngine", weeks: List["wob.Week"],
                 log(at, "RESPECT_FULL_FLIP", f"Zone {ch.label} respected -> {new_control}", ch.label, new_control)
                 control = new_control
                 anchor_zone = ch
+                # The thing that actually stopped the prior bias is this
+                # specific confirming swing, not necessarily ch's own (often
+                # more distant) protect_level -- use its price as the
+                # anchor-break threshold going forward.
+                resp_kind_price = sl_price if ch.bullish else sh_price
+                anchor_level = resp_kind_price.get(at)
                 challengers = []
                 pre_both_bull = None
                 t = at
@@ -401,6 +425,7 @@ def run_control_walk(engine: "wc.WeeklyCombinedEngine", weeks: List["wob.Week"],
             log(at, kind_label, f"Zone {ch.label}'s {reason} -> {new_control}", ch.label, new_control)
             control = new_control
             anchor_zone = None
+            anchor_level = None
             challengers = []
             pre_both_bull = None
             t = at
