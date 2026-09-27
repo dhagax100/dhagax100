@@ -342,13 +342,30 @@ def run_control_walk(engine: "wc.WeeklyCombinedEngine", weeks: List["wob.Week"],
                 log(at, "RESPECT_FULL_FLIP", f"Zone {challenger.label} respected -> {new_control}", challenger.label, new_control)
                 control = new_control
                 anchor_zone = challenger
-            else:
-                new_control = "BUY_ONLY" if pre_both_bull else "SELL_ONLY"
-                kind_label = "ANCHOR_BREAK_REVERT" if kind_ == "break" else "BODY_DEATH_REVERT"
-                reason = "own level breached, no respect" if kind_ == "break" else "closes body inside/through its own box"
-                log(at, kind_label, f"Zone {challenger.label}'s {reason} -> {new_control}", challenger.label, new_control)
-                control = new_control
-                anchor_zone = None
+                challenger = None
+                pre_both_bull = None
+                t = at
+                continue
+            kind_label = "ANCHOR_BREAK_REVERT" if kind_ == "break" else "BODY_DEATH_REVERT"
+            reason = "own level breached, no respect" if kind_ == "break" else "closes body inside/through its own box"
+            # A same-side neighbour zone (e.g. an OB and an RB stacked back to
+            # back) can get impacted on the exact same real-time minute the
+            # dying challenger's level breaks -- one continuous price move
+            # through both. That is not a fresh, separate encounter: stay in
+            # BOTH with the new zone as challenger instead of reverting to
+            # single-sided control and then re-opening BOTH a second time.
+            reinforcement = impact_at_exact(challenger.bullish, at)
+            if reinforcement is not None and reinforcement.label != challenger.label:
+                log(at, "CHALLENGER_DIES_BUT_REINFORCED",
+                    f"Zone {challenger.label}'s {reason}, but zone {reinforcement.label} impacts same minute -> stays BOTH",
+                    reinforcement.label, "BOTH")
+                challenger = reinforcement
+                t = at
+                continue
+            new_control = "BUY_ONLY" if pre_both_bull else "SELL_ONLY"
+            log(at, kind_label, f"Zone {challenger.label}'s {reason} -> {new_control}", challenger.label, new_control)
+            control = new_control
+            anchor_zone = None
             challenger = None
             pre_both_bull = None
             t = at
