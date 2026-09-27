@@ -32,3 +32,8 @@ data/weekly_vi_ledger.csv
 data/weekly_vi_swings.csv
 data/weekly_vi_viewer.pine
 data/weekly_vi_report.txt
+data/weekly_combined_report.txt
+data/weekly_combined_viewer.pine
+data/weekly_combined_control_events.csv
+data/weekly_combined_control_report.txt
+data/full_combined_viewer.pine
