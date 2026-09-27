@@ -202,7 +202,7 @@ def run_control_walk(engine: "wc.WeeklyCombinedEngine", weeks: List["wob.Week"],
     t = mt[0]
     control = "NONE"
     paused_bull: Optional[bool] = None
-    challenger: Optional[UnifiedZone] = None
+    challengers: List[UnifiedZone] = []
     pre_both_bull: Optional[bool] = None
     anchor_zone: Optional[UnifiedZone] = None
 
@@ -229,12 +229,12 @@ def run_control_walk(engine: "wc.WeeklyCombinedEngine", weeks: List["wob.Week"],
                 same_minute_opp = impact_at_exact(not want_bull, at)
             if same_minute_opp is not None:
                 control = "BOTH"
-                challenger = same_minute_opp
+                challengers = [same_minute_opp]
                 pre_both_bull = paused_bull
                 paused_bull = None
                 log(at, "SWING_RESUME_COLLIDES_WITH_IMPACT",
                     f"Swing {'high' if not want_bull else 'low'} resumes {('SELL' if not want_bull else 'BUY')} "
-                    f"same minute zone {challenger.label} impacts -> BOTH", challenger.label, control)
+                    f"same minute zone {same_minute_opp.label} impacts -> BOTH", same_minute_opp.label, control)
                 t = at
                 continue
             if kind_ == "impact":
@@ -277,7 +277,7 @@ def run_control_walk(engine: "wc.WeeklyCombinedEngine", weeks: List["wob.Week"],
             if kind_ == "opp_impact":
                 z = payload
                 control = "BOTH"
-                challenger = z
+                challengers = [z]
                 pre_both_bull = control_bull
                 log(at, "OPPOSING_ENCOUNTER", f"Zone {z.label} impacted -> BOTH", z.label, control)
                 t = at
@@ -305,9 +305,9 @@ def run_control_walk(engine: "wc.WeeklyCombinedEngine", weeks: List["wob.Week"],
             same_minute_opp = impact_at_exact(not control_bull, at)
             if same_minute_opp is not None:
                 control = "BOTH"
-                challenger = same_minute_opp
+                challengers = [same_minute_opp]
                 pre_both_bull = control_bull
-                log(at, "PAUSE_COLLIDES_WITH_IMPACT", f"Swing confirms same minute zone {challenger.label} impacts -> BOTH", challenger.label, control)
+                log(at, "PAUSE_COLLIDES_WITH_IMPACT", f"Swing confirms same minute zone {same_minute_opp.label} impacts -> BOTH", same_minute_opp.label, control)
                 t = at
                 continue
             same_side_imp = impact_at_exact(control_bull, at)
@@ -324,56 +324,84 @@ def run_control_walk(engine: "wc.WeeklyCombinedEngine", weeks: List["wob.Week"],
             continue
 
         if control == "BOTH":
-            resp_kind_times = sl_times if challenger.bullish else sh_times
-            respect_at = next_swing(resp_kind_times, t)
-            # A live wick fully through the challenger's own box only means
-            # something for OB/RB (their box IS the protecting structure).
-            # For FVG, price wicking past the far edge is normal -- only a
-            # close beyond it counts (that's body_death_at, below). Applying
-            # this wick check to FVG too would contradict that rule.
-            break_at = None
-            if challenger.poi_type != "FVG":
-                break_at = first_breach(mt, lo, hi, t, challenger.zb if challenger.bullish else challenger.zt, above=not challenger.bullish)
-            body_death_at = body_close_dead_after(challenger, t)
-            cands = [c for c in (
-                (respect_at, "respect", None) if respect_at else None,
-                (break_at, "break", None) if break_at else None,
-                (body_death_at, "body_death", None) if body_death_at else None,
-            ) if c is not None]
+            # BOTH can hold several live challengers at once (e.g. an FVG and
+            # an OB both get impacted before either resolves). The gate only
+            # reverts to single-sided control once EVERY live challenger has
+            # died; if one dies while others are still alive, it just drops
+            # out of the pool and BOTH continues.
+            cands = []
+            for ch in challengers:
+                resp_kind_times = sl_times if ch.bullish else sh_times
+                r = next_swing(resp_kind_times, t)
+                if r:
+                    cands.append((r, "respect", ch))
+                # A live wick fully through a challenger's own box only means
+                # something for OB/RB (their box IS the protecting structure).
+                # For FVG, price wicking past the far edge is normal -- only a
+                # close beyond it counts (that's body_death, below).
+                if ch.poi_type != "FVG":
+                    b = first_breach(mt, lo, hi, t, ch.zb if ch.bullish else ch.zt, above=not ch.bullish)
+                    if b:
+                        cands.append((b, "break", ch))
+                bd = body_close_dead_after(ch, t)
+                if bd:
+                    cands.append((bd, "body_death", ch))
+            new_challenger = next_impact(not pre_both_bull, t)
+            if new_challenger:
+                cands.append((new_challenger.impact_time, "new_challenger", new_challenger))
             if not cands:
                 break
             cands.sort(key=lambda c: c[0])
-            at, kind_, _ = cands[0]
+            at, kind_, payload = cands[0]
+
             if kind_ == "respect":
-                new_control = "BUY_ONLY" if challenger.bullish else "SELL_ONLY"
-                log(at, "RESPECT_FULL_FLIP", f"Zone {challenger.label} respected -> {new_control}", challenger.label, new_control)
+                ch = payload
+                new_control = "BUY_ONLY" if ch.bullish else "SELL_ONLY"
+                log(at, "RESPECT_FULL_FLIP", f"Zone {ch.label} respected -> {new_control}", ch.label, new_control)
                 control = new_control
-                anchor_zone = challenger
-                challenger = None
+                anchor_zone = ch
+                challengers = []
                 pre_both_bull = None
                 t = at
                 continue
+
+            if kind_ == "new_challenger":
+                z = payload
+                log(at, "ADDITIONAL_CHALLENGER", f"Zone {z.label} also impacted -> stays BOTH", z.label, "BOTH")
+                challengers.append(z)
+                t = at
+                continue
+
+            ch = payload
             kind_label = "ANCHOR_BREAK_REVERT" if kind_ == "break" else "BODY_DEATH_REVERT"
             reason = "own level breached, no respect" if kind_ == "break" else "closes body inside/through its own box"
+            remaining = [c for c in challengers if c.label != ch.label]
             # A same-side neighbour zone (e.g. an OB and an RB stacked back to
             # back) can get impacted on the exact same real-time minute the
             # dying challenger's level breaks -- one continuous price move
-            # through both. That is not a fresh, separate encounter: stay in
-            # BOTH with the new zone as challenger instead of reverting to
-            # single-sided control and then re-opening BOTH a second time.
-            reinforcement = impact_at_exact(challenger.bullish, at)
-            if reinforcement is not None and reinforcement.label != challenger.label:
+            # through both. That is not a fresh, separate encounter: keep it
+            # as a live challenger instead of losing track of it.
+            reinforcement = impact_at_exact(ch.bullish, at)
+            if reinforcement is not None and not any(reinforcement.label == c.label for c in remaining) and reinforcement.label != ch.label:
                 log(at, "CHALLENGER_DIES_BUT_REINFORCED",
-                    f"Zone {challenger.label}'s {reason}, but zone {reinforcement.label} impacts same minute -> stays BOTH",
+                    f"Zone {ch.label}'s {reason}, but zone {reinforcement.label} impacts same minute -> stays BOTH",
                     reinforcement.label, "BOTH")
-                challenger = reinforcement
+                remaining.append(reinforcement)
+                challengers = remaining
+                t = at
+                continue
+            if remaining:
+                log(at, "CHALLENGER_DIES",
+                    f"Zone {ch.label}'s {reason}, but zone(s) {', '.join(c.label for c in remaining)} still alive -> stays BOTH",
+                    ch.label, "BOTH")
+                challengers = remaining
                 t = at
                 continue
             new_control = "BUY_ONLY" if pre_both_bull else "SELL_ONLY"
-            log(at, kind_label, f"Zone {challenger.label}'s {reason} -> {new_control}", challenger.label, new_control)
+            log(at, kind_label, f"Zone {ch.label}'s {reason} -> {new_control}", ch.label, new_control)
             control = new_control
             anchor_zone = None
-            challenger = None
+            challengers = []
             pre_both_bull = None
             t = at
             continue
