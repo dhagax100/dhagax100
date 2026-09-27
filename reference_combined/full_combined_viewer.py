@@ -354,16 +354,19 @@ def main() -> int:
                    res.get("exit_time"), res.get("result"))
             if key in seen:
                 idx = seen[key]
-                dz, dit, dlabel, dreason, dres = bso_results[idx]
+                dz, dit, dlabel, dreason, dres, dptype = bso_results[idx]
                 if label and label not in dlabel.split("+"):
-                    bso_results[idx] = (dz, dit, f"{dlabel}+{label}" if dlabel else label, dreason, dres)
+                    dlabel = f"{dlabel}+{label}" if dlabel else label
+                if ptype not in dptype.split("+"):
+                    dptype = f"{dptype}+{ptype}"
+                bso_results[idx] = (dz, dit, dlabel, dreason, dres, dptype)
                 continue
             seen[key] = len(bso_results)
-            bso_results.append((z, z.impact_time, label, invalidation_reason, res))
+            bso_results.append((z, z.impact_time, label, invalidation_reason, res, ptype))
 
     bso_extra_lines = [
         line.replace('"Weekly OB"', '"Weekly POI"').replace('"4H OB"', '"4H POI"')
-        for line in fv.build_bso_extra_lines(bso_results, display_tz)
+        for line in fv.build_bso_extra_lines([r[:5] for r in bso_results], display_tz)
     ]
 
     extra_lines = h4_extra_lines + bso_extra_lines
@@ -371,12 +374,28 @@ def main() -> int:
     wc.write_combined_pine(base, weekly_engine, args.pine_labels, args.pine_obs, args.pine_rbs, args.pine_fvgs,
                             args.pine_table, display_tz, out_name="full_combined_viewer.pine", extra_lines=extra_lines)
 
+    # A bare h4_ob_id (just the numeric id) from bso.ledger_row() is
+    # ambiguous here -- OB/RB/FVG each have their own separate id sequence
+    # starting at 1. Prefix it with this row's own POI type(s) (merged rows
+    # can span two types, e.g. "OB+RB") the same way every other combined
+    # label in this file already is.
+    ledger_fieldnames = ["poi_type"] + bso.LEDGER_FIELDS
+    with (base / "five_bso_combined_ledger.csv").open("w", newline="", encoding="utf-8") as f:
+        wr = csv.DictWriter(f, fieldnames=ledger_fieldnames)
+        wr.writeheader()
+        for z, it, parent_id, invalidation_reason, res, ptype in bso_results:
+            row = bso.ledger_row(z, it, parent_id, invalidation_reason, res, display_tz)
+            row["poi_type"] = ptype
+            row["h4_ob_id"] = f"{ptype}#{z.id}"
+            wr.writerow(row)
+
     print("Created:")
     print("  full_combined_viewer.pine   (Weekly combined layer + 4H combined layer/table + 5m BSO entry lines)")
+    print("  five_bso_combined_ledger.csv")
     print(f"Window: {window_start} -> {window_end}")
     print(f"{len(h4_bars)} 4H bars. Authorized: OB={len(drawn_ob)} RB={len(drawn_rb)} FVG={len(drawn_fvg)}. Shown in window: {len(focused)}.")
     bso_stages: Dict[str, int] = {}
-    for _z, _it, _parent_id, _reason, res in bso_results:
+    for _z, _it, _parent_id, _reason, res, _ptype in bso_results:
         bso_stages[res.get("stage")] = bso_stages.get(res.get("stage"), 0) + 1
     print(f"5m BSO on {len(bso_results)} drawn POIs: {bso_stages}")
     return 0
