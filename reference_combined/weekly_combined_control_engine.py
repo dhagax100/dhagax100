@@ -326,7 +326,14 @@ def run_control_walk(engine: "wc.WeeklyCombinedEngine", weeks: List["wob.Week"],
         if control == "BOTH":
             resp_kind_times = sl_times if challenger.bullish else sh_times
             respect_at = next_swing(resp_kind_times, t)
-            break_at = first_breach(mt, lo, hi, t, challenger.zb if challenger.bullish else challenger.zt, above=not challenger.bullish)
+            # A live wick fully through the challenger's own box only means
+            # something for OB/RB (their box IS the protecting structure).
+            # For FVG, price wicking past the far edge is normal -- only a
+            # close beyond it counts (that's body_death_at, below). Applying
+            # this wick check to FVG too would contradict that rule.
+            break_at = None
+            if challenger.poi_type != "FVG":
+                break_at = first_breach(mt, lo, hi, t, challenger.zb if challenger.bullish else challenger.zt, above=not challenger.bullish)
             body_death_at = body_close_dead_after(challenger, t)
             cands = [c for c in (
                 (respect_at, "respect", None) if respect_at else None,
