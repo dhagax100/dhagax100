@@ -26,10 +26,13 @@ verbatim -- it already has its own per-attempt "Inspect one 5m BSO only" /
 each row's own "Weekly" column is POI-type-prefixed (e.g. "FVG1" instead of
 a bare "1") so rows from different POI types never look identical.
 
-By default, restricts to gate 1 -- the first non-NONE control window after
-the unified control walk's leading NONE (per explicit user direction:
-"show me the 4h opportunities in gate 1 buying window"). --window-start/
---window-end override this the same way full_fvg_viewer.py's do.
+Covers the WHOLE unified control walk by default (every gate, not just
+gate 1) -- h4.permits() already restricts each H4 zone to windows where its
+own side (BUY/SELL) was actually authorized by the gate it falls in, so
+gates with the wrong direction or NONE/BOTH naturally draw nothing without
+needing an explicit window. --window-start/--window-end still narrow the
+range shown, the same way full_fvg_viewer.py's do (e.g. to reproduce the
+old gate-1-only view).
 """
 from __future__ import annotations
 
@@ -75,10 +78,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--window-start", default=None,
                     help="Only draw H4 opportunities/trades impacted on or after this date/time "
                          "(e.g. 2026-02-02 or '2026-02-02 16:03'), in --display-tz. Defaults to "
-                         "gate 1's own start (the first non-NONE control window).")
+                         "the start of the data (i.e. every gate).")
     p.add_argument("--window-end", default=None,
                     help="Only draw H4 opportunities/trades impacted before this date/time, in "
-                         "--display-tz. Defaults to gate 1's own end.")
+                         "--display-tz. Defaults to the end of the data.")
     return p.parse_args()
 
 
@@ -95,14 +98,6 @@ def events_to_gates(events: List["cc.ControlEvent"], data_start: datetime, data_
         end = events[i + 1].at_utc if i + 1 < len(events) else data_end
         gates.append((e.at_utc, end, e.control, e.sell_parent, e.buy_parent))
     return gates
-
-
-def gate1_window(gates: List[Tuple[datetime, datetime, str, str, str]]) -> Tuple[datetime, datetime]:
-    """The first non-NONE gate after the leading NONE."""
-    for start, end, control, _sp, _bp in gates:
-        if control != "NONE":
-            return start, end
-    raise SystemExit("No non-NONE gate found -- nothing to show for gate 1.")
 
 
 def parse_window_arg(s: str, display_tz: ZoneInfo) -> datetime:
@@ -191,9 +186,9 @@ def build_h4_combined_extra_lines(rows: List[Tuple[object, str, str]], h4_bars_b
         ptypes.append(ptype)
 
     lines: List[str] = [
-        "string focusH4Poi = input.string(\"ALL\", \"Focus 4H POI\", options=[\"ALL\", \"OB\", \"RB\", \"FVG\"], group=\"4H opportunities (gate 1)\")",
-        "bool inspectOneH4Poi = input.bool(false, \"Inspect one 4H POI only\", group=\"4H opportunities (gate 1)\")",
-        f"int h4PoiFromLast = input.int(1, \"4H POI from last\", minval=1, maxval={max_rank}, group=\"4H opportunities (gate 1)\", tooltip=\"1 = the latest 4H POI (of the focused type if one is picked, or of ANY type if Focus 4H POI is ALL), 2 = the one before it, and so on.\")",
+        "string focusH4Poi = input.string(\"ALL\", \"Focus 4H POI\", options=[\"ALL\", \"OB\", \"RB\", \"FVG\"], group=\"4H opportunities\")",
+        "bool inspectOneH4Poi = input.bool(false, \"Inspect one 4H POI only\", group=\"4H opportunities\")",
+        f"int h4PoiFromLast = input.int(1, \"4H POI from last\", minval=1, maxval={max_rank}, group=\"4H opportunities\", tooltip=\"1 = the latest 4H POI (of the focused type if one is picked, or of ANY type if Focus 4H POI is ALL), 2 = the one before it, and so on.\")",
         f"var table h4Ledger = table.new(position.bottom_right, 8, {n + 1}, border_width=1)",
         *pack_array("h4Left", "int", lefts), *pack_array("h4Top", "float", tops), *pack_array("h4Bottom", "float", bottoms),
         *pack_array("h4Bull", "bool", bulls), *pack_array("h4Label", "string", labels), *pack_array("h4Id", "string", ids),
@@ -270,9 +265,8 @@ def main() -> int:
 
     control_events = cc.run_control_walk(weekly_engine, weeks, minutes)
     gates = events_to_gates(control_events, minutes[0].t, minutes[-1].t)
-    g1_start, g1_end = gate1_window(gates)
 
-    window_start, window_end = g1_start, g1_end
+    window_start, window_end = minutes[0].t, minutes[-1].t
     if args.window_start:
         window_start = max(window_start, parse_window_arg(args.window_start, display_tz))
     if args.window_end:
@@ -379,8 +373,8 @@ def main() -> int:
 
     print("Created:")
     print("  full_combined_viewer.pine   (Weekly combined layer + 4H combined layer/table + 5m BSO entry lines)")
-    print(f"Gate 1 window: {window_start} -> {window_end}")
-    print(f"{len(h4_bars)} 4H bars. Authorized: OB={len(drawn_ob)} RB={len(drawn_rb)} FVG={len(drawn_fvg)}. Shown in gate 1 window: {len(focused)}.")
+    print(f"Window: {window_start} -> {window_end}")
+    print(f"{len(h4_bars)} 4H bars. Authorized: OB={len(drawn_ob)} RB={len(drawn_rb)} FVG={len(drawn_fvg)}. Shown in window: {len(focused)}.")
     bso_stages: Dict[str, int] = {}
     for _z, _it, _parent_id, _reason, res in bso_results:
         bso_stages[res.get("stage")] = bso_stages.get(res.get("stage"), 0) + 1
