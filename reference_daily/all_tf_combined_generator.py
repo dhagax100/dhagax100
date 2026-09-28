@@ -404,6 +404,9 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_end, display_tz,
     bar_starts5 = [b.start for b in e5.w]
     events5_sorted = sorted(e5.events, key=lambda e: (e.confirm, e.kind))
 
+    def riyadh(t):
+        return wob.display_iso(t, display_tz) if t else ""
+
     candidates = []
     for eng, tf_tag in ((h4_engine, "H4"), (h1_engine, "1H")):
         eng_bar_starts = [b.start for b in eng.w]
@@ -417,18 +420,23 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_end, display_tz,
                     continue
                 candidates.append((eng, eng_bar_starts, z, ptype, tf_tag))
 
-    trades = []
-    ledger_rows = []
+    trades_raw = []  # one dict per zone's own ENTERED attempt, pre-merge
+    ledger_rows = []  # non-entered (skip/no-trade) rows go straight in, already string-formatted
     for eng, eng_bar_starts, z, ptype, tf_tag in candidates:
         sell = not z.bullish
-        row_base = dict(tf=tf_tag, poi_type=ptype, poi_id=z.id, side="SELL" if sell else "BUY",
-                         zone_bottom=z.zb, zone_top=z.zt, protect_level=z.protect_level,
-                         impact_time=z.impact_time)
+        poi = f"{ptype}#{z.id}"
+        row_base = dict(tf=tf_tag, poi=poi, side="SELL" if sell else "BUY",
+                         zone_bottom=f"{z.zb:.5f}", zone_top=f"{z.zt:.5f}",
+                         protect_level=f"{z.protect_level:.5f}", impact_riyadh=riyadh(z.impact_time),
+                         invalidated_riyadh="", invalidated_reason="", premium_mid="",
+                         attempt="", resting_riyadh="", replacements="",
+                         entry_riyadh="", entry_price="", sl_price="", tp_price="", risk_price="",
+                         r_pips="", result="", exit_riyadh="", r_multiple="", sl_tp_conflict="")
 
         opp_kind = 1 if sell else 0  # opposing swing: a LOW for a sell reaction, a HIGH for a buy reaction
         opp_events = [e for e in eng.events if e.kind == opp_kind and eng.w[e.confirm].start <= z.impact_time]
         if not opp_events:
-            ledger_rows.append(dict(row_base, attempt=None, stage="NO_OPPOSING_SWING"))
+            ledger_rows.append(dict(row_base, stage="NO_OPPOSING_SWING"))
             continue
         opp = max(opp_events, key=lambda e: eng.w[e.confirm].start)
         opp_t = eng.w[opp.confirm].start
@@ -436,96 +444,116 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_end, display_tz,
 
         i0, i1 = bisect_left(mt, opp_t), bisect_left(mt, z.impact_time)
         if i1 < i0:
-            ledger_rows.append(dict(row_base, attempt=None, stage="BAD_TIME_RANGE"))
+            ledger_rows.append(dict(row_base, stage="BAD_TIME_RANGE"))
             continue
         if sell:
             reached = max(hi[i0:i1 + 1]) >= mid
         else:
             reached = min(lo[i0:i1 + 1]) <= mid
         if not reached:
-            ledger_rows.append(dict(row_base, attempt=None, stage="PREMIUM_NOT_REACHED", premium_mid=mid))
+            ledger_rows.append(dict(row_base, stage="PREMIUM_NOT_REACHED", premium_mid=f"{mid:.5f}"))
             continue
 
         invalidated_at, reason = structural_invalid_at(z, z.impact_time, eng.w, eng_bar_starts, minutes, mt)
         attempts = run_5m_chain(z, z.impact_time, bar_starts5, events5_sorted, minutes, mt,
                                  invalidated_at, window_end)
         for a in attempts:
-            ledger_rows.append(dict(row_base, attempt=a.get("attempt"), stage=a.get("stage"),
-                                     premium_mid=mid, invalidated_at=invalidated_at, invalidated_reason=reason,
-                                     resting_at=a.get("resting_at"), replacements=a.get("replacements"),
-                                     entry_time=a.get("entry_time"), entry_price=a.get("entry_price"),
-                                     sl_price=a.get("sl_price"), tp_price=a.get("tp_price"),
-                                     risk=a.get("risk"), result=a.get("result"), exit_time=a.get("exit_time")))
             if a.get("stage") != "ENTERED":
+                ledger_rows.append(dict(row_base, stage=a.get("stage"), premium_mid=f"{mid:.5f}",
+                                         invalidated_riyadh=riyadh(invalidated_at), invalidated_reason=reason or "",
+                                         attempt=a.get("attempt"), resting_riyadh=riyadh(a.get("resting_at")),
+                                         replacements=a.get("replacements")))
                 continue
-            r = a["risk"]
-            trades.append(dict(
-                side="SELL" if sell else "BUY", entry_time=a["entry_time"], entry_price=a["entry_price"],
-                sl=a["sl_price"], tp=a["tp_price"], r_pips=r * 10000,
-                impact_time=z.impact_time, poi_label=f"{ptype}#{z.id}",
+            trades_raw.append(dict(
+                tf=tf_tag, poi=poi, side="SELL" if sell else "BUY", zone_bottom=z.zb, zone_top=z.zt,
+                protect_level=z.protect_level, impact_time=z.impact_time,
+                invalidated_at=invalidated_at, invalidated_reason=reason, premium_mid=mid,
+                attempt=a.get("attempt"), resting_at=a.get("resting_at"), replacements=a.get("replacements"),
+                entry_time=a["entry_time"], entry_price=a["entry_price"], sl_price=a["sl_price"],
+                tp_price=a["tp_price"], risk=a["risk"], result=a["result"], exit_time=a.get("exit_time"),
             ))
 
-    # Dedup: identical entry (same price, same trigger minute) -> one trade
-    merged: dict[tuple, dict] = {}
-    for t in trades:
+    # Dedup: identical entry (same price, same trigger minute) -> ONE real
+    # trade, whatever POI(s) produced it. Chart and ledger are now built
+    # from this SAME grouping (previously the ledger kept one row per
+    # contributing POI even after the chart had already merged them into
+    # a single box -- the user caught this: two rows in the CSV for a
+    # trade the chart only ever drew once).
+    groups: dict[tuple, list[dict]] = {}
+    for t in trades_raw:
         key = (t["entry_time"], round(t["entry_price"], 5))
-        if key not in merged:
-            merged[key] = dict(t, poi_sources=[t["poi_label"]])
-        else:
-            merged[key]["poi_sources"].append(t["poi_label"])
-            merged[key]["impact_time"] = min(merged[key]["impact_time"], t["impact_time"])
-    return sorted(merged.values(), key=lambda t: t["entry_time"]), ledger_rows
+        groups.setdefault(key, []).append(t)
+
+    trades = []
+    for members in groups.values():
+        members.sort(key=lambda m: (m["tf"], m["poi"]))
+        first = members[0]
+        # entry/time are identical by construction (the dedup key); SL/TP
+        # are each POI's own computed value and CAN legitimately differ
+        # (different protect_level -> different SL-anchor pool) even when
+        # the entry itself coincides -- flagged, not silently dropped.
+        sl_tp_conflict = any(abs(m["sl_price"] - first["sl_price"]) > 1e-9
+                              or abs(m["tp_price"] - first["tp_price"]) > 1e-9 for m in members[1:])
+        trades.append(dict(
+            side=first["side"], entry_time=first["entry_time"], entry_price=first["entry_price"],
+            sl=first["sl_price"], tp=first["tp_price"], r_pips=first["risk"] * 10000,
+            impact_time=min(m["impact_time"] for m in members),
+            poi_sources=[m["poi"] for m in members],
+        ))
+        result = first["result"]
+        ledger_rows.append(dict(
+            tf="/".join(dict.fromkeys(m["tf"] for m in members)),
+            poi="+".join(m["poi"] for m in members), side=first["side"],
+            zone_bottom="/".join(f"{m['zone_bottom']:.5f}" for m in members),
+            zone_top="/".join(f"{m['zone_top']:.5f}" for m in members),
+            protect_level="/".join(f"{m['protect_level']:.5f}" for m in members),
+            impact_riyadh="/".join(riyadh(m["impact_time"]) for m in members),
+            invalidated_riyadh="/".join(riyadh(m["invalidated_at"]) for m in members),
+            invalidated_reason="/".join(m["invalidated_reason"] or "-" for m in members),
+            premium_mid="/".join(f"{m['premium_mid']:.5f}" for m in members),
+            attempt="/".join(str(m["attempt"]) for m in members),
+            stage="ENTERED",
+            resting_riyadh="/".join(riyadh(m["resting_at"]) for m in members),
+            replacements="/".join(str(m["replacements"]) for m in members),
+            entry_riyadh=riyadh(first["entry_time"]), entry_price=f"{first['entry_price']:.5f}",
+            sl_price=f"{first['sl_price']:.5f}", tp_price=f"{first['tp_price']:.5f}",
+            risk_price=f"{first['risk']:.5f}", r_pips=f"{first['risk'] * 10000:.1f}",
+            result=result or "", exit_riyadh=riyadh(first.get("exit_time")),
+            r_multiple="+3.00" if result == "TP" else ("-1.00" if result == "SL" else ""),
+            sl_tp_conflict="YES" if sl_tp_conflict else "",
+        ))
+
+    return sorted(trades, key=lambda t: t["entry_time"]), ledger_rows
 
 
 LEDGER_FIELDS = [
-    "tf", "poi_type", "poi_id", "side", "zone_bottom", "zone_top", "protect_level",
+    "tf", "poi", "side", "zone_bottom", "zone_top", "protect_level",
     "impact_riyadh", "invalidated_riyadh", "invalidated_reason", "premium_mid",
     "attempt", "stage", "resting_riyadh", "replacements",
     "entry_riyadh", "entry_price", "sl_price", "tp_price", "risk_price", "r_pips",
-    "result", "exit_riyadh", "r_multiple",
+    "result", "exit_riyadh", "r_multiple", "sl_tp_conflict",
 ]
 
 
-def write_5m_trades_ledger(base: Path, ledger_rows: list[dict], display_tz: ZoneInfo,
+def write_5m_trades_ledger(base: Path, ledger_rows: list[dict],
                             out_name: str = "5m_trades_ledger.csv") -> None:
-    """One row per attempt (entered or not) on every zone that reached
-    the premium/discount gate that day -- audit trail for "why did/didn't
-    this POI trade", same discipline as the old project's own
-    five_bso_ledger.csv. Written every run with --show-date, same fixed
-    name, overwritten in place."""
+    """One row per NON-entered attempt (skip reason, or a dead-end
+    attempt) on every zone that reached the premium/discount gate that
+    day, PLUS one row per real ENTERED trade -- already merged the same
+    way the chart's own dedup merges identical entries, so a trade drawn
+    once on the chart is one row here too, not one per contributing POI.
+    Every field arrives from compute_5m_trades() already formatted
+    (Riyadh timestamps, 5-decimal prices) -- this is a plain dump, no
+    formatting logic here to drift out of sync with the chart's own.
+    Written every run with --show-date, same fixed name, overwritten in
+    place."""
     import csv
-
-    def riyadh(t):
-        return wob.display_iso(t, display_tz) if t else ""
 
     with (base / out_name).open("w", newline="", encoding="utf-8") as f:
         wr = csv.DictWriter(f, fieldnames=LEDGER_FIELDS, extrasaction="ignore")
         wr.writeheader()
         for row in ledger_rows:
-            result = row.get("result")
-            r_multiple = "+3.00" if result == "TP" else ("-1.00" if result == "SL" else "")
-            wr.writerow(dict(
-                tf=row["tf"], poi_type=row["poi_type"], poi_id=row["poi_id"], side=row["side"],
-                zone_bottom=f"{row['zone_bottom']:.5f}", zone_top=f"{row['zone_top']:.5f}",
-                protect_level=f"{row['protect_level']:.5f}",
-                impact_riyadh=riyadh(row.get("impact_time")),
-                invalidated_riyadh=riyadh(row.get("invalidated_at")),
-                invalidated_reason=row.get("invalidated_reason") or "",
-                premium_mid=f"{row['premium_mid']:.5f}" if row.get("premium_mid") is not None else "",
-                attempt=row.get("attempt") if row.get("attempt") is not None else "",
-                stage=row["stage"],
-                resting_riyadh=riyadh(row.get("resting_at")),
-                replacements=row.get("replacements") if row.get("replacements") is not None else "",
-                entry_riyadh=riyadh(row.get("entry_time")),
-                entry_price=f"{row['entry_price']:.5f}" if row.get("entry_price") is not None else "",
-                sl_price=f"{row['sl_price']:.5f}" if row.get("sl_price") is not None else "",
-                tp_price=f"{row['tp_price']:.5f}" if row.get("tp_price") is not None else "",
-                risk_price=f"{row['risk']:.5f}" if row.get("risk") is not None else "",
-                r_pips=f"{row['risk'] * 10000:.1f}" if row.get("risk") is not None else "",
-                result=result or "",
-                exit_riyadh=riyadh(row.get("exit_time")),
-                r_multiple=r_multiple,
-            ))
+            wr.writerow(row)
 
 
 def exclude_old_intraday_zones(engine) -> None:
@@ -891,7 +919,7 @@ def main() -> int:
 
         if args.show_date and e5 is not None:
             ledger_name = "5m_trades_ledger.csv"
-            write_5m_trades_ledger(base, ledger_rows, display_tz, ledger_name)
+            write_5m_trades_ledger(base, ledger_rows, ledger_name)
             print(f"  {ledger_name}   ({len(ledger_rows)} rows: every 5m attempt on every "
                   f"qualifying POI that day, entered or not, with its stage/reason)")
 
