@@ -1,0 +1,143 @@
+DHAGAX DAILIES — LEARNING LOG
+==============================
+One file. Same name every time. Whatever you save over this replaces it
+in the folder — nothing gets renamed or duplicated. New entries go at
+the TOP of "Session log" below, dated, so the newest is always first.
+
+This file is the plain-English knowledge base: rules confirmed, corrections
+made, and real case studies. The code itself (with full technical detail
+and code comments) is reference_daily/all_tf_combined_generator.py — this
+file is the human-readable version of what that code does and why.
+
+
+CURRENT RULE SET (as of 2026-09-28)
+------------------------------------
+
+BIAS
+- Weekly/Daily structure sets directional control (BUY/SELL/NONE).
+- 4H/1H POIs are only tradeable in the direction Weekly/Daily permits.
+
+SESSIONS / TRADING WINDOW
+- Real trading window: 10:00-20:00 Riyadh in summer, 11:00-21:00 in
+  winter (London open through New York close). DST-detected from real
+  New York transition dates, not a hardcoded month range.
+- Asia is liquidity-grab only — never an entry session.
+- Nothing before the window opens or after it closes counts: no setup,
+  no entry, no display.
+
+POI ELIGIBILITY
+- A POI only counts if some real lifecycle event (trigger, eligible,
+  impact, or breach) happens inside the window that day.
+- "Old" POIs (OOB/ORB/OFVG) never show or trade on H4/1H, period —
+  even though they're a real tradeable category at Daily/Weekly.
+- PREMIUM/DISCOUNT gate: the 50/50 split between the zone's
+  protect_level and the most recent opposing-kind swing confirmed
+  before impact. Price must have reached that midpoint before impact
+  counts as a real reaction, not a random touch.
+
+ENTRY (the real, ported rule — not the earlier simplified version)
+- After impact + premium/discount confirmed: find the first confirmed
+  5m swing of the SL-anchor kind ("resting" swing). That starts the
+  search.
+- The entry level ("candidate") is the most recent opposite-kind swing
+  at/before the resting swing. It can be REPLACED by a newer swing that
+  confirms before price actually breaks it — the stop order chases the
+  newest swing, it's a race, not a fixed level.
+- Entry fires the moment price breaks the (possibly-updated) candidate
+  level.
+
+STOP LOSS
+- SL = the EXTREME (not just the most recent) of every qualifying
+  SL-anchor swing between impact and the entry minute.
+
+TAKE PROFIT
+- Fixed 3R. Always.
+
+POI VIOLATION / INVALIDATION (the gap that got fixed 2026-09-28)
+- A POI dies, in real time, the instant EITHER of these happens —
+  checked on every 1-minute bar, before the entry-break test:
+    (a) a completed 4H/1H candle closes its BODY at or beyond the near
+        edge of the zone (a bare wick doesn't count, but a close INSIDE
+        the zone counts, not just fully through it).
+    (b) the zone's own protect_level (its protecting swing, snapshotted
+        at creation) gets exceeded, wick or not, at the exact minute it
+        happens.
+- Whichever happens first kills the setup. A resting swing or entry
+  candidate that would only form AFTER that moment never gets a trade —
+  it's a dead setup, not a missed one.
+
+RE-ENTRY (second entry rule)
+- After a plain stop-loss exit (not TP, not still open, not a breach),
+  re-arm and search again from the exact SL exit time — as long as the
+  POI hasn't been structurally invalidated by then.
+- The chain stops the moment an attempt resolves to anything other than
+  a plain SL: a win, an open trade, or the POI dying first.
+- A re-entry attempt (2nd+) that never actually became a trade is not
+  reported anywhere — no row, no box, nothing. It's still used
+  internally to know the chain is over, but it's not "a missed
+  opportunity" worth showing.
+- Open question, not yet decided for Dailies: the old OB/RB/FVG project
+  found "2nd entry of a 3+-attempt POI" had a 0% win rate on that
+  dataset (-12R across 12 trades) — a real reason to consider capping
+  attempts. Not applied here yet; flagged for a decision.
+
+DEDUP
+- Two POIs producing the identical entry (same price, same trigger
+  minute) collapse into ONE trade. One real move, not one trade per POI
+  that happened to touch it.
+
+
+SESSION LOG (newest first)
+----------------------------
+
+2026-09-28 — First full case study: 12 January 2026, real data
+- Bias: SELL. Window: 11:00-21:00 Riyadh (winter).
+- 7 POIs alive in the window. Only 2 (OB#44 + RB#67, same
+  protect_level, impacted a minute apart) produced a trade — deduped
+  into one: SELL entry 14:32 @ 1.16847, SL 1.16892, TP 1.16712.
+- REAL OUTCOME: stopped out at 16:08. A loss, -1R (4.5 pips risked).
+  Confirmed by simulating forward through the actual M1 data to the
+  real exit, not assumed.
+- The POI was structurally invalidated (protect_level broken) at the
+  SAME minute the SL was hit — 16:08. Because of that, the re-entry
+  chain correctly refused to re-arm: the setup was already dead the
+  instant it lost. This is the invalidation gate doing real work on
+  real data, not just theory.
+- Why the other 5 POIs never traded:
+  - RB#68 (SELL, impacted 16:07) — invalidated at 16:08, one minute
+    later. Never had time to form a resting swing.
+  - RB#69 (BUY, impacted 17:25) — invalidated at 17:29, same pattern.
+  - FVG#9 and FVG#31 (both BUY) — never reached the premium/discount
+    midpoint before their own impact. Not a bias-filter exclusion —
+    these failed on their own structural terms.
+  - OB#45 (BUY) — never impacted at all.
+- Lesson: most POIs in a window die fast. Impact alone means nothing —
+  the premium check and the invalidation clock start racing
+  immediately, and most setups lose that race before a trade is even
+  possible. A POI whose protect_level sits very close to its own likely
+  entry/SL should be treated as fragile going in, not as strong
+  confirmation just because it impacted.
+
+2026-09-28 — Ported the real entry/SL/re-entry/invalidation rules
+- Learned (from the previously-built and dataset-validated
+  five_bso_engine.py, SPEC.md SS17/20-27) that the Dailies 5m trade
+  logic had been a simplified approximation: fixed first-swing entry,
+  last-swing SL, and — critically — no check at all for whether the POI
+  had been violated (body close or protect_level break) between impact
+  and entry. The user asked directly whether this was checked; it
+  wasn't. Ported the real rules (see rule set above) and verified them
+  end-to-end against the real EURUSD M1 dataset for 12 Jan 2026.
+
+2026-09-28 — Fixed two real bugs found on the live 5m chart
+- The 5m chart crashed entirely: both trade box.new() calls were
+  missing xloc=xloc.bar_time, so Pine read the epoch-millisecond
+  x-coordinates as an absurd future bar index.
+- An unrequested BUY trade appeared on a day scoped to SELL only:
+  compute_5m_trades() computed both directions unconditionally, ignoring
+  --default-side. Added a side parameter so it matches the rest of the
+  indicator.
+
+2026-09-28 — Daily/4H/1H trading rule set taught and walked against
+  12 Jan 2026 real data for the first time (bias framework,
+  target/invalidation/blockage framework, session/kill-zone timing,
+  liquidity-sweep carry-over rule, entry/SL/TP as given by the user).
