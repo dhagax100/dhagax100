@@ -33,6 +33,16 @@ gates with the wrong direction or NONE/BOTH naturally draw nothing without
 needing an explicit window. --window-start/--window-end still narrow the
 range shown, the same way full_fvg_viewer.py's do (e.g. to reproduce the
 old gate-1-only view).
+
+Self-sufficient, matching full_viewer.py/full_rb_viewer.py/full_fvg_viewer.py:
+one command produces the combined Pine chart AND the weekly-level
+ledgers/swings/report AND the 5m trade ledger -- no need to run
+weekly_combined_generator.py separately first.
+
+Also computes ICT premium/discount per POI (premium_discount_of()): the
+leg between the zone's own protect_level and the most recent opposing 4H
+swing before impact, split 50/50, checked against real M1 price action --
+written to five_bso_combined_ledger.csv as pd_* columns.
 """
 from __future__ import annotations
 
