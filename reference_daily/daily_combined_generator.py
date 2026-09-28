@@ -190,7 +190,9 @@ def main() -> int:
             # structure (swings/MSS) confirmed by then, and every POI that
             # existed by then (already-dead ones with their real stop time,
             # still-open ones extending) -- not a cosmetic chart filter, an
-            # actual re-run on truncated input.
+            # actual re-run on truncated input. Output filename never
+            # changes -- always daily_combined_viewer.pine, overwritten in
+            # place, same convention as every other file in this project.
             y, m, d = (int(x) for x in args.as_of.split("-"))
             cutoff_local = datetime(y, m, d, 23, 59, 59, tzinfo=display_tz) + timedelta(seconds=1)
             cutoff_utc = cutoff_local.astimezone(UTC)
@@ -198,7 +200,6 @@ def main() -> int:
             if not minutes:
                 print(f"No data at or before {args.as_of}", file=sys.stderr)
                 return 2
-            out_name = f"daily_combined_viewer_{args.as_of}.pine"
 
         days = aggregate_days(minutes, close_tz, args.day_close_hour)
 
@@ -230,15 +231,13 @@ def main() -> int:
                 f'string sideFilter = input.string("{args.default_side}", "Side"',
             )
         pine_path.write_text(text, encoding="utf-8")
-        swings_name = "daily_combined_swings.csv" if not args.as_of else f"daily_combined_swings_{args.as_of}.csv"
-        report_name = "daily_combined_report.txt" if not args.as_of else f"daily_combined_report_{args.as_of}.txt"
-        write_swings_csv(base, engine, display_tz, swings_name)
-        write_report(base, minutes, days, engine, display_tz, report_name)
+        write_swings_csv(base, engine, display_tz)
+        write_report(base, minutes, days, engine, display_tz)
 
         print("Created:")
         print(f"  {out_name}   <-- open this in TradingView on the Daily chart")
-        print(f"  {swings_name}")
-        print(f"  {report_name}")
+        print("  daily_combined_swings.csv")
+        print("  daily_combined_report.txt")
         print(f"Processed {len(minutes):,} minutes into {len(days)} daily bars.")
         print(f"OB zones={len(engine.ob_zones)}  RB zones={len(engine.rb_zones)}  FVG zones={len(engine.fvg_zones)}")
         if warnings:
