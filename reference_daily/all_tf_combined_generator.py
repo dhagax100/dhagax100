@@ -31,7 +31,7 @@ same fixed names every run, overwritten in place:
 
 Run (flat folder, same convention as every other generator here):
 
-    python3 all_tf_combined_generator.py ..\EURUSD_m1_BidAndAsk.csv --as-of 2026-01-12 --default-side SELL
+    python all_tf_combined_generator.py EURUSD_m1_BidAndAsk.csv --as-of 2026-01-12 --default-side SELL
 """
 from __future__ import annotations
 

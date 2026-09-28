@@ -29,7 +29,7 @@ Run (flat folder: this file + weekly_ob_generator.py + weekly_rb_generator.py
 + weekly_fvg_generator.py + weekly_combined_generator.py copied together,
 raw CSV one level up, same convention as every other generator here):
 
-    python3 daily_combined_generator.py ..\EURUSD_m1_BidAndAsk.csv
+    python daily_combined_generator.py EURUSD_m1_BidAndAsk.csv
 """
 from __future__ import annotations
 
