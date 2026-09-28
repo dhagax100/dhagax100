@@ -39,7 +39,7 @@ import argparse
 import re
 import sys
 import tempfile
-from bisect import bisect_left
+from bisect import bisect_left, bisect_right
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -168,28 +168,209 @@ def filter_to_date(engine, date_str: str, display_tz: ZoneInfo) -> None:
     engine.fvg_zones = [z for z in engine.fvg_zones if happened_in_window(engine.w[z.left].start, z)]
 
 
-def compute_5m_trades(h4_engine, h1_engine, minutes, window_end, display_tz, side: str = "ALL") -> list[dict]:
-    """The real entry rule, as given (2026-09-28, this session):
-      1. A 4H or 1H POI impacts, in premium (sell) or discount (buy) --
-         premium/discount = the 50/50 split between the zone's own
-         protect_level (the protecting swing) and the most recent
-         opposing-kind swing confirmed before impact (the swing price
-         came from, on its way up/down to react on the POI).
-      2. Entry = the first confirmed 5m swing low (sell) / high (buy)
-         after that impact -- a stop order at that level.
-      3. SL = the last confirmed 5m swing high (sell) / low (buy)
-         between the impact and the entry trigger.
-      4. TP = 3R.
-    Two POIs producing the identical 5m entry (same price, same trigger
-    minute) collapse into ONE trade -- same single-opportunity rule
-    already used elsewhere in this project (one real move, not one
-    trade per POI that happened to touch it).
+def structural_invalid_at(z, it: "datetime", bars: list, bar_starts: list,
+                           minutes, mt: list) -> tuple:
+    """Ported from five_bso_engine.py's structural_invalid_at() (SPEC.md
+    SS17/SS20-24) -- the POI-violation-before-entry check the user asked
+    about directly (2026-09-28) and that compute_5m_trades() previously
+    had no answer for. Whichever happens first, from the zone's own
+    impact time `it`:
+      (a) 'h4_close' -- a fully completed 4H/1H candle closes its BODY
+          at or beyond the NEAR boundary (zt for a bearish zone approached
+          from above, zb for a bullish zone approached from below). A
+          bare wick, or a close that hasn't reached the zone at all,
+          doesn't count -- only a body close inside or through it.
+      (b) 'swing_break' -- the zone's own snapshotted `protect_level`
+          (the protecting swing price at creation) gets exceeded, at the
+          exact 1m moment it happens. Unlike the original OB-only engine
+          (which had to re-derive the protecting swing separately, since
+          OB zones there had no protect_level field), every zone type
+          here already carries protect_level uniformly, so it's used
+          directly -- this also matches the later FVG-session correction
+          that anchor-break must check protect_level, not the box edge.
+    Returns (time, reason); (None, None) if never invalidated in the
+    available data. A candidate whose resting swing or entry trigger
+    lands at/after this time is dead: setup only, no entry."""
+    bull = z.bullish
+    near_boundary = z.zt if bull else z.zb
 
-    `side`: "SELL"/"BUY" restricts to that direction only -- matches
-    --default-side, since the whole rest of the indicator (boxes, table)
-    already respects that filter and computing both directions
-    regardless was a real bug (surfaced an unrequested BUY setup on a
-    day the user explicitly scoped to SELL only). "ALL" computes both."""
+    h4_close_invalid_at = None
+    start_idx = max(0, bisect_right(bar_starts, it) - 1)
+    for hb in bars[start_idx:]:
+        breach = (hb.c <= near_boundary) if bull else (hb.c >= near_boundary)
+        if breach:
+            h4_close_invalid_at = hb.end
+            break
+
+    swing_break_at = None
+    idx = bisect_right(mt, it)
+    for m in minutes[idx:]:
+        if (m.l < z.protect_level) if bull else (m.h > z.protect_level):
+            swing_break_at = m.t
+            break
+
+    if h4_close_invalid_at is not None and (swing_break_at is None or h4_close_invalid_at <= swing_break_at):
+        return h4_close_invalid_at, "h4_close"
+    if swing_break_at is not None:
+        return swing_break_at, "swing_break"
+    return None, None
+
+
+def run_5m_bso(z, it, bar_starts5: list, events5_sorted: list, minutes, mt: list,
+               invalidated_at, window_end) -> dict | None:
+    """Ported from five_bso_engine.py's run_bso() -- a single attempt.
+    Genuinely different from the previous "first swing after impact is
+    the entry" rule: this races an entry CANDIDATE against replacement
+    and against invalidation, not a fixed level.
+      1. `resting` = the first confirmed 5m swing of the SL-anchor kind
+         (a LOW for a buy setup, a HIGH for a sell setup) at/after `it`.
+         Nothing before this swing forms can be entered.
+      2. `candidate` = the most recent entry-trigger-kind swing (opposite
+         of resting's kind) confirmed at/before resting's own swing --
+         the level a stop order actually rests at.
+      3. Scanning 1m bars forward from resting's confirmation: any LATER
+         entry-kind swing that confirms before entry fires REPLACES the
+         candidate (the stop order chases the newest swing, same as the
+         real engine did). Invalidation is checked on every bar BEFORE
+         the break test, and the trading window close is a hard ceiling.
+      4. On break, SL = the extreme (not just the last) of every
+         SL-anchor-kind swing from `it` through the entry minute.
+         TP = entry +/- 3R.
+    Returns None if no trade resulted (no resting swing, no candidate,
+    invalidated before entry, or the window closed first)."""
+    bull = z.bullish
+    need_rest_kind = 1 if bull else 0   # buy needs a resting LOW (SL anchor); sell needs a resting HIGH
+    need_cand_kind = 0 if bull else 1   # entry-trigger kind is the opposite: HIGH for buy, LOW for sell
+
+    start5 = bisect_right(bar_starts5, it) - 1
+    if start5 < 0:
+        return None
+
+    resting = None
+    for ev in events5_sorted:
+        if ev.kind != need_rest_kind or ev.swing < start5:
+            continue
+        resting = ev
+        break
+    if resting is None or resting.at is None:
+        return None
+
+    candidates_before = [ev for ev in events5_sorted if ev.kind == need_cand_kind and ev.swing <= resting.swing]
+    if not candidates_before:
+        return None
+    current = candidates_before[-1]
+
+    later_candidates = sorted(
+        [ev for ev in events5_sorted if ev.kind == need_cand_kind and ev.at is not None and ev.at > resting.at],
+        key=lambda e: e.at)
+
+    idx = bisect_left(mt, resting.at)
+    entry_m = None
+    cand_ptr = 0
+    for i in range(idx, len(minutes)):
+        m = minutes[i]
+        if m.t >= window_end:
+            break  # never triggers before the trading window closes -- setup only
+        if invalidated_at is not None and m.t >= invalidated_at:
+            return None  # POI violated (body close or protect_level break) before the trigger
+        while cand_ptr < len(later_candidates) and later_candidates[cand_ptr].at <= m.t:
+            current = later_candidates[cand_ptr]
+            cand_ptr += 1
+        broke = (m.h > current.price) if bull else (m.l < current.price)
+        if broke:
+            entry_m = m
+            break
+    if entry_m is None:
+        return None
+
+    entry_price = current.price
+    entry_time = entry_m.t
+
+    pool = [ev for ev in events5_sorted if ev.kind == need_rest_kind and ev.swing >= start5
+            and ev.at is not None and ev.at <= entry_time]
+    if not pool:
+        return None
+    sl_price = min(p.price for p in pool) if bull else max(p.price for p in pool)
+    risk = abs(entry_price - sl_price)
+    if risk <= 0:
+        return None
+    tp_price = entry_price + 3 * risk if bull else entry_price - 3 * risk
+
+    result, exit_time = None, None
+    for i in range(bisect_left(mt, entry_time) + 1, len(minutes)):
+        m = minutes[i]
+        hit_sl = (m.l <= sl_price) if bull else (m.h >= sl_price)
+        hit_tp = (m.h >= tp_price) if bull else (m.l <= tp_price)
+        if hit_sl and hit_tp:
+            result, exit_time = "AMBIGUOUS", m.t
+            break
+        if hit_sl:
+            result, exit_time = "SL", m.t
+            break
+        if hit_tp:
+            result, exit_time = "TP", m.t
+            break
+
+    return dict(entry_time=entry_time, entry_price=entry_price, sl_price=sl_price,
+                tp_price=tp_price, risk=risk, result=result or "OPEN", exit_time=exit_time)
+
+
+def run_5m_chain(z, impact_time, bar_starts5: list, events5_sorted: list, minutes, mt: list,
+                  invalidated_at, window_end) -> list:
+    """Ported from five_bso_engine.py's run_bso_chain() (SS27, "made
+    universal per the user's explicit instruction"). After a plain SL,
+    re-arm and search again from the SL's own exit time, as long as the
+    POI's structural premise (`invalidated_at`) hasn't been crossed yet.
+    Stops on the first attempt that resolves to anything other than a
+    plain SL (TP/OPEN/AMBIGUOUS, or any no-entry outcome). Per the
+    original reporting rule: a re-entry (attempt 2+) that never actually
+    became a trade is not reported at all -- it only still ends the
+    search there. The first attempt is always reported, trade or not,
+    since that's the POI's own result, not a re-entry."""
+    attempts = []
+    search_from = impact_time
+    attempt_no = 1
+    while True:
+        res = run_5m_bso(z, search_from, bar_starts5, events5_sorted, minutes, mt, invalidated_at, window_end)
+        entered = res is not None
+        if attempt_no == 1 or entered:
+            attempts.append(res)
+        if not entered or res.get("result") != "SL":
+            break
+        exit_time = res.get("exit_time")
+        if exit_time is None:
+            break
+        if invalidated_at is not None and exit_time >= invalidated_at:
+            break
+        search_from = exit_time
+        attempt_no += 1
+    return [a for a in attempts if a is not None]
+
+
+def compute_5m_trades(h4_engine, h1_engine, minutes, window_end, display_tz, side: str = "ALL") -> list[dict]:
+    """The real entry rule (2026-09-28 this session, ported 2026-09-28
+    from the previously-built and dataset-validated `five_bso_engine.py`
+    -- SPEC.md SS17/SS20-27 -- after the user asked whether POI
+    violation before entry was checked, and it wasn't):
+      1. A 4H or 1H POI impacts, in premium (sell) or discount (buy) --
+         unchanged: the 50/50 split between the zone's own protect_level
+         and the most recent opposing-kind swing confirmed before impact.
+      2. `structural_invalid_at()` computes, once per zone, the first
+         moment its structural premise dies (a body close through the
+         near edge, or its protect_level swing getting exceeded). This
+         is the real POI-violation-before-entry gate.
+      3. `run_5m_chain()` races an entry candidate (see run_5m_bso) that
+         can be replaced by a newer swing before it triggers, checked
+         against invalidation on every 1m bar, and re-arms for a further
+         attempt after a plain SL as long as the POI is still alive --
+         the real re-entry rule (SS27), not assumed.
+      4. SL = the extreme of every qualifying SL-anchor swing in the
+         window, not just the most recent one. TP = 3R, unchanged.
+    Two POIs producing the identical 5m entry (same price, same trigger
+    minute) collapse into ONE trade -- unchanged single-opportunity rule.
+
+    `side`: "SELL"/"BUY" restricts to that direction only, matching
+    --default-side; "ALL" computes both."""
     mt = [m.t for m in minutes]
     hi = [m.h for m in minutes]
     lo = [m.l for m in minutes]
@@ -197,12 +378,13 @@ def compute_5m_trades(h4_engine, h1_engine, minutes, window_end, display_tz, sid
     bars5 = dc.aggregate_minutes(minutes, 5)
     e5 = wc.WeeklyCombinedEngine(minutes, bars5)
     e5.run()
+    bar_starts5 = [b.start for b in e5.w]
+    events5_sorted = sorted(e5.events, key=lambda e: (e.confirm, e.kind))
 
     candidates = []
     for eng in (h4_engine, h1_engine):
-        for zones, left_of in ((eng.ob_zones, lambda z: eng.w[z.candle].start),
-                                (eng.rb_zones, lambda z: eng.w[z.candle].start),
-                                (eng.fvg_zones, lambda z: eng.w[z.left].start)):
+        eng_bar_starts = [b.start for b in eng.w]
+        for zones, ptype in ((eng.ob_zones, "OB"), (eng.rb_zones, "RB"), (eng.fvg_zones, "FVG")):
             for z in zones:
                 if z.impact_time is None or z.protect_level is None:
                     continue
@@ -210,10 +392,10 @@ def compute_5m_trades(h4_engine, h1_engine, minutes, window_end, display_tz, sid
                     continue
                 if side == "BUY" and not z.bullish:
                     continue
-                candidates.append((eng, z))
+                candidates.append((eng, eng_bar_starts, z, ptype))
 
     trades = []
-    for eng, z in candidates:
+    for eng, eng_bar_starts, z, ptype in candidates:
         sell = not z.bullish
         opp_kind = 1 if sell else 0  # opposing swing: a LOW for a sell reaction, a HIGH for a buy reaction
         opp_events = [e for e in eng.events if e.kind == opp_kind and eng.w[e.confirm].start <= z.impact_time]
@@ -233,38 +415,18 @@ def compute_5m_trades(h4_engine, h1_engine, minutes, window_end, display_tz, sid
         if not reached:
             continue
 
-        entry_kind = 1 if sell else 0  # entry swing: a LOW for a sell stop, a HIGH for a buy stop
-        after = [e for e in e5.events if e.kind == entry_kind and e5.w[e.confirm].start > z.impact_time]
-        if not after:
-            continue
-        entry_swing = min(after, key=lambda e: e5.w[e.confirm].start)
-        entry_price = entry_swing.price
-        confirm_t = e5.w[entry_swing.confirm].start
-
-        j0, j1 = bisect_left(mt, confirm_t), bisect_left(mt, window_end)
-        entry_t = None
-        for k in range(j0, j1):
-            if (lo[k] < entry_price) if sell else (hi[k] > entry_price):
-                entry_t = mt[k]
-                break
-        if entry_t is None:
-            continue  # setup, never triggered before the window closed
-
-        sl_kind = 0 if sell else 1  # SL swing: the last HIGH before a sell entry, last LOW before a buy entry
-        sl_events = [e for e in e5.events if e.kind == sl_kind and z.impact_time < e5.w[e.confirm].start <= entry_t]
-        if not sl_events:
-            continue
-        sl_swing = max(sl_events, key=lambda e: e5.w[e.confirm].start)
-        sl_price = sl_swing.price
-        r = (sl_price - entry_price) if sell else (entry_price - sl_price)
-        tp_price = entry_price - 3 * r if sell else entry_price + 3 * r
-
-        ptype = "OB" if z in eng.ob_zones else ("RB" if z in eng.rb_zones else "FVG")
-        trades.append(dict(
-            side="SELL" if sell else "BUY", entry_time=entry_t, entry_price=entry_price,
-            sl=sl_price, tp=tp_price, r_pips=abs(r) * 10000,
-            impact_time=z.impact_time, poi_label=f"{ptype}#{z.id}",
-        ))
+        invalidated_at, _reason = structural_invalid_at(z, z.impact_time, eng.w, eng_bar_starts, minutes, mt)
+        attempts = run_5m_chain(z, z.impact_time, bar_starts5, events5_sorted, minutes, mt,
+                                 invalidated_at, window_end)
+        for a in attempts:
+            if a is None or a.get("entry_time") is None:
+                continue  # setup only (no entry, or POI violated first) -- nothing to draw
+            r = a["risk"]
+            trades.append(dict(
+                side="SELL" if sell else "BUY", entry_time=a["entry_time"], entry_price=a["entry_price"],
+                sl=a["sl_price"], tp=a["tp_price"], r_pips=r * 10000,
+                impact_time=z.impact_time, poi_label=f"{ptype}#{z.id}",
+            ))
 
     # Dedup: identical entry (same price, same trigger minute) -> one trade
     merged: dict[tuple, dict] = {}
