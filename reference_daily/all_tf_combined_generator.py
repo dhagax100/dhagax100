@@ -39,6 +39,7 @@ import argparse
 import re
 import sys
 import tempfile
+from bisect import bisect_left
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -167,6 +168,106 @@ def filter_to_date(engine, date_str: str, display_tz: ZoneInfo) -> None:
     engine.fvg_zones = [z for z in engine.fvg_zones if happened_in_window(engine.w[z.left].start, z)]
 
 
+def compute_5m_trades(h4_engine, h1_engine, minutes, window_end, display_tz) -> list[dict]:
+    """The real entry rule, as given (2026-09-28, this session):
+      1. A 4H or 1H POI impacts, in premium (sell) or discount (buy) --
+         premium/discount = the 50/50 split between the zone's own
+         protect_level (the protecting swing) and the most recent
+         opposing-kind swing confirmed before impact (the swing price
+         came from, on its way up/down to react on the POI).
+      2. Entry = the first confirmed 5m swing low (sell) / high (buy)
+         after that impact -- a stop order at that level.
+      3. SL = the last confirmed 5m swing high (sell) / low (buy)
+         between the impact and the entry trigger.
+      4. TP = 3R.
+    Two POIs producing the identical 5m entry (same price, same trigger
+    minute) collapse into ONE trade -- same single-opportunity rule
+    already used elsewhere in this project (one real move, not one
+    trade per POI that happened to touch it)."""
+    mt = [m.t for m in minutes]
+    hi = [m.h for m in minutes]
+    lo = [m.l for m in minutes]
+
+    bars5 = dc.aggregate_minutes(minutes, 5)
+    e5 = wc.WeeklyCombinedEngine(minutes, bars5)
+    e5.run()
+
+    candidates = []
+    for eng in (h4_engine, h1_engine):
+        for zones, left_of in ((eng.ob_zones, lambda z: eng.w[z.candle].start),
+                                (eng.rb_zones, lambda z: eng.w[z.candle].start),
+                                (eng.fvg_zones, lambda z: eng.w[z.left].start)):
+            for z in zones:
+                if z.impact_time is None or z.protect_level is None:
+                    continue
+                candidates.append((eng, z))
+
+    trades = []
+    for eng, z in candidates:
+        sell = not z.bullish
+        opp_kind = 1 if sell else 0  # opposing swing: a LOW for a sell reaction, a HIGH for a buy reaction
+        opp_events = [e for e in eng.events if e.kind == opp_kind and eng.w[e.confirm].start <= z.impact_time]
+        if not opp_events:
+            continue
+        opp = max(opp_events, key=lambda e: eng.w[e.confirm].start)
+        opp_t = eng.w[opp.confirm].start
+        mid = (z.protect_level + opp.price) / 2
+
+        i0, i1 = bisect_left(mt, opp_t), bisect_left(mt, z.impact_time)
+        if i1 < i0:
+            continue
+        if sell:
+            reached = max(hi[i0:i1 + 1]) >= mid
+        else:
+            reached = min(lo[i0:i1 + 1]) <= mid
+        if not reached:
+            continue
+
+        entry_kind = 1 if sell else 0  # entry swing: a LOW for a sell stop, a HIGH for a buy stop
+        after = [e for e in e5.events if e.kind == entry_kind and e5.w[e.confirm].start > z.impact_time]
+        if not after:
+            continue
+        entry_swing = min(after, key=lambda e: e5.w[e.confirm].start)
+        entry_price = entry_swing.price
+        confirm_t = e5.w[entry_swing.confirm].start
+
+        j0, j1 = bisect_left(mt, confirm_t), bisect_left(mt, window_end)
+        entry_t = None
+        for k in range(j0, j1):
+            if (lo[k] < entry_price) if sell else (hi[k] > entry_price):
+                entry_t = mt[k]
+                break
+        if entry_t is None:
+            continue  # setup, never triggered before the window closed
+
+        sl_kind = 0 if sell else 1  # SL swing: the last HIGH before a sell entry, last LOW before a buy entry
+        sl_events = [e for e in e5.events if e.kind == sl_kind and z.impact_time < e5.w[e.confirm].start <= entry_t]
+        if not sl_events:
+            continue
+        sl_swing = max(sl_events, key=lambda e: e5.w[e.confirm].start)
+        sl_price = sl_swing.price
+        r = (sl_price - entry_price) if sell else (entry_price - sl_price)
+        tp_price = entry_price - 3 * r if sell else entry_price + 3 * r
+
+        ptype = "OB" if z in eng.ob_zones else ("RB" if z in eng.rb_zones else "FVG")
+        trades.append(dict(
+            side="SELL" if sell else "BUY", entry_time=entry_t, entry_price=entry_price,
+            sl=sl_price, tp=tp_price, r_pips=abs(r) * 10000,
+            impact_time=z.impact_time, poi_label=f"{ptype}#{z.id}",
+        ))
+
+    # Dedup: identical entry (same price, same trigger minute) -> one trade
+    merged: dict[tuple, dict] = {}
+    for t in trades:
+        key = (t["entry_time"], round(t["entry_price"], 5))
+        if key not in merged:
+            merged[key] = dict(t, poi_sources=[t["poi_label"]])
+        else:
+            merged[key]["poi_sources"].append(t["poi_label"])
+            merged[key]["impact_time"] = min(merged[key]["impact_time"], t["impact_time"])
+    return sorted(merged.values(), key=lambda t: t["entry_time"])
+
+
 def exclude_old_intraday_zones(engine) -> None:
     """User's absolute rule (2026-09-28): "old POIs are never shown or
     used in hourly and minute timeframes. period." OOB/ORB/OFVG (the
@@ -177,6 +278,70 @@ def exclude_old_intraday_zones(engine) -> None:
     engine.ob_zones = [z for z in engine.ob_zones if wc.ob_status(z) != "OOB"]
     engine.rb_zones = [z for z in engine.rb_zones if wc.rb_status(z) != "ORB"]
     engine.fvg_zones = [z for z in engine.fvg_zones if wc.fvg_status(z) != "OFVG"]
+
+
+def build_trades_pine(trades: list[dict], display_tz: ZoneInfo) -> list[str]:
+    """5m entry/SL/TP visualization: an entry label (the order itself), an
+    SL label+box (red, risk) and a TP label+box (green, reward) per trade,
+    plus a table -- all gated on the 5m chart specifically and behind a
+    single "Show 5m trades" toggle. Uses the same array-pack-once,
+    draw-in-one-loop discipline as everything else here (CE10295)."""
+    lines = [
+        'bool showTrades = input.bool(true, "Show 5m trades", group="Trades")',
+        'bool on5 = timeframe.period == "5"',
+    ]
+    if not trades:
+        lines.append('// no qualifying trades for this --show-date window')
+        return lines
+
+    side, entry_x, entry_y, sl, tp, r_pips, poi, impact_x, entry_disp = [], [], [], [], [], [], [], [], []
+    for t in trades:
+        side.append(t["side"])
+        entry_x.append(wc.wrb.pine_epoch(t["entry_time"]))
+        entry_y.append(round(t["entry_price"], 5))
+        sl.append(round(t["sl"], 5))
+        tp.append(round(t["tp"], 5))
+        r_pips.append(round(t["r_pips"], 1))
+        poi.append("+".join(t["poi_sources"]))
+        impact_x.append(wc.wrb.pine_epoch(t["impact_time"]))
+        entry_disp.append(t["entry_time"].astimezone(display_tz).strftime("%Y-%m-%d %H:%M"))
+
+    lines += [
+        *wc.wrb.pack_array("trSide", "string", side),
+        *wc.wrb.pack_array("trEntryX", "int", entry_x),
+        *wc.wrb.pack_array("trEntryY", "float", entry_y),
+        *wc.wrb.pack_array("trSL", "float", sl),
+        *wc.wrb.pack_array("trTP", "float", tp),
+        *wc.wrb.pack_array("trRPips", "float", r_pips),
+        *wc.wrb.pack_array("trPoi", "string", poi),
+        *wc.wrb.pack_array("trImpactX", "int", impact_x),
+        *wc.wrb.pack_array("trEntryDisp", "string", entry_disp),
+        f'var table trTable = table.new(position.bottom_right, 7, {len(trades) + 1}, border_width=1)',
+        'if barstate.islast and on5 and showTrades and array.size(trSide) > 0',
+        '    boxRightOffset = 2 * 60 * 60 * 1000',
+        '    headers2 = array.from("Side", "Entry (RYD)", "Entry", "SL", "TP", "R (pips)", "POI")',
+        '    for c = 0 to array.size(headers2) - 1',
+        '        table.cell(trTable, c, 0, array.get(headers2, c), text_color=color.white, bgcolor=color.new(color.purple, 15))',
+        '    for i = 0 to array.size(trSide) - 1',
+        '        isSell = array.get(trSide, i) == "SELL"',
+        '        eX = array.get(trEntryX, i)',
+        '        eY = array.get(trEntryY, i)',
+        '        slY = array.get(trSL, i)',
+        '        tpY = array.get(trTP, i)',
+        '        box.new(eX, math.max(slY, eY), eX + boxRightOffset, math.min(slY, eY), border_color=color.red, border_width=1, bgcolor=color.new(color.red, 85))',
+        '        box.new(eX, math.max(eY, tpY), eX + boxRightOffset, math.min(eY, tpY), border_color=color.green, border_width=1, bgcolor=color.new(color.green, 85))',
+        '        label.new(eX, eY, (isSell ? "SELL STOP @ " : "BUY STOP @ ") + str.tostring(eY, format.mintick), xloc=xloc.bar_time, yloc=yloc.price, style=isSell ? label.style_label_up : label.style_label_down, color=color.blue, textcolor=color.white, size=size.small)',
+        '        label.new(eX, slY, "SL " + str.tostring(slY, format.mintick), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, color=color.red, textcolor=color.white, size=size.small)',
+        '        label.new(eX, tpY, "TP " + str.tostring(tpY, format.mintick), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, color=color.green, textcolor=color.white, size=size.small)',
+        '        table.cell(trTable, 0, i + 1, array.get(trSide, i), text_color=color.black, bgcolor=na)',
+        '        table.cell(trTable, 1, i + 1, array.get(trEntryDisp, i), text_color=color.black, bgcolor=na)',
+        '        table.cell(trTable, 2, i + 1, str.tostring(eY, format.mintick), text_color=color.black, bgcolor=na)',
+        '        table.cell(trTable, 3, i + 1, str.tostring(slY, format.mintick), text_color=color.black, bgcolor=na)',
+        '        table.cell(trTable, 4, i + 1, str.tostring(tpY, format.mintick), text_color=color.black, bgcolor=na)',
+        '        table.cell(trTable, 5, i + 1, str.tostring(array.get(trRPips, i), "#.#"), text_color=color.black, bgcolor=na)',
+        '        table.cell(trTable, 6, i + 1, array.get(trPoi, i), text_color=color.black, bgcolor=na)',
+    ]
+    return lines
 
 
 def build_one(base: Path, engine, args, display_tz, tag: str) -> list[str]:
@@ -341,6 +506,11 @@ def main() -> int:
             engines[tag] = engine
             raw_lines[tag] = build_one(base, engine, args, display_tz, tag)
 
+        trades = []
+        if args.show_date:
+            _, window_end = trading_window(args.show_date, display_tz)
+            trades = compute_5m_trades(engines["h4"], engines["h1"], minutes, window_end, display_tz)
+
         # Header: identical across all three except title/onWeekly/maxval --
         # take it from "d", split at the first body-only line.
         d_lines = raw_lines["d"]
@@ -436,6 +606,7 @@ def main() -> int:
         final_lines = header
         for body in bodies:
             final_lines += body
+        final_lines += collapse_pack_blocks(build_trades_pine(trades, display_tz))
         (base / out_name).write_text("\n".join(final_lines), encoding="utf-8")
 
         print("Created:")

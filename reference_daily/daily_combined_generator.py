@@ -114,6 +114,29 @@ def aggregate_hours(minutes: List["wob.Minute"], hours: int) -> List["wob.Week"]
     return bars
 
 
+def aggregate_minutes(minutes: List["wob.Minute"], mins: int) -> List["wob.Week"]:
+    """Same again, for sub-hour bars (5m entries): UTC-clock-aligned
+    buckets on the minute instead of the hour."""
+    bars: List["wob.Week"] = []
+    i = 0
+    step = timedelta(minutes=mins)
+    while i < len(minutes):
+        t = minutes[i].t
+        epoch_mins = int(t.timestamp() // 60)
+        bucket_start_mins = (epoch_mins // mins) * mins
+        start = datetime(1970, 1, 1, tzinfo=UTC) + timedelta(minutes=bucket_start_mins)
+        end = start + step
+        j = i + 1
+        high, low = minutes[i].h, minutes[i].l
+        while j < len(minutes) and minutes[j].t < end:
+            high = max(high, minutes[j].h)
+            low = min(low, minutes[j].l)
+            j += 1
+        bars.append(wob.Week(start, end, minutes[i].o, high, low, minutes[j - 1].c, i, j))
+        i = j
+    return bars
+
+
 def write_report(base: Path, minutes, days, e: "wc.WeeklyCombinedEngine", display_zone: ZoneInfo,
                   out_name: str = "daily_combined_report.txt", label: str = "DAILY", bar_word: str = "days") -> None:
     n_high = sum(1 for x in e.events if x.kind == 0)
