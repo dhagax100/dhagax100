@@ -168,7 +168,7 @@ def filter_to_date(engine, date_str: str, display_tz: ZoneInfo) -> None:
     engine.fvg_zones = [z for z in engine.fvg_zones if happened_in_window(engine.w[z.left].start, z)]
 
 
-def compute_5m_trades(h4_engine, h1_engine, minutes, window_end, display_tz) -> list[dict]:
+def compute_5m_trades(h4_engine, h1_engine, minutes, window_end, display_tz, side: str = "ALL") -> list[dict]:
     """The real entry rule, as given (2026-09-28, this session):
       1. A 4H or 1H POI impacts, in premium (sell) or discount (buy) --
          premium/discount = the 50/50 split between the zone's own
@@ -183,7 +183,13 @@ def compute_5m_trades(h4_engine, h1_engine, minutes, window_end, display_tz) -> 
     Two POIs producing the identical 5m entry (same price, same trigger
     minute) collapse into ONE trade -- same single-opportunity rule
     already used elsewhere in this project (one real move, not one
-    trade per POI that happened to touch it)."""
+    trade per POI that happened to touch it).
+
+    `side`: "SELL"/"BUY" restricts to that direction only -- matches
+    --default-side, since the whole rest of the indicator (boxes, table)
+    already respects that filter and computing both directions
+    regardless was a real bug (surfaced an unrequested BUY setup on a
+    day the user explicitly scoped to SELL only). "ALL" computes both."""
     mt = [m.t for m in minutes]
     hi = [m.h for m in minutes]
     lo = [m.l for m in minutes]
@@ -199,6 +205,10 @@ def compute_5m_trades(h4_engine, h1_engine, minutes, window_end, display_tz) -> 
                                 (eng.fvg_zones, lambda z: eng.w[z.left].start)):
             for z in zones:
                 if z.impact_time is None or z.protect_level is None:
+                    continue
+                if side == "SELL" and z.bullish:
+                    continue
+                if side == "BUY" and not z.bullish:
                     continue
                 candidates.append((eng, z))
 
@@ -328,8 +338,8 @@ def build_trades_pine(trades: list[dict], display_tz: ZoneInfo) -> list[str]:
         '        eY = array.get(trEntryY, i)',
         '        slY = array.get(trSL, i)',
         '        tpY = array.get(trTP, i)',
-        '        box.new(eX, math.max(slY, eY), eX + boxRightOffset, math.min(slY, eY), border_color=color.red, border_width=1, bgcolor=color.new(color.red, 85))',
-        '        box.new(eX, math.max(eY, tpY), eX + boxRightOffset, math.min(eY, tpY), border_color=color.green, border_width=1, bgcolor=color.new(color.green, 85))',
+        '        box.new(eX, math.max(slY, eY), eX + boxRightOffset, math.min(slY, eY), border_color=color.red, border_width=1, bgcolor=color.new(color.red, 85), xloc=xloc.bar_time)',
+        '        box.new(eX, math.max(eY, tpY), eX + boxRightOffset, math.min(eY, tpY), border_color=color.green, border_width=1, bgcolor=color.new(color.green, 85), xloc=xloc.bar_time)',
         '        label.new(eX, eY, (isSell ? "SELL STOP @ " : "BUY STOP @ ") + str.tostring(eY, format.mintick), xloc=xloc.bar_time, yloc=yloc.price, style=isSell ? label.style_label_up : label.style_label_down, color=color.blue, textcolor=color.white, size=size.small)',
         '        label.new(eX, slY, "SL " + str.tostring(slY, format.mintick), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, color=color.red, textcolor=color.white, size=size.small)',
         '        label.new(eX, tpY, "TP " + str.tostring(tpY, format.mintick), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, color=color.green, textcolor=color.white, size=size.small)',
@@ -509,7 +519,8 @@ def main() -> int:
         trades = []
         if args.show_date:
             _, window_end = trading_window(args.show_date, display_tz)
-            trades = compute_5m_trades(engines["h4"], engines["h1"], minutes, window_end, display_tz)
+            trades = compute_5m_trades(engines["h4"], engines["h1"], minutes, window_end, display_tz,
+                                        side=args.default_side)
 
         # Header: identical across all three except title/onWeekly/maxval --
         # take it from "d", split at the first body-only line.
