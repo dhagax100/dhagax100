@@ -125,6 +125,45 @@ def regate(body_lines: list[str], on_name: str) -> list[str]:
     return out
 
 
+_PACK_DECL_RE = re.compile(r'^(\s*)var array<(\w+)> (\w+) = array\.new<\2>\(\)$')
+_PACK_LOOP_RE = re.compile(r'^\s*for p in str\.split\("(.*)", "\|"\)$')
+_PACK_PUSH_RE = re.compile(r'^\s*array\.push\((\w+), p == "\xa7NA\xa7" \? \w+\(na\) : .*\)$')
+
+
+def collapse_pack_blocks(body_lines: list[str]) -> list[str]:
+    """Merging 3 timeframes into one file triples every pack_array() block
+    -- CE10295 ("main body too long") is about duplicated STRUCTURE, not
+    data volume (same lesson as the earlier weekly_combined_generator.py
+    fix, see docs_combined/COMBINED_RULES_LEARNED.md): each packed array
+    still carries its own inline `if barstate.isfirst / for p in
+    str.split(...) / array.push(...)` loop, and x3 timeframes x ~30 arrays
+    each is enough top-level loops to blow the compiled main body even
+    though the DATA itself packs into one string literal per array. Same
+    remedy as f_trackImpactX/f_drawPoiBox: replace each block's own
+    inline loop with a call to ONE shared per-kind function, defined once
+    in the header."""
+    out = []
+    i = 0
+    while i < len(body_lines):
+        m_decl = _PACK_DECL_RE.match(body_lines[i])
+        if (m_decl and i + 3 < len(body_lines)
+                and body_lines[i + 1].strip() == "if barstate.isfirst"
+                and _PACK_LOOP_RE.match(body_lines[i + 2])
+                and _PACK_PUSH_RE.match(body_lines[i + 3])):
+            indent, kind, name = m_decl.group(1), m_decl.group(2), m_decl.group(3)
+            packed = _PACK_LOOP_RE.match(body_lines[i + 2]).group(1)
+            fn = {"int": "f_pushInt", "float": "f_pushFloat",
+                  "bool": "f_pushBool", "string": "f_pushString"}[kind]
+            out.append(body_lines[i])
+            out.append(f'{indent}if barstate.isfirst')
+            out.append(f'{indent}    {fn}({name}, "{packed}")')
+            i += 4
+        else:
+            out.append(body_lines[i])
+            i += 1
+    return out
+
+
 def main() -> int:
     args = parse_args()
     path = Path(args.csv_file).expanduser().resolve()
@@ -205,7 +244,27 @@ def main() -> int:
             body = rename_arrays(body, tag)
             on_name = {"d": "onD", "h4": "onH4", "h1": "onH1"}[tag]
             body = regate(body, on_name)
+            body = collapse_pack_blocks(body)
             bodies.append(body)
+
+        # Shared unpack functions (CE10295 fix -- see collapse_pack_blocks):
+        # one definition each, called by every collapsed pack_array() block
+        # across all three timeframes instead of each carrying its own loop.
+        push_fns = [
+            'f_pushInt(arr, s) =>',
+            '    for p in str.split(s, "|")',
+            '        array.push(arr, p == "\xa7NA\xa7" ? int(na) : int(str.tonumber(p)))',
+            'f_pushFloat(arr, s) =>',
+            '    for p in str.split(s, "|")',
+            '        array.push(arr, p == "\xa7NA\xa7" ? float(na) : str.tonumber(p))',
+            'f_pushBool(arr, s) =>',
+            '    for p in str.split(s, "|")',
+            '        array.push(arr, p == "\xa7NA\xa7" ? bool(na) : p == "true")',
+            'f_pushString(arr, s) =>',
+            '    for p in str.split(s, "|")',
+            '        array.push(arr, p == "\xa7NA\xa7" ? string(na) : p)',
+        ]
+        header = header + push_fns
 
         out_name = "all_tf_combined_viewer.pine"
         final_lines = header
