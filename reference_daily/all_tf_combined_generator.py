@@ -22,7 +22,8 @@ merges them into one file:
     onWeekly the standalone files used -- so only the block matching the
     chart you're currently on ever draws.
 
-Writes, next to the CSV -- same fixed names every run, overwritten in place:
+Writes into the same folder this script sits in (override with --out-dir) --
+same fixed names every run, overwritten in place:
   all_tf_combined_viewer.pine   the one script (Daily/4H/1H, self-detecting)
   d_tf_swings.csv / d_tf_report.txt     Daily structure, for audit
   h4_tf_swings.csv / h4_tf_report.txt   4H structure, for audit
@@ -79,6 +80,10 @@ def parse_args():
                     help="Truncate the input data to end of this day (in --display-tz wall "
                          "time), same truncation applied to all three timeframes.")
     p.add_argument("--default-side", choices=("ALL", "BUY", "SELL"), default="ALL")
+    p.add_argument("--out-dir", default=None,
+                    help="Where to write the outputs. Default: the same folder this script "
+                         "sits in (not the CSV's folder) -- keeps a data folder that mixes "
+                         "raw CSVs and scripts from also collecting generated files.")
     return p.parse_args()
 
 
@@ -123,7 +128,7 @@ def regate(body_lines: list[str], on_name: str) -> list[str]:
 def main() -> int:
     args = parse_args()
     path = Path(args.csv_file).expanduser().resolve()
-    base = path.parent
+    base = Path(args.out_dir).expanduser().resolve() if args.out_dir else Path(__file__).resolve().parent
     if not path.exists():
         print("CSV not found:", path, file=sys.stderr)
         return 2

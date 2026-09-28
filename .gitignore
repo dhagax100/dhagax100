@@ -49,3 +49,12 @@ data/h4_tf_swings.csv
 data/h4_tf_report.txt
 data/h1_tf_swings.csv
 data/h1_tf_report.txt
+# all_tf_combined_generator.py now defaults to writing beside itself
+# (reference_daily/), not beside the CSV -- see --out-dir
+reference_daily/all_tf_combined_viewer.pine
+reference_daily/d_tf_swings.csv
+reference_daily/d_tf_report.txt
+reference_daily/h4_tf_swings.csv
+reference_daily/h4_tf_report.txt
+reference_daily/h1_tf_swings.csv
+reference_daily/h1_tf_report.txt
