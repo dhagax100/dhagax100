@@ -39,3 +39,6 @@ data/weekly_combined_control_report.txt
 data/full_combined_viewer.pine
 data/five_bso_combined_ledger.csv
 data/trade_stats_output.txt
+data/daily_combined_viewer.pine
+data/daily_combined_swings.csv
+data/daily_combined_report.txt
