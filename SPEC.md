@@ -175,18 +175,19 @@ Definitions:
   break.
 - AOB: an aggressive order block formed during continuation or pullback
   structure before full trend confirmation.
-- AIFOB: a pending anticipated in-favor order block. It can later be promoted
-  while preserving its original identity.
-- OOB: an out-of-balance or stranded POI that no longer qualifies for
-  downstream trade execution.
+- AIFOB: aggressive-in-favor order block. A pending, early order block that
+  can later be promoted to IFOB while preserving its original AIFOB identity.
+- OOB: old order block. A stranded, untouched opposing POI from before the
+  current trend. Still fully eligible for trading: it is hunted as an
+  opposing POI, can gain BOTH/SELL_ONLY (or BUY_ONLY) control on its own
+  reaction, and can reverse the whole trend if it wins (see SS12-SS15).
 - SPENT: an OB that has received its valid impact.
 
 An OB must preserve both its original type and current state. AIFOB origin
 must remain recorded as AIFOB even if it later becomes IFOB. A waiting AOB can
 become IFOB only through the matching MSS and only if it remains alive,
 unspent, unrejected and not already eligible. Do not create two same-direction
-OB records from the same origin candle. OOB is never eligible for downstream
-trading on Weekly, H4 or 5m.
+OB records from the same origin candle.
 
 ## 5. OB visual conventions
 
