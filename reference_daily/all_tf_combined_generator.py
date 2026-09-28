@@ -84,7 +84,52 @@ def parse_args():
                     help="Where to write the outputs. Default: the same folder this script "
                          "sits in (not the CSV's folder) -- keeps a data folder that mixes "
                          "raw CSVs and scripts from also collecting generated files.")
+    p.add_argument("--show-date", default=None, metavar="YYYY-MM-DD",
+                    help="Only draw swings/MSS/POIs actually active ON this one day, not "
+                         "everything accumulated up to it. Different from --as-of: --as-of "
+                         "controls what data the engine sees (so structure isn't computed "
+                         "from the future); --show-date controls what gets drawn from the "
+                         "already-computed structure. Use both together for 'only this day, "
+                         "as it would have looked standing on that day.'")
     return p.parse_args()
+
+
+def filter_to_date(engine, date_str: str, display_tz: ZoneInfo) -> None:
+    """Keep only what's actually active ON that one day -- different from
+    --as-of, which keeps everything ACCUMULATED up to that day (so a
+    swing from three months earlier still shows). This mutates the
+    engine's own zone/event lists in place, before write_combined_pine
+    ever sees them, so it needs no changes to the shared draw code.
+
+    A swing/MSS counts as "on" the day if its confirmation falls inside
+    it. A POI counts as active if its box would visually overlap the
+    day: origin on or before day-end, AND (still open/never stopped, OR
+    its death -- impact time if impacted, else its stop candle's start
+    -- falls on or after day-start)."""
+    y, m, d = (int(x) for x in date_str.split("-"))
+    day_start = datetime(y, m, d, 0, 0, 0, tzinfo=display_tz).astimezone(UTC)
+    day_end = day_start + timedelta(days=1)
+
+    engine.events = [e for e in engine.events if day_start <= engine.w[e.confirm].start < day_end]
+    engine.msses = [x for x in engine.msses if day_start <= engine.w[x.at].start < day_end]
+
+    def overlaps(origin, death):
+        if origin >= day_end:
+            return False
+        if death is not None and death < day_start:
+            return False
+        return True
+
+    def death_of(z):
+        if z.impact_time is not None:
+            return z.impact_time
+        if 0 <= z.stop < len(engine.w):
+            return engine.w[z.stop].start
+        return None  # still open -- always overlaps any day up to "now"
+
+    engine.ob_zones = [z for z in engine.ob_zones if overlaps(engine.w[z.candle].start, death_of(z))]
+    engine.rb_zones = [z for z in engine.rb_zones if overlaps(engine.w[z.candle].start, death_of(z))]
+    engine.fvg_zones = [z for z in engine.fvg_zones if overlaps(engine.w[z.left].start, death_of(z))]
 
 
 def build_one(base: Path, engine, args, display_tz, tag: str) -> list[str]:
@@ -197,6 +242,8 @@ def main() -> int:
         for tag, tf_period, title in TIMEFRAMES:
             engine = wc.WeeklyCombinedEngine(minutes, bars_by_tag[tag])
             engine.run()
+            if args.show_date:
+                filter_to_date(engine, args.show_date, display_tz)
             engines[tag] = engine
             raw_lines[tag] = build_one(base, engine, args, display_tz, tag)
 
