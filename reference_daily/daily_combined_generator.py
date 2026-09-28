@@ -180,6 +180,23 @@ def main() -> int:
         wc.write_combined_pine(base, engine, args.pine_labels, args.pine_obs, args.pine_rbs,
                                 args.pine_fvgs, args.pine_table, display_tz,
                                 out_name="daily_combined_viewer.pine")
+        # write_combined_pine is copied verbatim from the weekly generator,
+        # including its "only draw when the chart itself is on 1W" guard and
+        # its title -- both wrong for this daily viewer. Patch both in place
+        # after writing (the only two weekly-specific strings in the file);
+        # everything else (box/label/line logic) already reads real
+        # timestamps and needs no other change.
+        pine_path = base / "daily_combined_viewer.pine"
+        text = pine_path.read_text(encoding="utf-8")
+        text = text.replace(
+            'indicator("FXCM Weekly OB+RB+FVG Combined - Python Reference"',
+            'indicator("FXCM Daily OB+RB+FVG Combined - Python Reference"',
+        )
+        text = text.replace(
+            'bool onWeekly = timeframe.period == "1W"',
+            'bool onWeekly = timeframe.period == "1D"',
+        )
+        pine_path.write_text(text, encoding="utf-8")
         write_swings_csv(base, engine, display_tz)
         write_report(base, minutes, days, engine, display_tz)
 
