@@ -85,51 +85,86 @@ def parse_args():
                          "sits in (not the CSV's folder) -- keeps a data folder that mixes "
                          "raw CSVs and scripts from also collecting generated files.")
     p.add_argument("--show-date", default=None, metavar="YYYY-MM-DD",
-                    help="Only draw swings/MSS/POIs actually active ON this one day, not "
-                         "everything accumulated up to it. Different from --as-of: --as-of "
-                         "controls what data the engine sees (so structure isn't computed "
-                         "from the future); --show-date controls what gets drawn from the "
-                         "already-computed structure. Use both together for 'only this day, "
-                         "as it would have looked standing on that day.'")
+                    help="Only draw swings/MSS/POIs active inside the real trading window "
+                         "that day -- 10:00-20:00 Riyadh in summer, 11:00-21:00 in winter "
+                         "(London open through New York close; DST-detected automatically, "
+                         "not hardcoded months) -- plus the single most recent swing high, "
+                         "swing low and MSS confirmed before the window opened (the carried-in "
+                         "context in-window POIs are measured against). Nothing after the "
+                         "window closes shows, structure or POI alike. Different from --as-of: "
+                         "--as-of controls what data the engine sees (so structure isn't "
+                         "computed from the future); --show-date controls what gets drawn from "
+                         "the already-computed structure. Use both together for 'only this "
+                         "trading window, as it would have looked standing in it.'")
     return p.parse_args()
 
 
+def trading_window(date_str: str, display_tz: ZoneInfo) -> tuple[datetime, datetime]:
+    """User's real trading window (2026-09-28): 10:00-20:00 Riyadh in
+    summer, 11:00-21:00 in winter -- London open through New York close,
+    Asia excluded (Asia is liquidity-grab-only, never an entry window,
+    per the earlier session rules). Summer/winter is detected from
+    whether New York is actually in DST that day (via zoneinfo's real,
+    year-accurate transition data), not a hardcoded month range -- the
+    whole reason these hours shift on the Riyadh clock in the first
+    place is NY/London's own DST, so that's the correct thing to check,
+    not a guess at "November to March.\""""
+    y, m, d = (int(x) for x in date_str.split("-"))
+    ny_noon = datetime(y, m, d, 12, tzinfo=ZoneInfo("America/New_York"))
+    is_summer = ny_noon.dst() != timedelta(0)
+    start_h, end_h = (10, 20) if is_summer else (11, 21)
+    start = datetime(y, m, d, start_h, 0, 0, tzinfo=display_tz).astimezone(UTC)
+    end = datetime(y, m, d, end_h, 0, 0, tzinfo=display_tz).astimezone(UTC)
+    return start, end
+
+
 def filter_to_date(engine, date_str: str, display_tz: ZoneInfo) -> None:
-    """Keep only what's actually active ON that one day -- different from
+    """Keep only what's actually active inside the user's real trading
+    window that day (10:00-20:00 / 11:00-21:00 Riyadh, see
+    trading_window()) -- NOT the whole calendar day. Different from
     --as-of, which keeps everything ACCUMULATED up to that day (so a
     swing from three months earlier still shows). This mutates the
     engine's own zone/event lists in place, before write_combined_pine
     ever sees them, so it needs no changes to the shared draw code.
 
-    A swing/MSS counts as "on" the day if its confirmation falls inside
-    it. A POI counts as "on" the day if ANY of its real lifecycle events
-    landed that day -- created, triggered, made eligible, impacted, or
-    breached/stopped (STRAND/STRUCTURAL_BREACH, via its stop candle) --
-    not just origin-or-impact (user caught that too: a POI can be
-    relevant to a day through its trigger or eligibility moment even
-    with no impact that day). A zone just sitting there with NONE of
-    these landing that day does NOT count, no matter how "still open"
-    it is -- being unresolved is not the same as belonging to this day."""
-    y, m, d = (int(x) for x in date_str.split("-"))
-    day_start = datetime(y, m, d, 0, 0, 0, tzinfo=display_tz).astimezone(UTC)
-    day_end = day_start + timedelta(days=1)
+    A POI counts as "in the window" if ANY of its real lifecycle events
+    landed inside it -- created, triggered, made eligible, impacted, or
+    breached/stopped (STRAND/STRUCTURAL_BREACH, via its stop candle).
 
-    engine.events = [e for e in engine.events if day_start <= engine.w[e.confirm].start < day_end]
-    engine.msses = [x for x in engine.msses if day_start <= engine.w[x.at].start < day_end]
+    A swing/MSS counts as "in the window" if its confirmation falls
+    inside it, OR it's the single most recent swing high, most recent
+    swing low, or most recent MSS confirmed BEFORE the window started --
+    the carried-in context every in-window POI's protected level and
+    current trend are actually measured against. Nothing after the
+    window closes shows at all, structure or POI alike -- per the user's
+    explicit "I do not want to see any info ... after the trading ends.\""""
+    win_start, win_end = trading_window(date_str, display_tz)
 
-    def on_day(t):
-        return t is not None and day_start <= t < day_end
+    events_in = [e for e in engine.events if win_start <= engine.w[e.confirm].start < win_end]
+    prior_highs = [e for e in engine.events if e.kind == 0 and engine.w[e.confirm].start < win_start]
+    prior_lows = [e for e in engine.events if e.kind == 1 and engine.w[e.confirm].start < win_start]
+    carry_in = ([max(prior_highs, key=lambda e: engine.w[e.confirm].start)] if prior_highs else []) + \
+               ([max(prior_lows, key=lambda e: engine.w[e.confirm].start)] if prior_lows else [])
+    engine.events = sorted(events_in + carry_in, key=lambda e: engine.w[e.confirm].start)
 
-    def happened_today(origin, z):
+    mss_in = [x for x in engine.msses if win_start <= engine.w[x.at].start < win_end]
+    prior_mss = [x for x in engine.msses if engine.w[x.at].start < win_start]
+    mss_carry_in = [max(prior_mss, key=lambda x: engine.w[x.at].start)] if prior_mss else []
+    engine.msses = sorted(mss_in + mss_carry_in, key=lambda x: engine.w[x.at].start)
+
+    def in_window(t):
+        return t is not None and win_start <= t < win_end
+
+    def happened_in_window(origin, z):
         stop_t = engine.w[z.stop].start if 0 <= z.stop < len(engine.w) else None
-        return any(on_day(t) for t in (
+        return any(in_window(t) for t in (
             origin, getattr(z, "trigger_time", None), getattr(z, "eligible_time", None),
             z.impact_time, stop_t,
         ))
 
-    engine.ob_zones = [z for z in engine.ob_zones if happened_today(engine.w[z.candle].start, z)]
-    engine.rb_zones = [z for z in engine.rb_zones if happened_today(engine.w[z.candle].start, z)]
-    engine.fvg_zones = [z for z in engine.fvg_zones if happened_today(engine.w[z.left].start, z)]
+    engine.ob_zones = [z for z in engine.ob_zones if happened_in_window(engine.w[z.candle].start, z)]
+    engine.rb_zones = [z for z in engine.rb_zones if happened_in_window(engine.w[z.candle].start, z)]
+    engine.fvg_zones = [z for z in engine.fvg_zones if happened_in_window(engine.w[z.left].start, z)]
 
 
 def exclude_old_intraday_zones(engine) -> None:
