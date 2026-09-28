@@ -163,13 +163,58 @@ def extract_maxval(header_lines: list[str]) -> int:
     return 1
 
 
+_SHARED_INPUT_NAMES = ["focusPoi", "inspectOnePoi", "countFromStart", "sideFilter", "poiFromLast"]
+
+
 def rename_arrays(body_lines: list[str], prefix: str) -> list[str]:
     names = sorted(set(re.findall(r'var array<\w+> (\w+)', "\n".join(body_lines))),
                     key=len, reverse=True)
+    names += _SHARED_INPUT_NAMES  # each timeframe gets its OWN copy of these 5 inputs, not one shared set
     text = "\n".join(body_lines)
-    for name in names:
+    for name in sorted(set(names), key=len, reverse=True):
         text = re.sub(rf'\b{re.escape(name)}\b', f"{prefix}_{name}", text)
     return text.split("\n")
+
+
+def build_own_inputs(base_input_lines: list[str], tag: str, title: str, maxval: int, default_side: str) -> list[str]:
+    """Each timeframe's own copy of the 5 Combined-settings inputs (Focus
+    POI / Inspect one POI only / Count from start / Side / POI from
+    last) -- separately grouped and separately remembered, instead of
+    one shared set that changing on the 1H chart silently also changes
+    for Daily/4H. Same identifier-rename technique as rename_arrays,
+    plus its own maxval (that timeframe's own zone count, not the
+    merged max) and its own settings-group label."""
+    out = []
+    for ln in base_input_lines:
+        for name in sorted(_SHARED_INPUT_NAMES, key=len, reverse=True):
+            ln = re.sub(rf'\b{re.escape(name)}\b', f"{tag}_{name}", ln)
+        ln = ln.replace('group="Combined settings"', f'group="{title} settings"')
+        ln = re.sub(r'(maxval=)\d+', rf'\g<1>{maxval}', ln)
+        if default_side != "ALL":
+            ln = ln.replace('input.string("ALL", "Side"', f'input.string("{default_side}", "Side"')
+        out.append(ln)
+    return out
+
+
+def inject_input_params(body_lines: list[str], tag: str) -> list[str]:
+    """f_drawPoiBox is a shared function (defined ONCE in the header,
+    reused by weekly/daily's own standalone viewers too -- left
+    untouched there) that used to read sideFilter/inspectOnePoi/
+    focusPoi/poiFromLast as free global variables. Now that each
+    timeframe has its OWN copy of those 4 (see build_own_inputs), the
+    shared function can't close over a single global any more -- they
+    have to be passed in as real parameters at each call site instead.
+    Only touches lines that literally start with 'f_drawPoiBox(' (the 3
+    calls per timeframe body); the function DEFINITION itself is
+    patched once, separately, in main()."""
+    extra = f"{tag}_sideFilter, {tag}_inspectOnePoi, {tag}_focusPoi, {tag}_poiFromLast, {tag}_countFromStart"
+    out = []
+    for ln in body_lines:
+        if ln.strip().startswith("f_drawPoiBox("):
+            assert ln.rstrip().endswith(")")
+            ln = ln.rstrip()[:-1] + f", {extra})"
+        out.append(ln)
+    return out
 
 
 def regate(body_lines: list[str], on_name: str) -> list[str]:
@@ -272,9 +317,14 @@ def main() -> int:
             'indicator("Dhagax Dailies -- Daily+4H+1H OB+RB+FVG Combined"',
         ) for ln in header]
 
-        max_maxval = max(extract_maxval(raw_lines[tag][:split_idx]) for tag, _, _ in TIMEFRAMES)
-        header = [re.sub(r'(int poiFromLast = input\.int\(1, "POI from last", minval=1, maxval=)\d+',
-                          rf'\g<1>{max_maxval}', ln) for ln in header]
+        # Pull the 5 Combined-settings inputs OUT of the shared header --
+        # each timeframe gets its own copy (see build_own_inputs), not one
+        # set shared across Daily/4H/1H (user caught this: toggling Side on
+        # the 1H chart was silently also changing what Daily/4H would show).
+        input_line_prefixes = ('string focusPoi', 'bool inspectOnePoi', 'bool countFromStart',
+                                'string sideFilter', 'int poiFromLast')
+        shared_input_lines = [ln for ln in header if ln.strip().startswith(input_line_prefixes)]
+        header = [ln for ln in header if not ln.strip().startswith(input_line_prefixes)]
 
         # Replace the 4 single-purpose timeframe bools with the 3 real ones
         # this file actually uses (onD/onH4/onH1) -- drop onFive/on1m, they
@@ -293,20 +343,40 @@ def main() -> int:
                 new_header.append(ln)
         header = new_header
 
-        if args.default_side != "ALL":
-            header = [ln.replace(
-                'string sideFilter = input.string("ALL", "Side"',
-                f'string sideFilter = input.string("{args.default_side}", "Side"',
-            ) for ln in header]
-
         bodies = []
         for tag, tf_period, title in TIMEFRAMES:
-            body = raw_lines[tag][split_idx:]
+            own_maxval = extract_maxval(raw_lines[tag][:split_idx])
+            own_inputs = build_own_inputs(shared_input_lines, tag, title, own_maxval, args.default_side)
+            body = own_inputs + raw_lines[tag][split_idx:]
             body = rename_arrays(body, tag)
+            body = inject_input_params(body, tag)
             on_name = {"d": "onD", "h4": "onH4", "h1": "onH1"}[tag]
             body = regate(body, on_name)
             body = collapse_pack_blocks(body)
             bodies.append(body)
+
+        # Patch the shared f_drawPoiBox definition to take the 4 inputs as
+        # real parameters instead of closing over a single global set (see
+        # inject_input_params -- every call site already passes them now).
+        header = [
+            ln.replace(
+                'f_drawPoiBox(left, top, bottom, fallbackRight, hasImp, impX, colCode, rank, grank, bull, total, gTotal, dashed, filled) =>',
+                'f_drawPoiBox(left, top, bottom, fallbackRight, hasImp, impX, colCode, rank, grank, bull, total, gTotal, dashed, filled, sideFilterP, inspectOnePoiP, focusPoiP, poiFromLastP, countFromStartP) =>',
+            ).replace(
+                'effRank = countFromStart ? total - array.get(rank, i) + 1 : array.get(rank, i)',
+                'effRank = countFromStartP ? total - array.get(rank, i) + 1 : array.get(rank, i)',
+            ).replace(
+                'effGRank = countFromStart ? gTotal - array.get(grank, i) + 1 : array.get(grank, i)',
+                'effGRank = countFromStartP ? gTotal - array.get(grank, i) + 1 : array.get(grank, i)',
+            ).replace(
+                'sideOk = sideFilter == "ALL" or (sideFilter == "BUY" and array.get(bull, i)) or (sideFilter == "SELL" and not array.get(bull, i))',
+                'sideOk = sideFilterP == "ALL" or (sideFilterP == "BUY" and array.get(bull, i)) or (sideFilterP == "SELL" and not array.get(bull, i))',
+            ).replace(
+                'if sideOk and (not inspectOnePoi or (focusPoi == "ALL" ? effGRank == poiFromLast : effRank == poiFromLast))',
+                'if sideOk and (not inspectOnePoiP or (focusPoiP == "ALL" ? effGRank == poiFromLastP : effRank == poiFromLastP))',
+            )
+            for ln in header
+        ]
 
         # Shared unpack functions (CE10295 fix -- see collapse_pack_blocks):
         # one definition each, called by every collapsed pack_array() block
