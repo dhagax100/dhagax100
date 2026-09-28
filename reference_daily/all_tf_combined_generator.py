@@ -217,7 +217,7 @@ def structural_invalid_at(z, it: "datetime", bars: list, bar_starts: list,
 
 
 def run_5m_bso(z, it, bar_starts5: list, events5_sorted: list, minutes, mt: list,
-               invalidated_at, window_end) -> dict | None:
+               invalidated_at, window_end) -> dict:
     """Ported from five_bso_engine.py's run_bso() -- a single attempt.
     Genuinely different from the previous "first swing after impact is
     the entry" rule: this races an entry CANDIDATE against replacement
@@ -236,15 +236,19 @@ def run_5m_bso(z, it, bar_starts5: list, events5_sorted: list, minutes, mt: list
       4. On break, SL = the extreme (not just the last) of every
          SL-anchor-kind swing from `it` through the entry minute.
          TP = entry +/- 3R.
-    Returns None if no trade resulted (no resting swing, no candidate,
-    invalidated before entry, or the window closed first)."""
+    Always returns a dict with a "stage" key -- "ENTERED" on a real
+    trade, or one of the original engine's own no-trade stage names
+    otherwise (NO_RESTING_SWING, NO_CANDIDATE, POI_BREACHED,
+    NO_ENTRY_IN_WINDOW, NO_SL_POOL, ZERO_RISK) -- so every attempt,
+    entered or not, can be written to the 5m trades ledger with a real
+    reason instead of a bare skip."""
     bull = z.bullish
     need_rest_kind = 1 if bull else 0   # buy needs a resting LOW (SL anchor); sell needs a resting HIGH
     need_cand_kind = 0 if bull else 1   # entry-trigger kind is the opposite: HIGH for buy, LOW for sell
 
     start5 = bisect_right(bar_starts5, it) - 1
     if start5 < 0:
-        return None
+        return dict(stage="NO_5M_BAR_FOR_IMPACT")
 
     resting = None
     for ev in events5_sorted:
@@ -252,12 +256,14 @@ def run_5m_bso(z, it, bar_starts5: list, events5_sorted: list, minutes, mt: list
             continue
         resting = ev
         break
-    if resting is None or resting.at is None:
-        return None
+    if resting is None:
+        return dict(stage="NO_RESTING_SWING")
+    if resting.at is None:
+        return dict(stage="RESTING_SWING_UNRESOLVED_M1")
 
     candidates_before = [ev for ev in events5_sorted if ev.kind == need_cand_kind and ev.swing <= resting.swing]
     if not candidates_before:
-        return None
+        return dict(stage="NO_CANDIDATE", resting_at=resting.at)
     current = candidates_before[-1]
 
     later_candidates = sorted(
@@ -266,22 +272,27 @@ def run_5m_bso(z, it, bar_starts5: list, events5_sorted: list, minutes, mt: list
 
     idx = bisect_left(mt, resting.at)
     entry_m = None
+    stopped = False
     cand_ptr = 0
+    replacements = 0
     for i in range(idx, len(minutes)):
         m = minutes[i]
         if m.t >= window_end:
             break  # never triggers before the trading window closes -- setup only
         if invalidated_at is not None and m.t >= invalidated_at:
-            return None  # POI violated (body close or protect_level break) before the trigger
+            stopped = True
+            break  # POI violated (body close or protect_level break) before the trigger
         while cand_ptr < len(later_candidates) and later_candidates[cand_ptr].at <= m.t:
             current = later_candidates[cand_ptr]
+            replacements += 1
             cand_ptr += 1
         broke = (m.h > current.price) if bull else (m.l < current.price)
         if broke:
             entry_m = m
             break
     if entry_m is None:
-        return None
+        return dict(stage="POI_BREACHED" if stopped else "NO_ENTRY_IN_WINDOW",
+                    resting_at=resting.at, candidate_price=current.price, replacements=replacements)
 
     entry_price = current.price
     entry_time = entry_m.t
@@ -289,11 +300,12 @@ def run_5m_bso(z, it, bar_starts5: list, events5_sorted: list, minutes, mt: list
     pool = [ev for ev in events5_sorted if ev.kind == need_rest_kind and ev.swing >= start5
             and ev.at is not None and ev.at <= entry_time]
     if not pool:
-        return None
+        return dict(stage="NO_SL_POOL", resting_at=resting.at, entry_time=entry_time, entry_price=entry_price)
     sl_price = min(p.price for p in pool) if bull else max(p.price for p in pool)
     risk = abs(entry_price - sl_price)
     if risk <= 0:
-        return None
+        return dict(stage="ZERO_RISK", resting_at=resting.at, entry_time=entry_time,
+                    entry_price=entry_price, sl_price=sl_price)
     tp_price = entry_price + 3 * risk if bull else entry_price - 3 * risk
 
     result, exit_time = None, None
@@ -311,7 +323,8 @@ def run_5m_bso(z, it, bar_starts5: list, events5_sorted: list, minutes, mt: list
             result, exit_time = "TP", m.t
             break
 
-    return dict(entry_time=entry_time, entry_price=entry_price, sl_price=sl_price,
+    return dict(stage="ENTERED", resting_at=resting.at, replacements=replacements,
+                entry_time=entry_time, entry_price=entry_price, sl_price=sl_price,
                 tp_price=tp_price, risk=risk, result=result or "OPEN", exit_time=exit_time)
 
 
@@ -322,7 +335,7 @@ def run_5m_chain(z, impact_time, bar_starts5: list, events5_sorted: list, minute
     re-arm and search again from the SL's own exit time, as long as the
     POI's structural premise (`invalidated_at`) hasn't been crossed yet.
     Stops on the first attempt that resolves to anything other than a
-    plain SL (TP/OPEN/AMBIGUOUS, or any no-entry outcome). Per the
+    plain SL (TP/OPEN/AMBIGUOUS, or any no-entry stage). Per the
     original reporting rule: a re-entry (attempt 2+) that never actually
     became a trade is not reported at all -- it only still ends the
     search there. The first attempt is always reported, trade or not,
@@ -332,8 +345,9 @@ def run_5m_chain(z, impact_time, bar_starts5: list, events5_sorted: list, minute
     attempt_no = 1
     while True:
         res = run_5m_bso(z, search_from, bar_starts5, events5_sorted, minutes, mt, invalidated_at, window_end)
-        entered = res is not None
+        entered = res.get("stage") == "ENTERED"
         if attempt_no == 1 or entered:
+            res["attempt"] = attempt_no
             attempts.append(res)
         if not entered or res.get("result") != "SL":
             break
@@ -344,10 +358,11 @@ def run_5m_chain(z, impact_time, bar_starts5: list, events5_sorted: list, minute
             break
         search_from = exit_time
         attempt_no += 1
-    return [a for a in attempts if a is not None]
+    return attempts
 
 
-def compute_5m_trades(h4_engine, h1_engine, minutes, window_end, display_tz, side: str = "ALL") -> list[dict]:
+def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_end, display_tz,
+                       side: str = "ALL") -> tuple[list[dict], list[dict]]:
     """The real entry rule (2026-09-28 this session, ported 2026-09-28
     from the previously-built and dataset-validated `five_bso_engine.py`
     -- SPEC.md SS17/SS20-27 -- after the user asked whether POI
@@ -370,19 +385,27 @@ def compute_5m_trades(h4_engine, h1_engine, minutes, window_end, display_tz, sid
     minute) collapse into ONE trade -- unchanged single-opportunity rule.
 
     `side`: "SELL"/"BUY" restricts to that direction only, matching
-    --default-side; "ALL" computes both."""
+    --default-side; "ALL" computes both.
+
+    `e5` is the caller's own 5m WeeklyCombinedEngine (built once, over
+    the FULL dataset, so candidate/resting-swing lookups aren't starved
+    by date-window filtering) -- also reused by the caller to write the
+    5m swings/report audit files.
+
+    Returns (trades, ledger_rows): `trades` is the deduped, drawn set
+    (unchanged shape, for the pine table/boxes); `ledger_rows` is EVERY
+    attempt on EVERY qualifying zone, entered or not, with its stage and
+    reason -- written to 5m_trades_ledger.csv by the caller so "why
+    didn't this POI trade" never again needs a one-off script."""
     mt = [m.t for m in minutes]
     hi = [m.h for m in minutes]
     lo = [m.l for m in minutes]
 
-    bars5 = dc.aggregate_minutes(minutes, 5)
-    e5 = wc.WeeklyCombinedEngine(minutes, bars5)
-    e5.run()
     bar_starts5 = [b.start for b in e5.w]
     events5_sorted = sorted(e5.events, key=lambda e: (e.confirm, e.kind))
 
     candidates = []
-    for eng in (h4_engine, h1_engine):
+    for eng, tf_tag in ((h4_engine, "H4"), (h1_engine, "1H")):
         eng_bar_starts = [b.start for b in eng.w]
         for zones, ptype in ((eng.ob_zones, "OB"), (eng.rb_zones, "RB"), (eng.fvg_zones, "FVG")):
             for z in zones:
@@ -392,14 +415,20 @@ def compute_5m_trades(h4_engine, h1_engine, minutes, window_end, display_tz, sid
                     continue
                 if side == "BUY" and not z.bullish:
                     continue
-                candidates.append((eng, eng_bar_starts, z, ptype))
+                candidates.append((eng, eng_bar_starts, z, ptype, tf_tag))
 
     trades = []
-    for eng, eng_bar_starts, z, ptype in candidates:
+    ledger_rows = []
+    for eng, eng_bar_starts, z, ptype, tf_tag in candidates:
         sell = not z.bullish
+        row_base = dict(tf=tf_tag, poi_type=ptype, poi_id=z.id, side="SELL" if sell else "BUY",
+                         zone_bottom=z.zb, zone_top=z.zt, protect_level=z.protect_level,
+                         impact_time=z.impact_time)
+
         opp_kind = 1 if sell else 0  # opposing swing: a LOW for a sell reaction, a HIGH for a buy reaction
         opp_events = [e for e in eng.events if e.kind == opp_kind and eng.w[e.confirm].start <= z.impact_time]
         if not opp_events:
+            ledger_rows.append(dict(row_base, attempt=None, stage="NO_OPPOSING_SWING"))
             continue
         opp = max(opp_events, key=lambda e: eng.w[e.confirm].start)
         opp_t = eng.w[opp.confirm].start
@@ -407,20 +436,28 @@ def compute_5m_trades(h4_engine, h1_engine, minutes, window_end, display_tz, sid
 
         i0, i1 = bisect_left(mt, opp_t), bisect_left(mt, z.impact_time)
         if i1 < i0:
+            ledger_rows.append(dict(row_base, attempt=None, stage="BAD_TIME_RANGE"))
             continue
         if sell:
             reached = max(hi[i0:i1 + 1]) >= mid
         else:
             reached = min(lo[i0:i1 + 1]) <= mid
         if not reached:
+            ledger_rows.append(dict(row_base, attempt=None, stage="PREMIUM_NOT_REACHED", premium_mid=mid))
             continue
 
-        invalidated_at, _reason = structural_invalid_at(z, z.impact_time, eng.w, eng_bar_starts, minutes, mt)
+        invalidated_at, reason = structural_invalid_at(z, z.impact_time, eng.w, eng_bar_starts, minutes, mt)
         attempts = run_5m_chain(z, z.impact_time, bar_starts5, events5_sorted, minutes, mt,
                                  invalidated_at, window_end)
         for a in attempts:
-            if a is None or a.get("entry_time") is None:
-                continue  # setup only (no entry, or POI violated first) -- nothing to draw
+            ledger_rows.append(dict(row_base, attempt=a.get("attempt"), stage=a.get("stage"),
+                                     premium_mid=mid, invalidated_at=invalidated_at, invalidated_reason=reason,
+                                     resting_at=a.get("resting_at"), replacements=a.get("replacements"),
+                                     entry_time=a.get("entry_time"), entry_price=a.get("entry_price"),
+                                     sl_price=a.get("sl_price"), tp_price=a.get("tp_price"),
+                                     risk=a.get("risk"), result=a.get("result"), exit_time=a.get("exit_time")))
+            if a.get("stage") != "ENTERED":
+                continue
             r = a["risk"]
             trades.append(dict(
                 side="SELL" if sell else "BUY", entry_time=a["entry_time"], entry_price=a["entry_price"],
@@ -437,7 +474,58 @@ def compute_5m_trades(h4_engine, h1_engine, minutes, window_end, display_tz, sid
         else:
             merged[key]["poi_sources"].append(t["poi_label"])
             merged[key]["impact_time"] = min(merged[key]["impact_time"], t["impact_time"])
-    return sorted(merged.values(), key=lambda t: t["entry_time"])
+    return sorted(merged.values(), key=lambda t: t["entry_time"]), ledger_rows
+
+
+LEDGER_FIELDS = [
+    "tf", "poi_type", "poi_id", "side", "zone_bottom", "zone_top", "protect_level",
+    "impact_riyadh", "invalidated_riyadh", "invalidated_reason", "premium_mid",
+    "attempt", "stage", "resting_riyadh", "replacements",
+    "entry_riyadh", "entry_price", "sl_price", "tp_price", "risk_price", "r_pips",
+    "result", "exit_riyadh", "r_multiple",
+]
+
+
+def write_5m_trades_ledger(base: Path, ledger_rows: list[dict], display_tz: ZoneInfo,
+                            out_name: str = "5m_trades_ledger.csv") -> None:
+    """One row per attempt (entered or not) on every zone that reached
+    the premium/discount gate that day -- audit trail for "why did/didn't
+    this POI trade", same discipline as the old project's own
+    five_bso_ledger.csv. Written every run with --show-date, same fixed
+    name, overwritten in place."""
+    import csv
+
+    def riyadh(t):
+        return wob.display_iso(t, display_tz) if t else ""
+
+    with (base / out_name).open("w", newline="", encoding="utf-8") as f:
+        wr = csv.DictWriter(f, fieldnames=LEDGER_FIELDS, extrasaction="ignore")
+        wr.writeheader()
+        for row in ledger_rows:
+            result = row.get("result")
+            r_multiple = "+3.00" if result == "TP" else ("-1.00" if result == "SL" else "")
+            wr.writerow(dict(
+                tf=row["tf"], poi_type=row["poi_type"], poi_id=row["poi_id"], side=row["side"],
+                zone_bottom=f"{row['zone_bottom']:.5f}", zone_top=f"{row['zone_top']:.5f}",
+                protect_level=f"{row['protect_level']:.5f}",
+                impact_riyadh=riyadh(row.get("impact_time")),
+                invalidated_riyadh=riyadh(row.get("invalidated_at")),
+                invalidated_reason=row.get("invalidated_reason") or "",
+                premium_mid=f"{row['premium_mid']:.5f}" if row.get("premium_mid") is not None else "",
+                attempt=row.get("attempt") if row.get("attempt") is not None else "",
+                stage=row["stage"],
+                resting_riyadh=riyadh(row.get("resting_at")),
+                replacements=row.get("replacements") if row.get("replacements") is not None else "",
+                entry_riyadh=riyadh(row.get("entry_time")),
+                entry_price=f"{row['entry_price']:.5f}" if row.get("entry_price") is not None else "",
+                sl_price=f"{row['sl_price']:.5f}" if row.get("sl_price") is not None else "",
+                tp_price=f"{row['tp_price']:.5f}" if row.get("tp_price") is not None else "",
+                risk_price=f"{row['risk']:.5f}" if row.get("risk") is not None else "",
+                r_pips=f"{row['risk'] * 10000:.1f}" if row.get("risk") is not None else "",
+                result=result or "",
+                exit_riyadh=riyadh(row.get("exit_time")),
+                r_multiple=r_multiple,
+            ))
 
 
 def exclude_old_intraday_zones(engine) -> None:
@@ -679,10 +767,15 @@ def main() -> int:
             raw_lines[tag] = build_one(base, engine, args, display_tz, tag)
 
         trades = []
+        e5 = None
+        ledger_rows = []
         if args.show_date:
+            bars5 = dc.aggregate_minutes(minutes, 5)
+            e5 = wc.WeeklyCombinedEngine(minutes, bars5)
+            e5.run()
             _, window_end = trading_window(args.show_date, display_tz)
-            trades = compute_5m_trades(engines["h4"], engines["h1"], minutes, window_end, display_tz,
-                                        side=args.default_side)
+            trades, ledger_rows = compute_5m_trades(engines["h4"], engines["h1"], e5, minutes, window_end,
+                                                      display_tz, side=args.default_side)
 
         # Header: identical across all three except title/onWeekly/maxval --
         # take it from "d", split at the first body-only line.
@@ -795,6 +888,24 @@ def main() -> int:
                              label=title, bar_word=bar_word[tag])
             print(f"  {swings_name} / {report_name}   ({title}: OB={len(e.ob_zones)} "
                   f"RB={len(e.rb_zones)} FVG={len(e.fvg_zones)})")
+
+        if args.show_date and e5 is not None:
+            ledger_name = "5m_trades_ledger.csv"
+            write_5m_trades_ledger(base, ledger_rows, display_tz, ledger_name)
+            print(f"  {ledger_name}   ({len(ledger_rows)} rows: every 5m attempt on every "
+                  f"qualifying POI that day, entered or not, with its stage/reason)")
+
+            # 5m swings/report audit files, same convention as d/h4/h1 above --
+            # scoped to the same trading-window+carry-in filter AFTER trades
+            # are computed (compute_5m_trades needs e5's FULL event history
+            # for correct resting/candidate lookups; the audit files don't).
+            filter_to_date(e5, args.show_date, display_tz)
+            swings5_name, report5_name = "5m_tf_swings.csv", "5m_tf_report.txt"
+            dc.write_swings_csv(base, e5, display_tz, swings5_name)
+            dc.write_report(base, minutes, bars5, e5, display_tz, report5_name,
+                             label="5m", bar_word="5m_bars")
+            print(f"  {swings5_name} / {report5_name}   (5m swings/MSS used by the trade engine that day)")
+
         if warnings:
             print(f"({len(warnings)} data warnings -- see load_minutes output)")
         return 0
