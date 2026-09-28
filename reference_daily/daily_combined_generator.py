@@ -87,7 +87,8 @@ def aggregate_days(minutes: List["wob.Minute"], close_zone: ZoneInfo, close_hour
     return days
 
 
-def write_report(base: Path, minutes, days, e: "wc.WeeklyCombinedEngine", display_zone: ZoneInfo) -> None:
+def write_report(base: Path, minutes, days, e: "wc.WeeklyCombinedEngine", display_zone: ZoneInfo,
+                  out_name: str = "daily_combined_report.txt") -> None:
     n_high = sum(1 for x in e.events if x.kind == 0)
     n_low = sum(1 for x in e.events if x.kind == 1)
     n_up = sum(1 for x in e.msses if x.up)
@@ -120,12 +121,13 @@ def write_report(base: Path, minutes, days, e: "wc.WeeklyCombinedEngine", displa
         "Control gates (BUY_ONLY/SELL_ONLY/BOTH/NONE) and the H4/5m entry layer "
         "are NOT part of this stage -- structure only (swings, MSS, POIs).",
     ]
-    (base / "daily_combined_report.txt").write_text("\n".join(rows) + "\n", encoding="utf-8")
+    (base / out_name).write_text("\n".join(rows) + "\n", encoding="utf-8")
 
 
-def write_swings_csv(base: Path, e: "wc.WeeklyCombinedEngine", display_zone: ZoneInfo) -> None:
+def write_swings_csv(base: Path, e: "wc.WeeklyCombinedEngine", display_zone: ZoneInfo,
+                      out_name: str = "daily_combined_swings.csv") -> None:
     import csv
-    with (base / "daily_combined_swings.csv").open("w", newline="", encoding="utf-8") as f:
+    with (base / out_name).open("w", newline="", encoding="utf-8") as f:
         wr = csv.writer(f)
         wr.writerow(["kind", "side", "swing_day_start_utc", "confirm_day_start_utc",
                      "confirm_day_start_riyadh", "price"])
@@ -156,6 +158,13 @@ def parse_args():
     p.add_argument("--pine-rbs", type=int, default=200, choices=range(1, 451))
     p.add_argument("--pine-fvgs", type=int, default=200, choices=range(1, 451))
     p.add_argument("--pine-table", type=int, default=20, choices=range(1, 21))
+    p.add_argument("--as-of", default=None, metavar="YYYY-MM-DD",
+                    help="Truncate the input data to end of this day (in --display-tz wall "
+                         "time) so the output is exactly what existed as of that date -- "
+                         "structure and POIs only up to then, nothing from after it.")
+    p.add_argument("--default-side", choices=("ALL", "BUY", "SELL"), default="ALL",
+                    help="Bakes the viewer's 'Side' input to open already set to this, "
+                         "instead of the usual ALL default.")
     return p.parse_args()
 
 
@@ -172,6 +181,25 @@ def main() -> int:
         display_tz = ZoneInfo(args.display_tz)
 
         minutes, warnings = wob.load_minutes(path, input_tz, args.price_side)
+
+        out_name = "daily_combined_viewer.pine"
+        if args.as_of:
+            # Truncate to end of that day in display-tz wall time, so the
+            # engine only ever sees data up through that date -- it then
+            # naturally produces exactly what existed "as of" that day:
+            # structure (swings/MSS) confirmed by then, and every POI that
+            # existed by then (already-dead ones with their real stop time,
+            # still-open ones extending) -- not a cosmetic chart filter, an
+            # actual re-run on truncated input.
+            y, m, d = (int(x) for x in args.as_of.split("-"))
+            cutoff_local = datetime(y, m, d, 23, 59, 59, tzinfo=display_tz) + timedelta(seconds=1)
+            cutoff_utc = cutoff_local.astimezone(UTC)
+            minutes = [x for x in minutes if x.t < cutoff_utc]
+            if not minutes:
+                print(f"No data at or before {args.as_of}", file=sys.stderr)
+                return 2
+            out_name = f"daily_combined_viewer_{args.as_of}.pine"
+
         days = aggregate_days(minutes, close_tz, args.day_close_hour)
 
         engine = wc.WeeklyCombinedEngine(minutes, days)
@@ -179,14 +207,14 @@ def main() -> int:
 
         wc.write_combined_pine(base, engine, args.pine_labels, args.pine_obs, args.pine_rbs,
                                 args.pine_fvgs, args.pine_table, display_tz,
-                                out_name="daily_combined_viewer.pine")
+                                out_name=out_name)
         # write_combined_pine is copied verbatim from the weekly generator,
         # including its "only draw when the chart itself is on 1W" guard and
         # its title -- both wrong for this daily viewer. Patch both in place
         # after writing (the only two weekly-specific strings in the file);
         # everything else (box/label/line logic) already reads real
         # timestamps and needs no other change.
-        pine_path = base / "daily_combined_viewer.pine"
+        pine_path = base / out_name
         text = pine_path.read_text(encoding="utf-8")
         text = text.replace(
             'indicator("FXCM Weekly OB+RB+FVG Combined - Python Reference"',
@@ -196,14 +224,21 @@ def main() -> int:
             'bool onWeekly = timeframe.period == "1W"',
             'bool onWeekly = timeframe.period == "1D"',
         )
+        if args.default_side != "ALL":
+            text = text.replace(
+                'string sideFilter = input.string("ALL", "Side"',
+                f'string sideFilter = input.string("{args.default_side}", "Side"',
+            )
         pine_path.write_text(text, encoding="utf-8")
-        write_swings_csv(base, engine, display_tz)
-        write_report(base, minutes, days, engine, display_tz)
+        swings_name = "daily_combined_swings.csv" if not args.as_of else f"daily_combined_swings_{args.as_of}.csv"
+        report_name = "daily_combined_report.txt" if not args.as_of else f"daily_combined_report_{args.as_of}.txt"
+        write_swings_csv(base, engine, display_tz, swings_name)
+        write_report(base, minutes, days, engine, display_tz, report_name)
 
         print("Created:")
-        print("  daily_combined_viewer.pine   <-- open this in TradingView on the Daily chart")
-        print("  daily_combined_swings.csv")
-        print("  daily_combined_report.txt")
+        print(f"  {out_name}   <-- open this in TradingView on the Daily chart")
+        print(f"  {swings_name}")
+        print(f"  {report_name}")
         print(f"Processed {len(minutes):,} minutes into {len(days)} daily bars.")
         print(f"OB zones={len(engine.ob_zones)}  RB zones={len(engine.rb_zones)}  FVG zones={len(engine.fvg_zones)}")
         if warnings:

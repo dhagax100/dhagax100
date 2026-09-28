@@ -42,3 +42,6 @@ data/trade_stats_output.txt
 data/daily_combined_viewer.pine
 data/daily_combined_swings.csv
 data/daily_combined_report.txt
+data/daily_combined_viewer_*.pine
+data/daily_combined_swings_*.csv
+data/daily_combined_report_*.txt
