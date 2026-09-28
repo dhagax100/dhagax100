@@ -73,6 +73,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--pine-rbs", type=int, default=150, choices=range(1, 451))
     p.add_argument("--pine-fvgs", type=int, default=150, choices=range(1, 451))
     p.add_argument("--pine-table", type=int, default=20, choices=range(1, 21))
+    p.add_argument("--box-body-minutes", type=int, default=60, choices=(1, 5, 15, 30, 60))
+    p.add_argument("--origin-first-price", choices=("open", "close"), default="close")
+    p.add_argument("--origin-body-offset-minutes", type=int, default=0, choices=range(-240, 241))
     p.add_argument("--h4-anchor-hour", type=int, default=17, choices=range(24))
     p.add_argument("--h4-pine-cap", type=int, default=25, choices=range(1, 451),
                     help="How many of the most recent authorized 4H POIs to actually DRAW on the "
@@ -460,6 +463,20 @@ def main() -> int:
     wc.write_combined_pine(base, weekly_engine, args.pine_labels, args.pine_obs, args.pine_rbs, args.pine_fvgs,
                             args.pine_table, display_tz, out_name="full_combined_viewer.pine", extra_lines=extra_lines)
 
+    # Full parity with full_viewer.py/full_rb_viewer.py/full_fvg_viewer.py:
+    # a single full_X_viewer.py run is self-sufficient -- it also
+    # regenerates the weekly-level ledgers/swings/report, not just the
+    # combined H4+5m pine. Reuses each type's own already-verified writer,
+    # unchanged, against this single shared pass's zones (same adapters
+    # weekly_combined_generator.py's own main() uses).
+    ob_view = wc._OBEngineView(weekly_engine)
+    wob.write_ledger(base, ob_view, args.box_body_minutes, display_tz, args.origin_first_price, args.origin_body_offset_minutes)
+    rb_view = wc._RBEngineView(weekly_engine)
+    wrb.write_ledger(base, rb_view, display_tz)
+    fvg_view = wc._FVGEngineView(weekly_engine)
+    wfvg.write_ledger(base, fvg_view, display_tz)
+    wc.write_report(base, minutes, weeks, weekly_engine, args, display_tz)
+
     # A bare h4_ob_id (just the numeric id) from bso.ledger_row() is
     # ambiguous here -- OB/RB/FVG each have their own separate id sequence
     # starting at 1. Prefix it with this row's own POI type(s) (merged rows
@@ -488,6 +505,10 @@ def main() -> int:
     print("Created:")
     print("  full_combined_viewer.pine   (Weekly combined layer + 4H combined layer/table + 5m BSO entry lines)")
     print("  five_bso_combined_ledger.csv")
+    print("  weekly_ob_ledger.csv / weekly_ob_swings.csv")
+    print("  weekly_rb_ledger.csv / weekly_rb_swings.csv")
+    print("  weekly_fvg_ledger.csv / weekly_fvg_swings.csv")
+    print("  weekly_combined_report.txt")
     print(f"Window: {window_start} -> {window_end}")
     print(f"{len(h4_bars)} 4H bars. Authorized: OB={len(drawn_ob)} RB={len(drawn_rb)} FVG={len(drawn_fvg)}. Shown in window: {len(focused)}.")
     bso_stages: Dict[str, int] = {}
