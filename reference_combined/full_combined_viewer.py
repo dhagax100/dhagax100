@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import csv
 import sys
+from bisect import bisect_left
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -255,6 +256,68 @@ def build_h4_combined_extra_lines(rows: List[Tuple[object, str, str]], h4_bars_b
     return lines
 
 
+PIP = 0.0001
+
+
+def premium_discount_of(z, ptype: str, h4_engines: Dict[str, object], mt: List[datetime],
+                         lo: List[float], hi: List[float]) -> Dict[str, object]:
+    """ICT premium/discount for a 4H POI's own approach leg (user, 2026-09-28).
+
+    "Supporting swing" = the zone's own protect_level (same anchor-break
+    threshold already used at the control-gate layer -- breaching it kills
+    the zone). "Opposing swing" = the most recent CONFIRMED swing of the
+    opposite kind, at 4H granularity, before the zone's impact -- the swing
+    that started the approach leg (e.g. the swing low a bearish POI rallied
+    up from). The leg between them splits 50/50: premium = the half closer
+    to the supporting swing (top half for a SELL zone), discount = the half
+    closer to the opposing swing (bottom half for a BUY zone). A SELL only
+    "counts" if price actually traded into the premium half at some point
+    between the opposing swing forming and the zone's impact (real M1
+    wicks, not just the entry price) -- explicitly allowed to happen even
+    if the zone itself sits in discount, as long as price passed through
+    without a body-close/anchor-break violation (that's a separate check,
+    already enforced upstream by the control gate; this function only
+    measures whether price reached the zone that matters)."""
+    supporting = z.protect_level
+    if supporting is None or z.impact_time is None:
+        return {"reached": None, "reason": "no protect_level or impact"}
+    opp_kind = 0 if z.bullish else 1  # bullish POI approached from a swing HIGH; bearish from a swing LOW
+    events = h4_engines[ptype].events
+    candidates = [e for e in events if e.kind == opp_kind and e.at is not None and e.at < z.impact_time]
+    if not candidates:
+        return {"reached": None, "reason": "no opposing swing before impact"}
+    opp = candidates[-1]
+    opposing_price, opposing_at = opp.price, opp.at
+
+    lo_r, hi_r = sorted((supporting, opposing_price))
+    rng = hi_r - lo_r
+    mid = (lo_r + hi_r) / 2
+    if rng <= 0:
+        return {"reached": None, "reason": "zero-width leg"}
+
+    i0 = bisect_left(mt, opposing_at)
+    i1 = bisect_left(mt, z.impact_time)
+    if i1 < i0:
+        i0, i1 = i1, i0
+    window_hi = max(hi[i0:i1 + 1])
+    window_lo = min(lo[i0:i1 + 1])
+
+    if z.bullish:  # BUY: needs discount (bottom half) touched
+        reached = window_lo <= mid
+        depth_pips = (mid - window_lo) / PIP if reached else 0.0
+        zone_name = "discount"
+    else:  # SELL: needs premium (top half) touched
+        reached = window_hi >= mid
+        depth_pips = (window_hi - mid) / PIP if reached else 0.0
+        zone_name = "premium"
+
+    return {
+        "reached": reached, "zone_name": zone_name,
+        "supporting_price": supporting, "opposing_price": opposing_price, "opposing_at": opposing_at,
+        "midpoint": mid, "leg_range_pips": rng / PIP, "depth_pips": depth_pips,
+    }
+
+
 def main() -> int:
     args = parse_args()
     path = Path(args.csv_file).expanduser().resolve()
@@ -317,6 +380,8 @@ def main() -> int:
                                                     display_tz, window_start, window_end, args.h4_pine_labels)
 
     mt = [m.t for m in minutes]
+    lo = [m.l for m in minutes]
+    hi = [m.h for m in minutes]
     h4_bar_starts = [b.start for b in h4_bars]
     five_bars = bso.aggregate_5m(minutes)
     five_bar_starts = [b.start for b in five_bars]
@@ -338,6 +403,7 @@ def main() -> int:
     bso_results = []
     seen: Dict[tuple, int] = {}
     for z, parent_id, ptype in focused:
+        pd_info = premium_discount_of(z, ptype, h4_engines, mt, lo, hi)
         five_events = five_events_by_type[ptype]
         invalidated_at, invalidation_reason = bso.structural_invalid_at(z, z.impact_time, h4_bars, h4_bar_starts, h4_engines[ptype].events, minutes, mt)
         attempts = bso.run_bso_chain(z, z.impact_time, five_bar_starts, five_events, minutes, mt, invalidated_at)
@@ -364,15 +430,19 @@ def main() -> int:
                    res.get("exit_time"), res.get("result"))
             if key in seen:
                 idx = seen[key]
-                dz, dit, dlabel, dreason, dres, dptype = bso_results[idx]
+                dz, dit, dlabel, dreason, dres, dptype, dpd = bso_results[idx]
                 if label and label not in dlabel.split("+"):
                     dlabel = f"{dlabel}+{label}" if dlabel else label
                 if ptype not in dptype.split("+"):
                     dptype = f"{dptype}+{ptype}"
-                bso_results[idx] = (dz, dit, dlabel, dreason, dres, dptype)
+                # dpd (premium/discount) is kept from whichever zone got
+                # deduped INTO first -- a merged row's two underlying zones
+                # can have slightly different legs; this reports the first
+                # one's, not an average of both.
+                bso_results[idx] = (dz, dit, dlabel, dreason, dres, dptype, dpd)
                 continue
             seen[key] = len(bso_results)
-            bso_results.append((z, z.impact_time, label, invalidation_reason, res, ptype))
+            bso_results.append((z, z.impact_time, label, invalidation_reason, res, ptype, pd_info))
 
     # bso_results (all of it, every attempt) already went to the CSV ledger
     # above. The chart/table only draws the most recent --bso-pine-cap of
@@ -395,14 +465,24 @@ def main() -> int:
     # starting at 1. Prefix it with this row's own POI type(s) (merged rows
     # can span two types, e.g. "OB+RB") the same way every other combined
     # label in this file already is.
-    ledger_fieldnames = ["poi_type"] + bso.LEDGER_FIELDS
+    pd_fieldnames = ["pd_zone_name", "pd_reached", "pd_supporting_price", "pd_opposing_price",
+                     "pd_opposing_at_utc", "pd_midpoint", "pd_leg_range_pips", "pd_depth_pips"]
+    ledger_fieldnames = ["poi_type"] + bso.LEDGER_FIELDS + pd_fieldnames
     with (base / "five_bso_combined_ledger.csv").open("w", newline="", encoding="utf-8") as f:
         wr = csv.DictWriter(f, fieldnames=ledger_fieldnames)
         wr.writeheader()
-        for z, it, parent_id, invalidation_reason, res, ptype in bso_results:
+        for z, it, parent_id, invalidation_reason, res, ptype, pd_info in bso_results:
             row = bso.ledger_row(z, it, parent_id, invalidation_reason, res, display_tz)
             row["poi_type"] = ptype
             row["h4_ob_id"] = f"{ptype}#{z.id}"
+            row["pd_zone_name"] = pd_info.get("zone_name", "")
+            row["pd_reached"] = pd_info.get("reached", "")
+            row["pd_supporting_price"] = f"{pd_info['supporting_price']:.5f}" if pd_info.get("supporting_price") is not None else ""
+            row["pd_opposing_price"] = f"{pd_info['opposing_price']:.5f}" if pd_info.get("opposing_price") is not None else ""
+            row["pd_opposing_at_utc"] = wob.iso(pd_info.get("opposing_at"))
+            row["pd_midpoint"] = f"{pd_info['midpoint']:.5f}" if pd_info.get("midpoint") is not None else ""
+            row["pd_leg_range_pips"] = f"{pd_info['leg_range_pips']:.1f}" if pd_info.get("leg_range_pips") is not None else ""
+            row["pd_depth_pips"] = f"{pd_info['depth_pips']:.1f}" if pd_info.get("depth_pips") is not None else ""
             wr.writerow(row)
 
     print("Created:")
@@ -411,9 +491,17 @@ def main() -> int:
     print(f"Window: {window_start} -> {window_end}")
     print(f"{len(h4_bars)} 4H bars. Authorized: OB={len(drawn_ob)} RB={len(drawn_rb)} FVG={len(drawn_fvg)}. Shown in window: {len(focused)}.")
     bso_stages: Dict[str, int] = {}
-    for _z, _it, _parent_id, _reason, res, _ptype in bso_results:
+    pd_reached_count = 0
+    pd_known_count = 0
+    for _z, _it, _parent_id, _reason, res, _ptype, pd_info in bso_results:
         bso_stages[res.get("stage")] = bso_stages.get(res.get("stage"), 0) + 1
+        if pd_info.get("reached") is not None:
+            pd_known_count += 1
+            if pd_info["reached"]:
+                pd_reached_count += 1
     print(f"5m BSO on {len(bso_results)} drawn POIs: {bso_stages}")
+    print(f"Premium/discount reached: {pd_reached_count}/{pd_known_count} (of {len(bso_results)} total; "
+          f"{len(bso_results) - pd_known_count} had no protect_level/opposing swing to measure)")
     return 0
 
 
