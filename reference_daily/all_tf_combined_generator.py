@@ -102,10 +102,14 @@ def filter_to_date(engine, date_str: str, display_tz: ZoneInfo) -> None:
     ever sees them, so it needs no changes to the shared draw code.
 
     A swing/MSS counts as "on" the day if its confirmation falls inside
-    it. A POI counts as active if its box would visually overlap the
-    day: origin on or before day-end, AND (still open/never stopped, OR
-    its death -- impact time if impacted, else its stop candle's start
-    -- falls on or after day-start)."""
+    it. A POI counts as "on" the day only if something actually HAPPENED
+    to it that day -- it was created that day, OR it got impacted that
+    day. A zone just sitting there untouched from a much earlier day
+    (still technically "open", never closed) does NOT count -- the user
+    caught this directly: an RB from 2 Jan with no impact yet was still
+    showing on a 12 Jan view, off-screen and irrelevant, because "still
+    open" alone used to count as active. Being unresolved is not the
+    same as belonging to this day."""
     y, m, d = (int(x) for x in date_str.split("-"))
     day_start = datetime(y, m, d, 0, 0, 0, tzinfo=display_tz).astimezone(UTC)
     day_end = day_start + timedelta(days=1)
@@ -113,23 +117,15 @@ def filter_to_date(engine, date_str: str, display_tz: ZoneInfo) -> None:
     engine.events = [e for e in engine.events if day_start <= engine.w[e.confirm].start < day_end]
     engine.msses = [x for x in engine.msses if day_start <= engine.w[x.at].start < day_end]
 
-    def overlaps(origin, death):
-        if origin >= day_end:
-            return False
-        if death is not None and death < day_start:
-            return False
-        return True
+    def on_day(t):
+        return t is not None and day_start <= t < day_end
 
-    def death_of(z):
-        if z.impact_time is not None:
-            return z.impact_time
-        if 0 <= z.stop < len(engine.w):
-            return engine.w[z.stop].start
-        return None  # still open -- always overlaps any day up to "now"
+    def happened_today(origin, z):
+        return on_day(origin) or on_day(z.impact_time)
 
-    engine.ob_zones = [z for z in engine.ob_zones if overlaps(engine.w[z.candle].start, death_of(z))]
-    engine.rb_zones = [z for z in engine.rb_zones if overlaps(engine.w[z.candle].start, death_of(z))]
-    engine.fvg_zones = [z for z in engine.fvg_zones if overlaps(engine.w[z.left].start, death_of(z))]
+    engine.ob_zones = [z for z in engine.ob_zones if happened_today(engine.w[z.candle].start, z)]
+    engine.rb_zones = [z for z in engine.rb_zones if happened_today(engine.w[z.candle].start, z)]
+    engine.fvg_zones = [z for z in engine.fvg_zones if happened_today(engine.w[z.left].start, z)]
 
 
 def build_one(base: Path, engine, args, display_tz, tag: str) -> list[str]:
