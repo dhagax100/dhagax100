@@ -576,7 +576,6 @@ def build_trades_pine(trades: list[dict], display_tz: ZoneInfo) -> list[str]:
     draw-in-one-loop discipline as everything else here (CE10295)."""
     lines = [
         'bool showTrades = input.bool(true, "Show 5m trades", group="Trades")',
-        'bool on5 = timeframe.period == "5"',
     ]
     if not trades:
         lines.append('// no qualifying trades for this --show-date window')
@@ -605,7 +604,7 @@ def build_trades_pine(trades: list[dict], display_tz: ZoneInfo) -> list[str]:
         *wc.wrb.pack_array("trImpactX", "int", impact_x),
         *wc.wrb.pack_array("trEntryDisp", "string", entry_disp),
         f'var table trTable = table.new(position.bottom_right, 7, {len(trades) + 1}, border_width=1)',
-        'if barstate.islast and on5 and showTrades and array.size(trSide) > 0',
+        'if barstate.islast and onFive and showTrades and array.size(trSide) > 0',
         '    boxRightOffset = 2 * 60 * 60 * 1000',
         '    headers2 = array.from("Side", "Entry (RYD)", "Entry", "SL", "TP", "R (pips)", "POI")',
         '    for c = 0 to array.size(headers2) - 1',
@@ -713,6 +712,44 @@ def regate(body_lines: list[str], on_name: str) -> list[str]:
         ln = re.sub(r'^(\s*)if onWeekly$', rf'\1if {on_name}', ln)
         out.append(ln)
     return out
+
+
+def extract_poibox_block(body_lines: list[str], on_name: str) -> list[str]:
+    """Pulls out just the POI-box drawing section (the bare `if {on_name}`
+    block that calls f_drawPoiBox 3 times) from an already-built
+    per-timeframe body -- NOT the swing/MSS label block before it (that
+    one's own gate line has ` and array.size(...)` appended, so it never
+    matches the bare form here), and NOT the ledger-table block after it
+    (that one clears and repopulates the single shared `ledger` table,
+    and must stay owned by exactly one timeframe's own chart at a time,
+    never duplicated onto a projection). There are exactly two bare
+    `if {on_name}` lines in the generated template -- box-draw, then
+    table -- so the first-to-second span is exactly the box-draw block."""
+    bare = f"if {on_name}"
+    idxs = [i for i, ln in enumerate(body_lines) if ln.strip() == bare]
+    if len(idxs) < 2:
+        raise ValueError(f"expected 2 bare '{bare}' lines (box-draw, table) in body, found {len(idxs)}")
+    return body_lines[idxs[0]:idxs[1]]
+
+
+def project_poibox_block(block_lines: list[str], source_gate: str, source_tag: str,
+                          target_gate: str, settings_tag: str) -> list[str]:
+    """Re-shows a timeframe's own already-drawn POI boxes on a DIFFERENT
+    chart -- e.g. 4H's own OB/RB/FVG boxes also on the 5m chart, or 1H's
+    own also on the 5m chart -- so the higher-timeframe POI a trade is
+    actually being taken from is visible without switching charts.
+    Reuses the SAME already-declared data arrays as-is (Pine allows
+    reading an array from a second draw call; no redeclaration needed),
+    but swaps the gate to the target chart and the 5 filter inputs to an
+    INDEPENDENT settings group -- so toggling Side/Inspect-one/etc. for
+    this projected view never silently also changes the source
+    timeframe's own chart, same reasoning that gave Daily/4H/1H each
+    their own settings in the first place."""
+    text = "\n".join(block_lines)
+    text = re.sub(rf'^(\s*)if {re.escape(source_gate)}$', rf'\1if {target_gate}', text, flags=re.MULTILINE)
+    for name in sorted(_SHARED_INPUT_NAMES, key=len, reverse=True):
+        text = re.sub(rf'\b{source_tag}_{name}\b', f'{settings_tag}_{name}', text)
+    return ["if barstate.islast"] + text.split("\n")
 
 
 _PACK_DECL_RE = re.compile(r'^(\s*)var array<(\w+)> (\w+) = array\.new<\2>\(\)$')
@@ -825,15 +862,18 @@ def main() -> int:
         shared_input_lines = [ln for ln in header if ln.strip().startswith(input_line_prefixes)]
         header = [ln for ln in header if not ln.strip().startswith(input_line_prefixes)]
 
-        # Replace the 4 single-purpose timeframe bools with the 3 real ones
-        # this file actually uses (onD/onH4/onH1) -- drop onFive/on1m, they
-        # were leftover from a different, unused 5m/1m concept.
+        # Replace the single-purpose timeframe bools with the 4 real ones
+        # this file actually uses (onD/onH4/onH1/onFive) -- drop on1m,
+        # leftover from a different, unused 1m concept. onFive is real now:
+        # 4H/1H POIs project onto the 5m chart (see project_poibox_block),
+        # and the 5m trades table (build_trades_pine) also gates on it.
         new_header = []
         for ln in header:
             if ln.strip().startswith('bool onWeekly = timeframe.period =='):
                 new_header.append('bool onD = timeframe.period == "1D"')
                 new_header.append('bool onH4 = timeframe.period == "240"')
                 new_header.append('bool onH1 = timeframe.period == "60"')
+                new_header.append('bool onFive = timeframe.period == "5"')
             elif ln.strip().startswith('bool onH4 = timeframe.period ==') or \
                  ln.strip().startswith('bool onFive = timeframe.period ==') or \
                  ln.strip().startswith('bool on1m = timeframe.period =='):
@@ -842,17 +882,44 @@ def main() -> int:
                 new_header.append(ln)
         header = new_header
 
+        # Cross-timeframe context (2026-09-28): "the daily FVG we are
+        # trading from" should be visible on 4H/1H, and "the 1H OB/RB we
+        # are trading from" on 5m -- not just on their own native chart.
+        # Daily's own gate is simply widened to also fire on 4H/1H,
+        # reusing Daily's OWN settings group (no new group needed: it's
+        # the same POI data either way, and Daily's own Side/Focus/etc.
+        # already govern it regardless of which chart is open). 4H/1H
+        # projected onto 5m is different -- that needs its OWN
+        # independent settings group (see project_poibox_block), so
+        # toggling Side/Inspect-one/etc. for the 5m view never silently
+        # also changes the 4H or 1H chart's own display.
+        gate_by_tag = {"d": "(onD or onH4 or onH1)", "h4": "onH4", "h1": "onH1"}
+
         bodies = []
+        own_maxvals = {}
         for tag, tf_period, title in TIMEFRAMES:
             own_maxval = extract_maxval(raw_lines[tag][:split_idx])
+            own_maxvals[tag] = own_maxval
             own_inputs = build_own_inputs(shared_input_lines, tag, title, own_maxval, args.default_side)
             body = own_inputs + raw_lines[tag][split_idx:]
             body = rename_arrays(body, tag)
             body = inject_input_params(body, tag)
-            on_name = {"d": "onD", "h4": "onH4", "h1": "onH1"}[tag]
-            body = regate(body, on_name)
+            body = regate(body, gate_by_tag[tag])
             body = collapse_pack_blocks(body)
             bodies.append(body)
+
+        # 5m's own settings group ("just like other timeframes have") --
+        # controls the projected 4H+1H POI boxes shown on the 5m chart,
+        # independent of 4H's/1H's own settings. maxval covers whichever
+        # source has more zones, since one group filters both projections.
+        m5_maxval = max(own_maxvals["h4"], own_maxvals["h1"])
+        m5_inputs = build_own_inputs(shared_input_lines, "m5", "5m", m5_maxval, args.default_side)
+
+        # Project 4H's and 1H's own POI boxes onto the 5m chart, reusing
+        # their already-built (renamed, gated) bodies' data arrays as-is.
+        h4_body, h1_body = bodies[1], bodies[2]
+        h4_on5 = project_poibox_block(extract_poibox_block(h4_body, "onH4"), "onH4", "h4", "onFive", "m5")
+        h1_on5 = project_poibox_block(extract_poibox_block(h1_body, "onH1"), "onH1", "h1", "onFive", "m5")
 
         # Patch the shared f_drawPoiBox definition to take the 4 inputs as
         # real parameters instead of closing over a single global set (see
@@ -897,9 +964,10 @@ def main() -> int:
         header = header + push_fns
 
         out_name = "all_tf_combined_viewer.pine"
-        final_lines = header
+        final_lines = header + m5_inputs
         for body in bodies:
             final_lines += body
+        final_lines += h4_on5 + h1_on5
         final_lines += collapse_pack_blocks(build_trades_pine(trades, display_tz))
         (base / out_name).write_text("\n".join(final_lines), encoding="utf-8")
 
