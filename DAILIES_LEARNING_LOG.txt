@@ -9,6 +9,10 @@ made, and real case studies. The code itself (with full technical detail
 and code comments) is reference_daily/all_tf_combined_generator.py — this
 file is the human-readable version of what that code does and why.
 
+Every run also now produces 5m_trades_ledger.csv, one row per 5m attempt
+with its stage/reason — that's the file to open first when a day's result
+needs checking, before writing anything new.
+
 
 CURRENT RULE SET (as of 2026-09-28)
 ------------------------------------
@@ -89,6 +93,26 @@ DEDUP
 
 SESSION LOG (newest first)
 ----------------------------
+
+2026-09-28 — Added the missing 5m logs (audit + trades ledger)
+- Gap found: Daily/4H/1H each got their own swings.csv/report.txt, but
+  the 5m engine (used internally to compute trades) never wrote one,
+  and the entry/SL/TP/invalidation facts behind each drawn trade only
+  existed baked into the .pine file — no audit trail to open later.
+- Added, produced automatically by the same command you already run
+  (no extra flags needed):
+  - 5m_tf_swings.csv / 5m_tf_report.txt — same convention as the
+    d/h4/h1 files, the 5m swing/MSS structure the trade engine itself
+    used that day.
+  - 5m_trades_ledger.csv — one row per 5m attempt on every POI that
+    reached the premium/discount gate that day, ENTERED or not, with
+    its stage (ENTERED / NO_RESTING_SWING / NO_CANDIDATE / POI_BREACHED
+    / NO_ENTRY_IN_WINDOW / NO_SL_POOL / ZERO_RISK), invalidation time +
+    reason, entry/SL/TP, result, and R-multiple. This is the file that
+    answers "why didn't this POI trade" going forward — no more
+    one-off scripts needed to reconstruct it.
+- Verified from the actual command line for 12 Jan 2026: the ledger's
+  3 rows matched the earlier hand-diagnostic exactly.
 
 2026-09-28 — First full case study: 12 January 2026, real data
 - Bias: SELL. Window: 11:00-21:00 Riyadh (winter).
