@@ -73,15 +73,15 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--pine-fvgs", type=int, default=150, choices=range(1, 451))
     p.add_argument("--pine-table", type=int, default=20, choices=range(1, 21))
     p.add_argument("--h4-anchor-hour", type=int, default=17, choices=range(24))
-    p.add_argument("--h4-pine-cap", type=int, default=60, choices=range(1, 451),
+    p.add_argument("--h4-pine-cap", type=int, default=25, choices=range(1, 451),
                     help="How many of the most recent authorized 4H POIs to actually DRAW on the "
                          "chart/table. Now that every gate is covered (not just gate 1), the full "
                          "count can be in the hundreds -- packing all of them into the Pine script "
                          "hits TradingView's CE10295 'main body too long' limit. This only limits "
                          "the chart; the ledger CSVs always contain every POI and every trade "
                          "regardless of this cap.")
-    p.add_argument("--h4-pine-labels", type=int, default=30, choices=range(1, 161))
-    p.add_argument("--bso-pine-cap", type=int, default=60,
+    p.add_argument("--h4-pine-labels", type=int, default=20, choices=range(1, 161))
+    p.add_argument("--bso-pine-cap", type=int, default=25,
                     help="How many of the most recent 5m BSO entry attempts to actually DRAW on "
                          "the chart/table (same reasoning as --h4-pine-cap). The ledger CSV "
                          "(five_bso_combined_ledger.csv) always contains every attempt regardless.")
