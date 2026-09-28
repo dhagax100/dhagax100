@@ -22,8 +22,11 @@ merges them into one file:
     onWeekly the standalone files used -- so only the block matching the
     chart you're currently on ever draws.
 
-Writes, next to the CSV: all_tf_combined_viewer.pine -- same fixed name
-every run, overwritten in place.
+Writes, next to the CSV -- same fixed names every run, overwritten in place:
+  all_tf_combined_viewer.pine   the one script (Daily/4H/1H, self-detecting)
+  d_tf_swings.csv / d_tf_report.txt     Daily structure, for audit
+  h4_tf_swings.csv / h4_tf_report.txt   4H structure, for audit
+  h1_tf_swings.csv / h1_tf_report.txt   1H structure, for audit
 
 Run (flat folder, same convention as every other generator here):
 
@@ -208,9 +211,16 @@ def main() -> int:
         print("Created:")
         print(f"  {out_name}   <-- one script, draws the right timeframe's own "
               "structure depending on which chart (Daily/4H/1H) you have open")
+        bar_word = {"d": "days", "h4": "4h_bars", "h1": "1h_bars"}
         for tag, tf_period, title in TIMEFRAMES:
             e = engines[tag]
-            print(f"  {title}: OB={len(e.ob_zones)} RB={len(e.rb_zones)} FVG={len(e.fvg_zones)}")
+            swings_name = f"{tag}_tf_swings.csv"
+            report_name = f"{tag}_tf_report.txt"
+            dc.write_swings_csv(base, e, display_tz, swings_name)
+            dc.write_report(base, minutes, bars_by_tag[tag], e, display_tz, report_name,
+                             label=title, bar_word=bar_word[tag])
+            print(f"  {swings_name} / {report_name}   ({title}: OB={len(e.ob_zones)} "
+                  f"RB={len(e.rb_zones)} FVG={len(e.fvg_zones)})")
         if warnings:
             print(f"({len(warnings)} data warnings -- see load_minutes output)")
         return 0
