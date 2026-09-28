@@ -87,8 +87,35 @@ def aggregate_days(minutes: List["wob.Minute"], close_zone: ZoneInfo, close_hour
     return days
 
 
+def aggregate_hours(minutes: List["wob.Minute"], hours: int) -> List["wob.Week"]:
+    """Same aggregation loop again, for intraday bars (4H, 1H, ...): plain
+    UTC-clock-aligned buckets (00:00, 04:00, 08:00... for hours=4; every
+    hour on the hour for hours=1) -- the same boundary convention
+    TradingView itself uses for standard forex 4H/1H candles, not the
+    17:00-NY forex-day anchor aggregate_days() uses (that anchor is a
+    daily/weekly-specific convention, not an intraday one)."""
+    bars: List["wob.Week"] = []
+    i = 0
+    step = timedelta(hours=hours)
+    while i < len(minutes):
+        t = minutes[i].t
+        epoch_hours = int(t.timestamp() // 3600)
+        bucket_start_hours = (epoch_hours // hours) * hours
+        start = datetime(1970, 1, 1, tzinfo=UTC) + timedelta(hours=bucket_start_hours)
+        end = start + step
+        j = i + 1
+        high, low = minutes[i].h, minutes[i].l
+        while j < len(minutes) and minutes[j].t < end:
+            high = max(high, minutes[j].h)
+            low = min(low, minutes[j].l)
+            j += 1
+        bars.append(wob.Week(start, end, minutes[i].o, high, low, minutes[j - 1].c, i, j))
+        i = j
+    return bars
+
+
 def write_report(base: Path, minutes, days, e: "wc.WeeklyCombinedEngine", display_zone: ZoneInfo,
-                  out_name: str = "daily_combined_report.txt") -> None:
+                  out_name: str = "daily_combined_report.txt", label: str = "DAILY", bar_word: str = "days") -> None:
     n_high = sum(1 for x in e.events if x.kind == 0)
     n_low = sum(1 for x in e.events if x.kind == 1)
     n_up = sum(1 for x in e.msses if x.up)
@@ -106,9 +133,9 @@ def write_report(base: Path, minutes, days, e: "wc.WeeklyCombinedEngine", displa
     fvg_counts = counts_for(e.fvg_zones, wc.FVG_STATE, wc.fvg_status)
 
     rows = [
-        "DAILY COMBINED (OB+RB+FVG unified) REFERENCE RUN -- Dhagax Dailies",
+        f"{label} COMBINED (OB+RB+FVG unified) REFERENCE RUN -- Dhagax Dailies",
         f"minute_coverage={wob.iso(minutes[0].t)} to {wob.iso(minutes[-1].t)}",
-        f"minutes={len(minutes):,}; days={len(days):,}",
+        f"minutes={len(minutes):,}; {bar_word}={len(days):,}",
         f"swing_highs={n_high:,}; swing_lows={n_low:,}; mss_up={n_up:,}; mss_down={n_down:,}",
         "",
         "OB counts (non-rejected): " + ", ".join(f"{k}={v}" for k, v in ob_counts.items()),
