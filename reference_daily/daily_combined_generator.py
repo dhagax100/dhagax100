@@ -151,10 +151,10 @@ def parse_args():
                          "convention -- same clock weekly already uses for "
                          "its Sunday-open boundary).")
     p.add_argument("--display-tz", default="Asia/Riyadh")
-    p.add_argument("--pine-labels", type=int, default=60, choices=range(1, 161))
-    p.add_argument("--pine-obs", type=int, default=80, choices=range(1, 451))
-    p.add_argument("--pine-rbs", type=int, default=80, choices=range(1, 451))
-    p.add_argument("--pine-fvgs", type=int, default=80, choices=range(1, 451))
+    p.add_argument("--pine-labels", type=int, default=160, choices=range(1, 161))
+    p.add_argument("--pine-obs", type=int, default=200, choices=range(1, 451))
+    p.add_argument("--pine-rbs", type=int, default=200, choices=range(1, 451))
+    p.add_argument("--pine-fvgs", type=int, default=200, choices=range(1, 451))
     p.add_argument("--pine-table", type=int, default=20, choices=range(1, 21))
     return p.parse_args()
 

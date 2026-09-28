@@ -1056,7 +1056,8 @@ def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int
         "float lowGap = ta.atr(14) * 0.08",
         "string focusPoi = input.string(\"ALL\", \"Focus POI\", options=[\"ALL\", \"OB\", \"RB\", \"FVG\"], group=\"Combined settings\", tooltip=\"ALL draws every POI type and shows every row in the table. Choosing one shows only that type's boxes and table rows.\")",
         "bool inspectOnePoi = input.bool(false, \"Inspect one POI only\", group=\"Combined settings\", tooltip=\"Narrows down to a single zone, picked by 'POI from last' below. With Focus POI = ALL, ranking is across all three types combined (1 = the most recent zone of any kind); with a specific type picked, ranking is within that type only.\")",
-        f"int poiFromLast = input.int(1, \"POI from last\", minval=1, maxval={max_global_rank}, group=\"Combined settings\", tooltip=\"1 = the latest zone (of the focused type if one is picked above, or of ANY type if Focus POI is ALL), 2 = the one before it, and so on.\")",
+        "bool countFromStart = input.bool(false, \"Count from the start (not the end)\", group=\"Combined settings\", tooltip=\"Off (default): 'POI from last' counts backward from the newest zone (1 = newest). On: it counts forward from the very first zone in the data (1 = oldest).\")",
+        f"int poiFromLast = input.int(1, \"POI from last\", minval=1, maxval={max_global_rank}, group=\"Combined settings\", tooltip=\"1 = the latest zone (of the focused type if one is picked above, or of ANY type if Focus POI is ALL), 2 = the one before it, and so on. Flip direction with 'Count from the start' above.\")",
         f"var table ledger = table.new(position.top_right, 11, {table_cap + 1}, border_width=1)",
         "bool onWeekly = timeframe.period == \"1W\"",
         "bool onH4 = timeframe.period == \"240\"",
@@ -1076,9 +1077,11 @@ def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int
         "            hiStamp = array.get(impStamp, hi)",
         "            if na(array.get(impX, hi)) and time <= hiStamp and hiStamp < time_close",
         "                array.set(impX, hi, time)",
-        "f_drawPoiBox(left, top, bottom, fallbackRight, hasImp, impX, colCode, rank, grank, dashed, filled) =>",
+        "f_drawPoiBox(left, top, bottom, fallbackRight, hasImp, impX, colCode, rank, grank, total, gTotal, dashed, filled) =>",
         "    for i = 0 to array.size(left) - 1",
-        "        if not inspectOnePoi or (focusPoi == \"ALL\" ? array.get(grank, i) == poiFromLast : array.get(rank, i) == poiFromLast)",
+        "        effRank = countFromStart ? total - array.get(rank, i) + 1 : array.get(rank, i)",
+        "        effGRank = countFromStart ? gTotal - array.get(grank, i) + 1 : array.get(grank, i)",
+        "        if not inspectOnePoi or (focusPoi == \"ALL\" ? effGRank == poiFromLast : effRank == poiFromLast)",
         "            boxRight = array.get(hasImp, i) and not na(array.get(impX, i)) ? array.get(impX, i) : array.get(fallbackRight, i)",
         f"            boxCol = {colour_ternary('array.get(colCode, i)')}",
         "            borderStyle = dashed ? line.style_dashed : line.style_solid",
@@ -1178,12 +1181,14 @@ def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int
     # it just must not limit which rows are searchable.
     table_rows = [r for _, r in all_rows]
 
-    t_poi, t_id, t_type, t_side, t_bottom, t_top, t_origin, t_trigger, t_eligible, t_impact, t_status, t_bg, t_rank, t_grank = ([] for _ in range(14))
+    row_total = {"OB": len(engine.ob_zones), "RB": len(engine.rb_zones), "FVG": len(engine.fvg_zones)}
+    t_poi, t_id, t_type, t_side, t_bottom, t_top, t_origin, t_trigger, t_eligible, t_impact, t_status, t_bg, t_rank, t_grank, t_total = ([] for _ in range(15))
     for r in table_rows:
         t_poi.append(r["poi"]); t_id.append(r["id"]); t_type.append(r["type"]); t_side.append(r["side"])
         t_bottom.append(r["bottom"]); t_top.append(r["top"]); t_origin.append(r["origin"])
         t_trigger.append(r["trigger"]); t_eligible.append(r["eligible"]); t_impact.append(r["impact"])
         t_status.append(r["status"]); t_bg.append(r["bg"]); t_rank.append(r["rank"]); t_grank.append(r["grank"])
+        t_total.append(row_total[r["poi"]])
 
     lines += [
         *pack_array("structX", "int", struct_x),
@@ -1207,7 +1212,7 @@ def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int
         *pack_array("tSide", "string", t_side), *pack_array("tBottom", "string", t_bottom), *pack_array("tTop", "string", t_top),
         *pack_array("tOrigin", "string", t_origin), *pack_array("tTrigger", "string", t_trigger), *pack_array("tEligible", "string", t_eligible),
         *pack_array("tImpact", "string", t_impact), *pack_array("tStatus", "string", t_status), *pack_array("tBgCode", "string", t_bg),
-        *pack_array("tRank", "int", t_rank), *pack_array("tGRank", "int", t_grank),
+        *pack_array("tRank", "int", t_rank), *pack_array("tGRank", "int", t_grank), *pack_array("tTotal", "int", t_total),
         f"var array<int> obImpactX = array.new<int>({len(ob_left)}, na)",
         f"var array<int> rbImpactX = array.new<int>({len(rb_left)}, na)",
         f"var array<int> fvgImpactX = array.new<int>({len(fvg_left)}, na)",
@@ -1222,11 +1227,11 @@ def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int
         "            label.new(array.get(structX, i), structYY, array.get(structTxt, i), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=structCol, size=size.small)",
         "    if onWeekly or onH4 or onFive",
         "        if focusPoi == \"ALL\" or focusPoi == \"OB\"",
-        "            f_drawPoiBox(obLeft, obTop, obBottom, obFallbackRight, obHasImpact, obImpactX, obColCode, obRank, obGRank, false, false)",
+        f"            f_drawPoiBox(obLeft, obTop, obBottom, obFallbackRight, obHasImpact, obImpactX, obColCode, obRank, obGRank, {len(engine.ob_zones)}, {max_global_rank}, false, false)",
         "        if focusPoi == \"ALL\" or focusPoi == \"RB\"",
-        "            f_drawPoiBox(rbLeft, rbTop, rbBottom, rbFallbackRight, rbHasImpact, rbImpactX, rbColCode, rbRank, rbGRank, true, false)",
+        f"            f_drawPoiBox(rbLeft, rbTop, rbBottom, rbFallbackRight, rbHasImpact, rbImpactX, rbColCode, rbRank, rbGRank, {len(engine.rb_zones)}, {max_global_rank}, true, false)",
         "        if focusPoi == \"ALL\" or focusPoi == \"FVG\"",
-        "            f_drawPoiBox(fvgLeft, fvgTop, fvgBottom, fvgFallbackRight, fvgHasImpact, fvgImpactX, fvgColCode, fvgRank, fvgGRank, false, true)",
+        f"            f_drawPoiBox(fvgLeft, fvgTop, fvgBottom, fvgFallbackRight, fvgHasImpact, fvgImpactX, fvgColCode, fvgRank, fvgGRank, {len(engine.fvg_zones)}, {max_global_rank}, false, true)",
         "    if onWeekly",
         f"        table.clear(ledger, 0, 0, 10, {table_cap})",
         "        headers = array.from(\"POI\", \"ID\", \"Type\", \"Side\", \"Bottom\", \"Top\", \"Origin (RYD)\", \"Trigger (RYD)\", \"Eligible (RYD)\", \"Impact (RYD)\", \"Status\")",
@@ -1234,7 +1239,9 @@ def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int
         "            table.cell(ledger, c, 0, array.get(headers, c), text_color=color.white, bgcolor=color.new(color.green, 15))",
         "        rowN = 0",
         "        for i = 0 to array.size(tId) - 1",
-        f"            if rowN < {table_cap} and (focusPoi == \"ALL\" or array.get(tPoi, i) == focusPoi) and (not inspectOnePoi or (focusPoi == \"ALL\" ? array.get(tGRank, i) == poiFromLast : array.get(tRank, i) == poiFromLast))",
+        "            tEffRank = countFromStart ? array.get(tTotal, i) - array.get(tRank, i) + 1 : array.get(tRank, i)",
+        f"            tEffGRank = countFromStart ? {max_global_rank} - array.get(tGRank, i) + 1 : array.get(tGRank, i)",
+        f"            if rowN < {table_cap} and (focusPoi == \"ALL\" or array.get(tPoi, i) == focusPoi) and (not inspectOnePoi or (focusPoi == \"ALL\" ? tEffGRank == poiFromLast : tEffRank == poiFromLast))",
         "                rowN += 1",
         "                table.cell(ledger, 0, rowN, array.get(tPoi, i), text_color=color.black, bgcolor=na)",
         "                table.cell(ledger, 1, rowN, array.get(tId, i), text_color=color.black, bgcolor=na)",
