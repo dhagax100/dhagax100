@@ -102,14 +102,14 @@ def filter_to_date(engine, date_str: str, display_tz: ZoneInfo) -> None:
     ever sees them, so it needs no changes to the shared draw code.
 
     A swing/MSS counts as "on" the day if its confirmation falls inside
-    it. A POI counts as "on" the day only if something actually HAPPENED
-    to it that day -- it was created that day, OR it got impacted that
-    day. A zone just sitting there untouched from a much earlier day
-    (still technically "open", never closed) does NOT count -- the user
-    caught this directly: an RB from 2 Jan with no impact yet was still
-    showing on a 12 Jan view, off-screen and irrelevant, because "still
-    open" alone used to count as active. Being unresolved is not the
-    same as belonging to this day."""
+    it. A POI counts as "on" the day if ANY of its real lifecycle events
+    landed that day -- created, triggered, made eligible, impacted, or
+    breached/stopped (STRAND/STRUCTURAL_BREACH, via its stop candle) --
+    not just origin-or-impact (user caught that too: a POI can be
+    relevant to a day through its trigger or eligibility moment even
+    with no impact that day). A zone just sitting there with NONE of
+    these landing that day does NOT count, no matter how "still open"
+    it is -- being unresolved is not the same as belonging to this day."""
     y, m, d = (int(x) for x in date_str.split("-"))
     day_start = datetime(y, m, d, 0, 0, 0, tzinfo=display_tz).astimezone(UTC)
     day_end = day_start + timedelta(days=1)
@@ -121,11 +121,27 @@ def filter_to_date(engine, date_str: str, display_tz: ZoneInfo) -> None:
         return t is not None and day_start <= t < day_end
 
     def happened_today(origin, z):
-        return on_day(origin) or on_day(z.impact_time)
+        stop_t = engine.w[z.stop].start if 0 <= z.stop < len(engine.w) else None
+        return any(on_day(t) for t in (
+            origin, getattr(z, "trigger_time", None), getattr(z, "eligible_time", None),
+            z.impact_time, stop_t,
+        ))
 
     engine.ob_zones = [z for z in engine.ob_zones if happened_today(engine.w[z.candle].start, z)]
     engine.rb_zones = [z for z in engine.rb_zones if happened_today(engine.w[z.candle].start, z)]
     engine.fvg_zones = [z for z in engine.fvg_zones if happened_today(engine.w[z.left].start, z)]
+
+
+def exclude_old_intraday_zones(engine) -> None:
+    """User's absolute rule (2026-09-28): "old POIs are never shown or
+    used in hourly and minute timeframes. period." OOB/ORB/OFVG (the
+    "old" state -- stranded, untouched opposing POI from before the
+    current trend) is a real, tradeable category at Daily/Weekly per
+    SPEC.md SS12-15, but not here: this drops it entirely for H4/H1,
+    independent of --show-date, unconditional."""
+    engine.ob_zones = [z for z in engine.ob_zones if wc.ob_status(z) != "OOB"]
+    engine.rb_zones = [z for z in engine.rb_zones if wc.rb_status(z) != "ORB"]
+    engine.fvg_zones = [z for z in engine.fvg_zones if wc.fvg_status(z) != "OFVG"]
 
 
 def build_one(base: Path, engine, args, display_tz, tag: str) -> list[str]:
@@ -238,6 +254,8 @@ def main() -> int:
         for tag, tf_period, title in TIMEFRAMES:
             engine = wc.WeeklyCombinedEngine(minutes, bars_by_tag[tag])
             engine.run()
+            if tag in ("h4", "h1"):
+                exclude_old_intraday_zones(engine)
             if args.show_date:
                 filter_to_date(engine, args.show_date, display_tz)
             engines[tag] = engine
