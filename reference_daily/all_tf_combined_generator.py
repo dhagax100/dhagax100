@@ -149,40 +149,72 @@ def in_trading_window(t: "datetime", display_tz: ZoneInfo) -> bool:
 
 
 def filter_to_window(engine, win_start: "datetime", win_end: "datetime") -> None:
-    """Keep only what's actually active inside [win_start, win_end). This
-    mutates the engine's own zone/event lists in place, before
+    """Single-window convenience wrapper around filter_to_windows() --
+    see there for what actually counts as "in the window.\""""
+    filter_to_windows(engine, [(win_start, win_end)])
+
+
+def _dates_between(since_str: str, until_str: str) -> list[str]:
+    y1, m1, d1 = (int(x) for x in since_str.split("-"))
+    y2, m2, d2 = (int(x) for x in until_str.split("-"))
+    cur = datetime(y1, m1, d1)
+    end = datetime(y2, m2, d2)
+    out = []
+    while cur <= end:
+        out.append(cur.date().isoformat())
+        cur += timedelta(days=1)
+    return out
+
+
+def filter_to_windows(engine, windows: list[tuple["datetime", "datetime"]]) -> None:
+    """Keep only what's actually active inside ANY of `windows` -- a list
+    of DISCONTINUOUS ranges, one real trading session per day, not one
+    giant span bridging every overnight/Asia gap in between (2026-09-29,
+    user's own words: "I do not want to see the 1h information outside
+    the trading windows in any day unless it affects the info inside
+    trading window hours" -- a single-window --since range was wrongly
+    treating the whole multi-day span, nights included, as "in window,"
+    so a 1H POI created AND impacted entirely during an Asia session
+    showed up even though it never touched a real trading session).
+    This mutates the engine's own zone/event lists in place, before
     write_combined_pine ever sees them, so it needs no changes to the
     shared draw code.
 
     A POI counts as "in the window" if ANY of its real lifecycle events
-    landed inside it -- created, triggered, made eligible, impacted, or
-    breached/stopped (STRAND/STRUCTURAL_BREACH, via its stop candle).
+    landed inside ANY window -- created, triggered, made eligible,
+    impacted, or breached/stopped (STRAND/STRUCTURAL_BREACH, via its
+    stop candle). This is exactly the exception the user asked to keep:
+    a POI created in Asia but IMPACTED inside London/NY hours still
+    shows, because its impact event alone already lands in a window.
 
     A swing/MSS counts as "in the window" if its confirmation falls
-    inside it, OR it's the single most recent swing high, most recent
-    swing low, or most recent MSS confirmed BEFORE the window started --
-    the carried-in context every in-window POI's protected level and
-    current trend are actually measured against. Nothing after the
-    window closes shows at all, structure or POI alike -- per the user's
-    explicit "I do not want to see any info ... after the trading ends.\""""
-    events_in = [e for e in engine.events if win_start <= engine.w[e.confirm].start < win_end]
-    prior_highs = [e for e in engine.events if e.kind == 0 and engine.w[e.confirm].start < win_start]
-    prior_lows = [e for e in engine.events if e.kind == 1 and engine.w[e.confirm].start < win_start]
+    inside any window, OR it's the single most recent swing high, most
+    recent swing low, or most recent MSS confirmed BEFORE the very
+    FIRST window started -- the carried-in context the first in-window
+    POI's protected level and current trend are actually measured
+    against. Nothing after the last window closes shows at all,
+    structure or POI alike -- per the user's explicit "I do not want to
+    see any info ... after the trading ends.\""""
+    first_start = windows[0][0]
+
+    def in_any(t):
+        return t is not None and any(s <= t < e for s, e in windows)
+
+    events_in = [e for e in engine.events if in_any(engine.w[e.confirm].start)]
+    prior_highs = [e for e in engine.events if e.kind == 0 and engine.w[e.confirm].start < first_start]
+    prior_lows = [e for e in engine.events if e.kind == 1 and engine.w[e.confirm].start < first_start]
     carry_in = ([max(prior_highs, key=lambda e: engine.w[e.confirm].start)] if prior_highs else []) + \
                ([max(prior_lows, key=lambda e: engine.w[e.confirm].start)] if prior_lows else [])
     engine.events = sorted(events_in + carry_in, key=lambda e: engine.w[e.confirm].start)
 
-    mss_in = [x for x in engine.msses if win_start <= engine.w[x.at].start < win_end]
-    prior_mss = [x for x in engine.msses if engine.w[x.at].start < win_start]
+    mss_in = [x for x in engine.msses if in_any(engine.w[x.at].start)]
+    prior_mss = [x for x in engine.msses if engine.w[x.at].start < first_start]
     mss_carry_in = [max(prior_mss, key=lambda x: engine.w[x.at].start)] if prior_mss else []
     engine.msses = sorted(mss_in + mss_carry_in, key=lambda x: engine.w[x.at].start)
 
-    def in_window(t):
-        return t is not None and win_start <= t < win_end
-
     def happened_in_window(origin, z):
         stop_t = engine.w[z.stop].start if 0 <= z.stop < len(engine.w) else None
-        return any(in_window(t) for t in (
+        return any(in_any(t) for t in (
             origin, getattr(z, "trigger_time", None), getattr(z, "eligible_time", None),
             z.impact_time, stop_t,
         ))
@@ -197,17 +229,15 @@ def filter_to_date_range(engine, since_str: str, until_str: str, display_tz: Zon
     (2026-09-29, user's own words: "day 13 is with day 12" -- a single
     day shown in a vacuum is not how this system is actually traded:
     every new day carries forward what's still alive from the ones
-    before it, and the chart should too). The narrow real trading window
-    (10:00-20:00 / 11:00-21:00 Riyadh, see trading_window()) -- NOT the
-    whole calendar day. Different from --as-of, which keeps everything
-    ACCUMULATED up to that day (so a swing from three months earlier
-    still shows). `since_str` is the FIRST day's own trading-window
-    open, `until_str` (== --show-date) is the LAST day's own
-    trading-window close -- when they're the same day (--since omitted)
-    this is exactly the single-day window it always was."""
-    win_start, _ = trading_window(since_str, display_tz)
-    _, win_end = trading_window(until_str, display_tz)
-    filter_to_window(engine, win_start, win_end)
+    before it, and the chart should too). ONE real trading window
+    (10:00-20:00 / 11:00-21:00 Riyadh, see trading_window()) PER DAY in
+    the range -- not the whole calendar day, and not one span bridging
+    every night in between (see filter_to_windows()). `since_str` is the
+    FIRST day, `until_str` (== --show-date) is the LAST -- when they're
+    the same day (--since omitted) this is exactly the single-day window
+    it always was."""
+    windows = [trading_window(d, display_tz) for d in _dates_between(since_str, until_str)]
+    filter_to_windows(engine, windows)
 
 
 def filter_to_calendar_range(engine, since_str: str, until_str: str, display_tz: ZoneInfo) -> None:
@@ -1210,8 +1240,8 @@ def main() -> int:
 
         bars_by_tag = {
             "d": dc.aggregate_days(minutes, close_tz, args.day_close_hour),
-            "h4": dc.aggregate_hours(minutes, 4),
-            "h1": dc.aggregate_hours(minutes, 1),
+            "h4": dc.aggregate_hours(minutes, 4, close_tz, args.day_close_hour),
+            "h1": dc.aggregate_hours(minutes, 1, close_tz, args.day_close_hour),
         }
 
         mt_all = [m.t for m in minutes]

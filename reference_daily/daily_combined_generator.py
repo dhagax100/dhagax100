@@ -87,21 +87,29 @@ def aggregate_days(minutes: List["wob.Minute"], close_zone: ZoneInfo, close_hour
     return days
 
 
-def aggregate_hours(minutes: List["wob.Minute"], hours: int) -> List["wob.Week"]:
-    """Same aggregation loop again, for intraday bars (4H, 1H, ...): plain
-    UTC-clock-aligned buckets (00:00, 04:00, 08:00... for hours=4; every
-    hour on the hour for hours=1) -- the same boundary convention
-    TradingView itself uses for standard forex 4H/1H candles, not the
-    17:00-NY forex-day anchor aggregate_days() uses (that anchor is a
-    daily/weekly-specific convention, not an intraday one)."""
+def aggregate_hours(minutes: List["wob.Minute"], hours: int,
+                     close_zone: ZoneInfo, close_hour: int) -> List["wob.Week"]:
+    """Same aggregation loop again, for intraday bars (4H, 1H, ...) --
+    anchored to the SAME 17:00-NY forex-day rollover aggregate_days()
+    uses (via forex_day_start()), not plain UTC-epoch buckets
+    (2026-09-29, real bug the user caught directly against their own
+    TradingView/FXCM chart: winter 4H candles there open at 01:00,
+    05:00, 09:00... Riyadh -- the 17:00 NY close rolled into Riyadh time
+    -- not 03:00/07:00/11:00... which is what UTC-midnight-epoch
+    bucketing (00:00/04:00/08:00 UTC) actually produces. Every 4H OB/RB/
+    FVG zone was being computed against the WRONG candle boundaries.
+    1H is unaffected in practice -- 17:00 NY always lands exactly on an
+    integer UTC hour in both DST states, so hour-aligned epoch buckets
+    already coincided with the real 1H grid -- but this is now anchored
+    the same way for both, so there's only one boundary rule to trust)."""
     bars: List["wob.Week"] = []
     i = 0
     step = timedelta(hours=hours)
     while i < len(minutes):
         t = minutes[i].t
-        epoch_hours = int(t.timestamp() // 3600)
-        bucket_start_hours = (epoch_hours // hours) * hours
-        start = datetime(1970, 1, 1, tzinfo=UTC) + timedelta(hours=bucket_start_hours)
+        day_start = forex_day_start(t, close_zone, close_hour)
+        bucket_index = int((t - day_start).total_seconds() // 3600 // hours)
+        start = day_start + bucket_index * step
         end = start + step
         j = i + 1
         high, low = minutes[i].h, minutes[i].l

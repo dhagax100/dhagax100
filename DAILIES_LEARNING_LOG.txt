@@ -28,6 +28,14 @@ SESSIONS / TRADING WINDOW
 - Asia is liquidity-grab only — never an entry session.
 - Nothing before the window opens or after it closes counts: no setup,
   no entry, no display.
+- 4H candles anchor to the same 17:00-NY forex-day rollover as Daily —
+  winter grid: 01:00/05:00/09:00/13:00/17:00/21:00 Riyadh, matching the
+  real FXCM/TradingView chart, not plain UTC-midnight buckets.
+- Multi-day display (--since) never bridges the overnight Asia gap
+  between days as if it were "in window" — each day's own real session
+  is checked separately. A POI still shows if it's created in Asia but
+  IMPACTS inside a real session; one that never touches any session at
+  all doesn't show, on any day.
 
 POI ELIGIBILITY
 - A POI only counts if some real lifecycle event (trigger, eligible,
@@ -196,6 +204,39 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 
 SESSION LOG (newest first)
 ----------------------------
+
+2026-09-29 — Fixed 4H candle boundaries; fixed multi-day display bleeding through Asia-hours gaps
+- User caught this directly against their own TradingView/FXCM chart:
+  winter 4H candles there open at 01:00, 05:00, 09:00, 13:00, 17:00,
+  21:00 Riyadh (the 17:00 NY close rolled into Riyadh time), not
+  03:00/07:00/11:00/15:00/19:00/23:00, which is what plain UTC-midnight
+  bucketing (00:00/04:00/08:00 UTC) actually produces. Every 4H OB/RB/
+  FVG zone was being built against the WRONG candle boundaries this
+  whole time. Fixed: 4H (and 1H, for consistency, though 1H was already
+  correct in practice) bars now anchor to the same 17:00-NY forex-day
+  rollover Daily bars already use, not UTC-epoch buckets. Real,
+  material effect: H4 structure for 12-13 Jan changed from OB=1/RB=2/
+  FVG=1 to OB=2/RB=3/FVG=2 once recomputed on the correct grid -- this
+  is likely where the 4H POI the user believed was missing actually
+  lives; needs re-checking against the corrected chart, not the old one.
+- Separately, --since's multi-day range had a real display bug: it
+  built ONE contiguous [first day's open, last day's close) window,
+  which meant every overnight Asia gap in between counted as "in
+  window" too -- so a 1H POI created AND impacted entirely inside an
+  Asia session (never touching a real trading session on either day)
+  still showed on the chart/table. User's own rule, restated exactly:
+  "I do not want to see the 1h information outside the trading windows
+  in any day unless it affects the info inside trading window hours,
+  like 1h POI created in Asia but impacted in London." Fixed:
+  filter_to_windows() now takes ONE real trading-session window PER DAY
+  in the range (a list, not a single span) -- a POI shows only if some
+  real lifecycle event lands in ANY of those per-day sessions; a POI
+  created in Asia but impacting inside a session still shows (that's
+  the impact event itself landing in-window, unchanged logic), but one
+  that never touches any session at all no longer does. Trade
+  candidates themselves were never affected by this (they always came
+  from the full unfiltered history, gated on real structural
+  liveness/session hours already) -- this was purely what gets DRAWN.
 
 2026-09-29 — Added --since (multi-day continuous view); fixed an Asia-hours entry bug it exposed
 - User's real complaint: --show-date treated every day as its own
