@@ -220,6 +220,35 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 SESSION LOG (newest first)
 ----------------------------
 
+2026-09-29 — Real Pine compile error fixed: "main body too long" (CE10295)
+- User pasted the actual TradingView error: "The main body of the
+  script is too long. Try wrapping code in functions (CE10295)." This
+  is a REAL Pine compiler limit on top-level script structure -- this
+  codebase already runs close to it (a remedy for the same error is
+  already documented elsewhere in weekly_combined_generator.py, from
+  before this session). Root cause: the side-aware ranking fix a few
+  entries back added 4 new top-level arrays PER timeframe body
+  (obSideGRank/rbSideGRank/fvgSideGRank/tSideGRank -- 16 total across
+  d/h4/h1/5m), which was enough extra structure to cross the limit
+  (790 baseline lines -> 834, and it broke).
+- Fixed by packing BOTH ranks into the one array that already existed
+  (grank) instead of adding a second one: one int per zone, encoded as
+  global_rank * 10000 + side_rank, decoded back out in Pine with
+  int(x / 10000) and int(x % 10000). Zero new arrays -- same side-
+  aware ranking fix, just without the structural cost. Verified: 809
+  lines (down from 834, close to the original 790 baseline), 12 Jan's
+  ground-truth trade unchanged, and the encode/decode math checked by
+  hand against the real SELL-only zone ranking (OB#2=1, RB#3=2,
+  FVG#2=3, RB#1=4, FVG#1=5, matching what "count from start" should
+  produce exactly).
+- Also confirmed a separate, real cause of user confusion this same
+  round: an "undeclared identifier" error came from running MISMATCHED
+  copies of weekly_combined_generator.py and all_tf_combined_
+  generator.py (they parameterize a shared function via an exact-
+  string patch, so one old + one new copy breaks silently with
+  confusing errors). Going forward, both files are always sent
+  together, every time either one changes, never separately.
+
 2026-09-29 — Daily chart now shows the WHOLE dataset, "today" cap removed for display
 - User's own words: "I want to see everything on daily timeframe
   chart. if I want to see one POI, I will use the focus toggle. tell
