@@ -1279,19 +1279,6 @@ def main() -> int:
         if sunday_count:
             minutes = [x for x in minutes if x.t.astimezone(display_tz).weekday() != 6]
             print(f"Dropped {sunday_count} Sunday minutes (not real trading data)")
-        # Sunday-stripped but NOT --as-of-truncated -- Daily's own
-        # DISPLAY (below) uses this instead of the "today"-capped
-        # `minutes`, so the Daily chart always shows the whole dataset
-        # (2026-09-29, user: "I want to see everything on daily
-        # timeframe chart... why am I not able to see the daily
-        # engine?" -- because --as-of truncates the raw minutes before
-        # the Daily engine ever runs, so structure past "today" isn't
-        # hidden, it's never computed. Fixed for DISPLAY only -- the
-        # bounded engine below still feeds every actual trading
-        # decision (react-day, parent-POI, bias), which must never see
-        # past "today" or it silently cheats by looking into the
-        # future).
-        full_minutes = list(minutes)
         # Auto-detect --show-date/--as-of/--since so the SAME command
         # runs every day forever, no hand-edit needed (user, 2026-09-29:
         # "let the python code handle any change"). "Today" can NOT be
@@ -1401,35 +1388,27 @@ def main() -> int:
                 # find_parent_daily_poi() instead of the filtered engine.
                 d_zones_full = SimpleNamespace(ob_zones=list(engine.ob_zones), rb_zones=list(engine.rb_zones),
                                                 fvg_zones=list(engine.fvg_zones))
-            # Daily is deliberately NEVER date-filtered here (2026-09-29,
-            # user: "I want all... all the POIs, swings, MSS and
-            # everything. I get to pick what POI I want to see... by
-            # using the focus toggle" -- --since scoping makes sense for
-            # 1H/4H, which are real per-day trading-session windows, but
-            # Daily should carry its FULL history and let Focus POI/
-            # Side/"POI from last" do the narrowing on the chart itself,
-            # same as a real TradingView Daily chart always shows full
-            # history (see the full_minutes block below, which now
-            # replaces this bounded Daily engine's own DISPLAY output
-            # entirely -- this one still exists only to feed
-            # d_zones_full/is_react_day, which must stay capped at
-            # "today").
+            # Daily is never --since-FLOOR-scoped here (2026-09-29, user:
+            # "I want all... all the POIs, swings, MSS and everything...
+            # by using the focus toggle" -- --since scoping makes sense
+            # for 1H/4H, which are real per-day trading-session windows,
+            # not for Daily). It IS still capped at the --as-of/--show-
+            # date CEILING like everything else, though -- an attempt to
+            # remove that too (full_minutes, an unbounded second Daily
+            # engine) made the combined script cross a real Pine compile
+            # limit ("main body too long," CE10295 -- confirmed with the
+            # user's own TradingView error, confirmed again even after
+            # a first fix attempt) once Daily carries a whole multi-
+            # month dataset's worth of POIs alongside 4H/1H/5m in the
+            # SAME file. Reverted -- see daily_full_dataset_viewer.pine
+            # (a genuinely separate script, generated on request) for a
+            # full-history, no-"today"-cap Daily view instead; this
+            # combined script's own Daily body stays capped at --show-
+            # date, same as 1H/4H always were.
             if args.show_date and tag != "d":
                 filter_to_date_range(engine, since_date, args.show_date, display_tz)
             engines[tag] = engine
             raw_lines[tag] = build_one(base, engine, args, display_tz, tag)
-
-        # Daily's DISPLAY comes from a second, UNBOUNDED engine (full
-        # dataset, no --as-of/--show-date cap) -- see full_minutes'
-        # own comment above for why. d_zones_full (react-day/parent-POI
-        # logic, snapshotted from the bounded engine just above) is
-        # untouched by this -- only what actually gets drawn changes.
-        d_bars_full = dc.aggregate_days(full_minutes, close_tz, args.day_close_hour, display_tz)
-        d_engine_full = wc.WeeklyCombinedEngine(full_minutes, d_bars_full)
-        d_engine_full.run()
-        mark_superseded_same_leg(d_engine_full, full_minutes, [m.t for m in full_minutes])
-        engines["d"] = d_engine_full
-        raw_lines["d"] = build_one(base, d_engine_full, args, display_tz, "d")
 
         trades = []
         e5 = None
