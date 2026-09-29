@@ -1266,6 +1266,16 @@ def main() -> int:
         display_tz = ZoneInfo(args.display_tz)
 
         minutes, warnings = wob.load_minutes(path, input_tz, args.price_side)
+        # Sunday data in this CSV is not real trading (user's own call,
+        # 2026-09-29: "there is no 11 Jan... maybe we have Sunday gap
+        # data in the CSV but it is fake") -- stripped unconditionally,
+        # everywhere, before any aggregation/swing/POI/entry logic ever
+        # sees it. Judged by the display timezone's own calendar day
+        # (Riyadh), same clock the rest of this tool already uses.
+        sunday_count = sum(1 for x in minutes if x.t.astimezone(display_tz).weekday() == 6)
+        if sunday_count:
+            minutes = [x for x in minutes if x.t.astimezone(display_tz).weekday() != 6]
+            print(f"Dropped {sunday_count} Sunday minutes (not real trading data)")
         if args.as_of:
             y, m, d = (int(x) for x in args.as_of.split("-"))
             cutoff_local = datetime(y, m, d, 23, 59, 59, tzinfo=display_tz) + timedelta(seconds=1)

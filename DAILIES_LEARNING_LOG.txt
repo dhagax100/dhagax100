@@ -220,6 +220,19 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 SESSION LOG (newest first)
 ----------------------------
 
+2026-09-29 — Sunday data in the CSV is stripped, unconditionally, everywhere
+- User's own call: "there is no 11 Jan. it is Sunday, maybe we have
+  Sunday gap data in the CSV but it is fake and it is been pain in the
+  ass... ignore all of Sunday things." Confirmed 11 Jan 2026 (and every
+  other Sunday in the dataset) really is a Sunday, and there really is
+  data sitting there (2,228 minutes total across the file, e.g. 55 on
+  4 Jan starting 21:17 Riyadh). Stripped right after load_minutes(),
+  before ANY aggregation/swing/POI/entry logic ever sees it -- judged
+  by the display timezone's own calendar day (Riyadh). This is what was
+  silently feeding the react-day off-by-one bug below with a real
+  (but wrong) "11 Jan low" in the first place. Verified: 12 Jan's trade
+  (RB#67) is unchanged with Sunday data removed.
+
 2026-09-29 — Moved to 14 Jan; found and fixed two react-day bugs (off-by-one day, and wrong scope)
 - Premium/discount is confirmed NEW (user's own words) -- not part of
   the validated five_bso_engine.py port or SPEC.md's H4/5m entry
