@@ -1158,15 +1158,21 @@ def main() -> int:
             own_maxval = extract_maxval(raw_lines[tag][:split_idx])
             own_maxvals[tag] = own_maxval
             own_inputs = build_own_inputs(shared_input_lines, tag, title, own_maxval, args.default_side)
-            body = own_inputs + raw_lines[tag][split_idx:]
             # Daily-parent-POI column (2026-09-29, user's own words: "we
             # want the daily parent POI ID to appear in the already
             # established 1h table, nowhere else, no new table") -- one
             # more packed array, generic-named like every other one here
             # so rename_arrays tag-prefixes it the same way; row order
             # matches build_parent_column()'s own docstring exactly.
+            # Declared BEFORE the rest of the body, not appended after it
+            # -- the table-population loop that reads {tag}_tParent lives
+            # INSIDE raw_lines[tag], earlier in file order than wherever
+            # an appended-at-the-end pack block would land, which is
+            # exactly the CE10272 "undeclared identifier" the user hit:
+            # Pine executes top-to-bottom, so a `var array` declared
+            # after its own first read doesn't exist yet at that point.
             parent_col = build_parent_column(engines[tag], None if tag == "d" else engines["d"])
-            body = body + wc.wrb.pack_array("tParent", "string", parent_col)
+            body = own_inputs + wc.wrb.pack_array("tParent", "string", parent_col) + raw_lines[tag][split_idx:]
             body = rename_arrays(body, tag)
             body = inject_input_params(body, tag)
             body = regate(body, gate_by_tag[tag])
