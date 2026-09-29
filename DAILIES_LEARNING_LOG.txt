@@ -90,9 +90,67 @@ DEDUP
   minute) collapse into ONE trade. One real move, not one trade per POI
   that happened to touch it.
 
+SAME-LEG SUPERSESSION (2026-09-29)
+- When a POI impacts while another same-direction POI in the same
+  unbroken leg (not yet structurally invalidated) is still active, they
+  are ONE opportunity, not two — cuts across zone TYPE too (an OB then
+  an RB in the same unbroken move collapses the same way FVG-then-FVG
+  does).
+- This is a CEILING on the earlier zone's own search, not a hard skip:
+  an entry it already found before the newer POI's own impact still
+  stands (it already happened in real time). Only a NEW entry attempt
+  starting after that moment is blocked.
+- Both zones still show on the chart/table ("let them be there") — this
+  only affects which one(s) get to search for a 5m entry.
+
+CROSS-TIMEFRAME DISPLAY (2026-09-29)
+- Daily's own POIs/labels also draw on the 4H and 1H charts (Daily's
+  own settings govern it, no separate toggle).
+- 4H's and 1H's own POIs also draw on the 5m chart, controlled by a
+  SEPARATE "5m settings" group — toggling it never silently changes
+  what the 4H or 1H chart itself shows.
+- Impact-line color: Daily = red, 4H/1H = green (on their own chart AND
+  wherever they're projected).
+
+DAILY SCOPING (2026-09-29)
+- Daily's own POIs are scoped to the FULL calendar day (00:00-24:00
+  Riyadh), not the narrow 10-20/11-21 trading window H4/1H use — a
+  Daily POI can set the whole day's bias from any hour, including
+  before the trading window even opens.
+
 
 SESSION LOG (newest first)
 ----------------------------
+
+2026-09-29 — Same-leg POI collapse, cross-timeframe display, Daily scope, colors
+- Real scenario caught by the user: on 12 Jan, a lower Daily FVG
+  impacted and was never invalidated, then price ran into a higher
+  Daily FVG which is what the day's 1H setups actually came from — two
+  live same-direction POIs in one leg. Fixed per the user's own rule:
+  the earlier zone's search is now capped at the moment the later one
+  impacts (mark_superseded_same_leg + a ceiling in compute_5m_trades),
+  not deleted from display. Verified: OB#44 (superseded by RB#67 at
+  14:13) can no longer reach its own 14:32 entry and logs
+  NO_ENTRY_IN_WINDOW; RB#67's own search still finds and enters that
+  same real trade before it got superseded in turn by RB#68 at 16:07 —
+  same real-world result (entry 14:32, SL 16:08), now for the right
+  reason instead of a coincidental dedup.
+- Fixed: Daily POIs showed 0 no matter the settings toggle. Root cause:
+  Daily was scoped to the same narrow trading window as H4/1H, silently
+  dropping a Daily POI that impacted before the window opened. Daily
+  now scopes to the full calendar day.
+- Added: Daily's own POIs also draw on 4H/1H charts; 4H's/1H's own POIs
+  also draw on the 5m chart, gated by a genuinely independent "5m
+  settings" group (not reusing 4H's/1H's own settings).
+- Fixed: impact-line color was hardcoded red for every timeframe. Now
+  Daily = red, 4H/1H = green, everywhere they appear (including
+  projected onto another chart).
+- Fixed: the 5m ledger showed 2 rows for a trade the chart drew as one
+  (OB#44+RB#67 sharing an identical entry). Ledger now merges ENTERED
+  rows the same way the chart's own dedup does.
+- POI ranking clarified (the user asked directly): "POI from last"
+  ranks by ORIGIN (creation) time, not price level and not impact time
+  — with "Count from start" on, 1 = the oldest by origin.
 
 2026-09-28 — Added the missing 5m logs (audit + trades ledger)
 - Gap found: Daily/4H/1H each got their own swings.csv/report.txt, but
