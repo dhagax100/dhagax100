@@ -205,12 +205,17 @@ class WeeklyFVGEngine:
         return None
 
     def high_first(self, k: int) -> bool:
+        """See weekly_combined_generator.py's own docstring for this same
+        fix (2026-09-29) -- was comparing this bar's own eventual
+        high/low instead of when it first crossed the PRIOR bar's
+        high/low (the actual break thresholds)."""
         wk = self.w[k]
+        prev_h, prev_l = self.w[k - 1].h, self.w[k - 1].l
         hi = lo = None
         for x in self.m[wk.first:wk.last]:
-            if hi is None and x.h >= wk.h:
+            if hi is None and x.h > prev_h:
                 hi = x
-            if lo is None and x.l <= wk.l:
+            if lo is None and x.l < prev_l:
                 lo = x
             if hi and lo:
                 break

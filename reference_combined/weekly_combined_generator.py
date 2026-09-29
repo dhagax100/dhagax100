@@ -144,12 +144,26 @@ class WeeklyCombinedEngine:
         return None
 
     def high_first(self, k: int) -> bool:
+        """For a dual-break bar (breaks both the PRIOR bar's high and
+        low), which side actually broke first -- decides processing
+        order in process() (2026-09-29 fix, user caught this directly:
+        this was checking when THIS bar's own final/eventual high and low
+        got touched, not when it first crossed the PRIOR bar's high/low
+        thresholds -- the actual br_h/br_l trigger points. A bar that
+        crosses above the prior high immediately, pulls back through the
+        prior low much later, then pushes on to a fresh extreme high
+        later still (real case: 13 Jan 2026's 13:00 4H candle) was being
+        read as "low first" -- checking only its OWN final high (set
+        last, by that fresh push) vs OWN final low -- when the real
+        break order, against the actual PRIOR bar's levels, was high
+        first, by a wide margin (13:00 vs 15:57)."""
         wk = self.w[k]
+        prev_h, prev_l = self.w[k - 1].h, self.w[k - 1].l
         hi = lo = None
         for x in self.m[wk.first:wk.last]:
-            if hi is None and x.h >= wk.h:
+            if hi is None and x.h > prev_h:
                 hi = x
-            if lo is None and x.l <= wk.l:
+            if lo is None and x.l < prev_l:
                 lo = x
             if hi and lo:
                 break

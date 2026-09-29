@@ -220,6 +220,42 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 SESSION LOG (newest first)
 ----------------------------
 
+2026-09-29 — Fixed high_first(): dual-break bars were ordered by the WRONG comparison, invalidating 13 Jan's 4H "win"
+- User walked the 13:00 4H candle on 13 Jan 2026 by hand: it broke
+  ABOVE the prior candle's high FIRST, then later broke below the
+  prior candle's low -- meaning it should confirm the prior candle's
+  swing high (normal, one-candle-later confirmation) and trigger
+  MSS_DOWN off the already-confirmed low, PERIOD -- no swing low or
+  MSS_DOWN sourced from its own candle, no MSS_UP reversal back within
+  the same candle. The code showed the opposite order and both extra
+  events. User was right; checked it directly:
+- Root cause: `high_first(k)` decides break order for a "dual-break"
+  bar (one that breaks both the PRIOR bar's high AND low) by checking
+  when THIS bar's own FINAL high/low got touched -- not when it first
+  crossed the PRIOR bar's actual high/low thresholds (the real br_h/
+  br_l trigger points). A bar that crosses above the prior high
+  immediately, dips through the prior low much later, then pushes on
+  to a fresh high later still reads as "low first" under the old logic
+  (it was only watching for the bar's own eventual extremes, set last
+  by that final push) -- real case: 13:00 crossed above 1.16723 at
+  13:00 itself, didn't break below 1.16535 until 15:57, yet the old
+  code said low came first because 1.16496 (this candle's own final
+  low) was touched at 16:26, before 1.16774 (this candle's own final
+  high) at 16:30.
+- Fixed: high_first() now checks against self.w[k-1].h/.l (the actual
+  prior-bar thresholds that define br_h/br_l), not the current bar's
+  own eventual extremes.
+- Real consequence: this INVALIDATES the "+3R 4H win via FVG#7"
+  reported earlier the same day. With the corrected order, FVG#7's
+  premium/discount midpoint (measured against the now-different
+  opposing swing) is never reached before impact -- PREMIUM_NOT_REACHED,
+  no entry. 13 Jan is a no-trade day again, now for the fully verified
+  reason. 12 Jan's trade is unchanged. Journal corrected accordingly --
+  this is the second correction to that entry; both are left visible in
+  it rather than silently overwritten, since the pattern (report, get
+  corrected by the user, re-verify, revise) is itself worth keeping
+  visible.
+
 2026-09-29 — Fixed a real cross-timeframe display leak: Daily's swing points/MSS were showing on 4H/1H
 - User's own words: "we transfer the POIs and impact lines only to any
   other timeframe we decide. so, even the 1h and 4h swing points and
