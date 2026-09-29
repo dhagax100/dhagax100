@@ -1097,7 +1097,15 @@ def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int
         "bool inspectOnePoi = input.bool(false, \"Inspect one POI only\", group=\"Combined settings\", tooltip=\"Narrows down to a single zone, picked by 'POI from last' below. With Focus POI = ALL, ranking is across all three types combined (1 = the most recent zone of any kind); with a specific type picked, ranking is within that type only.\")",
         "bool countFromStart = input.bool(false, \"Count from the start (not the end)\", group=\"Combined settings\", tooltip=\"Off (default): 'POI from last' counts backward from the newest zone (1 = newest). On: it counts forward from the very first zone in the data (1 = oldest).\")",
         "string sideFilter = input.string(\"ALL\", \"Side\", options=[\"ALL\", \"BUY\", \"SELL\"], group=\"Combined settings\", tooltip=\"ALL draws both buy and sell POIs. BUY or SELL shows only that side's boxes and table rows.\")",
-        f"int poiFromLast = input.int(1, \"POI from last\", minval=1, maxval={max_global_rank}, group=\"Combined settings\", tooltip=\"1 = the latest zone (of the focused type if one is picked above, or of ANY type if Focus POI is ALL), 2 = the one before it, and so on. Flip direction with 'Count from the start' above.\")",
+        # maxval deliberately NOT tied to how many zones happen to exist
+        # right now (2026-09-29, user: "POI from last must show me
+        # whatever number I put from the beginning... I can never
+        # accept" a cap silently clamping what's typed) -- a fixed,
+        # generous ceiling instead, so typing ahead of today's zone
+        # count is never blocked. Past whatever actually exists, the
+        # box/table search for that rank just comes up empty -- never
+        # refused at the input itself.
+        "int poiFromLast = input.int(1, \"POI from last\", minval=1, maxval=999, group=\"Combined settings\", tooltip=\"1 = the latest zone (of the focused type if one is picked above, or of ANY type if Focus POI is ALL), 2 = the one before it, and so on. Flip direction with 'Count from the start' above. Past however many zones actually exist, this just shows nothing -- it's never blocked from being typed.\")",
         f"var table ledger = table.new(position.top_right, 11, {table_cap + 1}, border_width=1)",
         "bool onWeekly = timeframe.period == \"1W\"",
         "bool onH4 = timeframe.period == \"240\"",
