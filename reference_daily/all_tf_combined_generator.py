@@ -119,14 +119,11 @@ def trading_window(date_str: str, display_tz: ZoneInfo) -> tuple[datetime, datet
     return start, end
 
 
-def filter_to_date(engine, date_str: str, display_tz: ZoneInfo) -> None:
-    """Keep only what's actually active inside the user's real trading
-    window that day (10:00-20:00 / 11:00-21:00 Riyadh, see
-    trading_window()) -- NOT the whole calendar day. Different from
-    --as-of, which keeps everything ACCUMULATED up to that day (so a
-    swing from three months earlier still shows). This mutates the
-    engine's own zone/event lists in place, before write_combined_pine
-    ever sees them, so it needs no changes to the shared draw code.
+def filter_to_window(engine, win_start: "datetime", win_end: "datetime") -> None:
+    """Keep only what's actually active inside [win_start, win_end). This
+    mutates the engine's own zone/event lists in place, before
+    write_combined_pine ever sees them, so it needs no changes to the
+    shared draw code.
 
     A POI counts as "in the window" if ANY of its real lifecycle events
     landed inside it -- created, triggered, made eligible, impacted, or
@@ -139,8 +136,6 @@ def filter_to_date(engine, date_str: str, display_tz: ZoneInfo) -> None:
     current trend are actually measured against. Nothing after the
     window closes shows at all, structure or POI alike -- per the user's
     explicit "I do not want to see any info ... after the trading ends.\""""
-    win_start, win_end = trading_window(date_str, display_tz)
-
     events_in = [e for e in engine.events if win_start <= engine.w[e.confirm].start < win_end]
     prior_highs = [e for e in engine.events if e.kind == 0 and engine.w[e.confirm].start < win_start]
     prior_lows = [e for e in engine.events if e.kind == 1 and engine.w[e.confirm].start < win_start]
@@ -166,6 +161,33 @@ def filter_to_date(engine, date_str: str, display_tz: ZoneInfo) -> None:
     engine.ob_zones = [z for z in engine.ob_zones if happened_in_window(engine.w[z.candle].start, z)]
     engine.rb_zones = [z for z in engine.rb_zones if happened_in_window(engine.w[z.candle].start, z)]
     engine.fvg_zones = [z for z in engine.fvg_zones if happened_in_window(engine.w[z.left].start, z)]
+
+
+def filter_to_date(engine, date_str: str, display_tz: ZoneInfo) -> None:
+    """H4/1H scoping: the narrow real trading window (10:00-20:00 /
+    11:00-21:00 Riyadh, see trading_window()) -- NOT the whole calendar
+    day. Different from --as-of, which keeps everything ACCUMULATED up
+    to that day (so a swing from three months earlier still shows)."""
+    win_start, win_end = trading_window(date_str, display_tz)
+    filter_to_window(engine, win_start, win_end)
+
+
+def filter_to_calendar_day(engine, date_str: str, display_tz: ZoneInfo) -> None:
+    """Daily scoping is deliberately WIDER than filter_to_date()'s narrow
+    trading window (2026-09-29, real bug the user caught: the Daily POI
+    that sets a whole day's bias can impact at ANY hour, including
+    before the trading window even opens -- the 12 Jan 2026 walk-through
+    earlier this project used exactly such a Daily FVG, impacted well
+    before the 11:00 Riyadh open, to set that day's SELL bias. Scoping
+    Daily to the narrow window like H4/1H silently dropped it: Daily
+    showed 0 POIs no matter what the Daily settings toggles were set to,
+    since there was nothing left in engine.ob_zones/rb_zones/fvg_zones
+    for them to filter. Scope is the full calendar day (00:00-24:00
+    Riyadh) instead -- still per-day, just not per-session."""
+    y, m, d = (int(x) for x in date_str.split("-"))
+    win_start = datetime(y, m, d, 0, 0, 0, tzinfo=display_tz).astimezone(UTC)
+    win_end = win_start + timedelta(days=1)
+    filter_to_window(engine, win_start, win_end)
 
 
 def structural_invalid_at(z, it: "datetime", bars: list, bar_starts: list,
@@ -827,7 +849,10 @@ def main() -> int:
             if tag in ("h4", "h1"):
                 exclude_old_intraday_zones(engine)
             if args.show_date:
-                filter_to_date(engine, args.show_date, display_tz)
+                if tag == "d":
+                    filter_to_calendar_day(engine, args.show_date, display_tz)
+                else:
+                    filter_to_date(engine, args.show_date, display_tz)
             engines[tag] = engine
             raw_lines[tag] = build_one(base, engine, args, display_tz, tag)
 
