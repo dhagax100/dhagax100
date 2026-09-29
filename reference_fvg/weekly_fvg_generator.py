@@ -317,6 +317,16 @@ class WeeklyFVGEngine:
 
     def try_create_afvgs(self, lo: int, hi: int, bullish: bool, trigger_k: int,
                          guard_price: float, trigger_time: Optional[datetime], protect_idx: int) -> None:
+        """`bullish` selects which retracement-leg CASE this is (True = a
+        down-retracement inside a bullish regime, False = an up-retracement
+        inside a bearish regime) -- it is NOT the resulting zone's own side.
+        Aggressive POIs trade OPPOSITE the leg they're found in (2026-09-29,
+        real bug fix -- confirmed against try_bull_aob/try_bear_aob in the
+        OB reference, which ALREADY tag their zone opposite the regime they
+        fire in; this was the only one of the three POI types passing the
+        tag straight through instead of flipping it). A down-retracement
+        inside an uptrend is tagged SELL; an up-retracement inside a
+        downtrend is tagged BUY."""
         if hi < lo + 2:
             return
         for c3 in range(lo + 2, hi + 1):
@@ -326,13 +336,13 @@ class WeeklyFVGEngine:
                 if l1 > h3:
                     l3 = self.w[c3].l
                     if l1 > guard_price and l3 > guard_price:
-                        self.add_fvg(c1, h3, l1, True, trigger_k, 1, trigger_time, protect_idx)
+                        self.add_fvg(c1, h3, l1, False, trigger_k, 1, trigger_time, protect_idx)
             else:
                 h1, l3 = self.w[c1].h, self.w[c3].l
                 if h1 < l3:
                     h3 = self.w[c3].h
                     if h1 < guard_price and h3 < guard_price:
-                        self.add_fvg(c1, h1, l3, False, trigger_k, 1, trigger_time, protect_idx)
+                        self.add_fvg(c1, h1, l3, True, trigger_k, 1, trigger_time, protect_idx)
 
     def try_bull_afvg(self, preg: int, armed_swh: int, new_swl_i: int, new_swl_p: float, k: int, at: Optional[datetime]) -> None:
         # Mirrors tryBullAFVG's range + reference-validity gate one-for-one.

@@ -42,6 +42,10 @@ POI ELIGIBILITY
   impact, or breach) happens inside the window that day.
 - "Old" POIs (OOB/ORB/OFVG) never show or trade on H4/1H, period —
   even though they're a real tradeable category at Daily/Weekly.
+- "Aggressive" POIs (AOB/ARB/AFVG) trade OPPOSITE the leg/trend they're
+  found in, same family as Old POIs — an uptrend leg's Aggressive POIs
+  are SELL, a downtrend leg's are BUY. Not anticipatory continuation;
+  counter-trend, period.
 - PREMIUM/DISCOUNT gate: the 50/50 split between the zone's
   protect_level and the most recent opposing-kind swing confirmed
   before impact. Price must have reached that midpoint before impact
@@ -204,6 +208,35 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 
 SESSION LOG (newest first)
 ----------------------------
+
+2026-09-29 — Fixed a real AFVG mistagging bug: Aggressive POIs were not tagged opposite the trend
+- User's rule, stated directly: "Aggressives (...) and ARB and so on...
+  are traded the opposite direction of the trend. Here the 4h leg was
+  uptrend, which means we sell with aggressives." Same family as Old
+  POIs (OOB/ORB/OFVG), already documented as the opposing side of the
+  current trend.
+- Checked this against the code before touching anything: AOB
+  (ob_try_bull_aob/ob_try_bear_aob) ALREADY tags its zone opposite the
+  regime it fires in (bull=False during an uptrend, bull=True during a
+  downtrend) -- confirmed correct. ARB does too, via an is_high-to-bull
+  inversion inside rb_add_from_swing -- also already correct. AFVG
+  (fvg_try_create_afvgs) was the ONE place passing the tag straight
+  through instead of flipping it -- a down-retracement inside an uptrend
+  was being tagged BUY (matching the leg) instead of SELL (opposite the
+  leg, matching AOB/ARB's own established convention). Real bug, not a
+  judgment call -- confirmed by comparison against the two sibling POI
+  types that already did this correctly.
+- Fixed in BOTH the combined engine (reference_combined/
+  weekly_combined_generator.py's fvg_try_create_afvgs) and the original
+  single-timeframe FVG reference it was ported from (reference_fvg/
+  weekly_fvg_generator.py's try_create_afvgs) -- the shape-detection
+  logic (which candle pair forms the gap) is untouched, only the final
+  bull/bear tag on the resulting zone is flipped.
+- Verified: FVG#7 (12 Jan 13:00 origin, the one the user found on their
+  own chart) now tags SELL instead of BUY, as expected for a
+  down-retracement inside the uptrend leg it sits in. 12 Jan's daily
+  driver (FVG#1) is an IFVG, not an AFVG -- untouched by this fix, and
+  12 Jan's verified trade (RB#67, entry 1.16847, SL 16:08) is unchanged.
 
 2026-09-29 — Fixed 4H candle boundaries; fixed multi-day display bleeding through Asia-hours gaps
 - User caught this directly against their own TradingView/FXCM chart:
