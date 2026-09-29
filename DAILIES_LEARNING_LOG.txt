@@ -118,13 +118,18 @@ DAILY SCOPING (2026-09-29)
   Daily POI can set the whole day's bias from any hour, including
   before the trading window even opens.
 
-PARENT-POI TRACEABILITY (2026-09-29)
+PARENT-POI TRACEABILITY (2026-09-29, corrected same day)
 - Every impacted 4H/1H POI maps to whichever Daily POI was actually
   "active" (per same-leg supersession, above) at the moment it
-  impacted — shown in its own small table (not bolted onto the shared
-  ledger table) on the 4H/1H/5m charts.
+  impacted — a "Daily Parent" COLUMN in the already-existing ledger
+  table (the one with POI/ID/Type/Side/Bottom/Top/Origin/Trigger/
+  Eligible/Impact/Status), not a separate table. First attempt got this
+  wrong (built a standalone table) — corrected same day, per the user.
 
 BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
+- Visible in BOTH 5m_trades_ledger.csv AND the on-chart 5m trades
+  table (MFE/MAE/SL hit/TP hit/Notes columns) — first attempt only put
+  this in the CSV, corrected same day.
 - MFE/MAE (Maximum Favorable/Adverse Excursion), price-based: tracked
   per trade from entry (exclusive) through exit (inclusive), or through
   all available data if still open.
@@ -140,6 +145,21 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 
 SESSION LOG (newest first)
 ----------------------------
+
+2026-09-29 — Corrected: parent-POI folded into existing table; MFE/MAE now on-chart
+- User caught two mistakes in the previous delivery: (1) a separate
+  standalone table had been built for the parent-Daily-POI mapping when
+  the ask was one more COLUMN in the already-existing ledger table,
+  nowhere else; (2) MFE/MAE/SL-TP-hit-time/structural-notes only landed
+  in the CSV ledger, never in the on-chart 5m trades table.
+- Fixed both: build_parent_poi_table() removed; build_parent_column()/
+  inject_parent_column() widen the EXISTING shared ledger table
+  (column count 11->12) instead. build_trades_pine()'s on-chart table
+  gained the same 5 columns the CSV already had (MFE/MAE/SL hit/TP hit/
+  Notes).
+- Verified for 12 Jan 2026: ledger table's new column reads
+  FVG#1|-|FVG#1|FVG#1|- for 1H rows #68|#69|#67|#44|#31, matching the
+  earlier manual check exactly. No duplicate table declarations.
 
 2026-09-29 — MFE/MAE restored, structural notes, SL/TP hit times, parent-POI table
 - Two more things the user asked for, both landing with this same code
