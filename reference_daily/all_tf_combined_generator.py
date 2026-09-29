@@ -30,14 +30,18 @@ same fixed names every run, overwritten in place:
   h1_tf_swings.csv / h1_tf_report.txt   1H structure, for audit
 
 Run (flat folder, same convention as every other generator here). ONE
-command, forever -- no --show-date/--since to bump by hand each day.
-Append each new day's minutes to the CSV, then run the exact same line:
+command, forever -- no --show-date/--since to bump by hand each day:
 
     python all_tf_combined_generator.py EURUSD_m1_BidAndAsk.csv --default-side SELL
 
---show-date/--since auto-detect from the CSV's own date range when
-omitted (see their own --help text). Pass --show-date yourself only to
-deliberately replay one single historical day instead of "today."
+"Today" can't be guessed from the CSV itself -- it carries months of
+data past any real campaign, so guessing from its last date risks
+pulling in far more than intended. Instead it's read from TODAY.txt, a
+one-line marker file next to the outputs -- edit THAT single file to
+today's date each day, run this exact same command. --since is pinned
+once (to a second marker, dailies_since.txt) the first time it's given
+-- explicitly or defaulted -- and reused automatically after that. Pass
+--show-date/--since yourself only to override either one.
 """
 from __future__ import annotations
 
@@ -106,11 +110,11 @@ def parse_args():
                          "trading window, as it would have looked standing in it.' Trades "
                          "before this day are still real candidates (see --since) even when "
                          "this alone is given -- --show-date is always the LAST day shown. "
-                         "Omit this entirely for normal day-to-day use: it then auto-detects "
-                         "to the LAST calendar day present in the CSV (i.e. 'today', once "
-                         "you've appended today's minutes) -- the same command works every "
-                         "day, no hand-edit needed. Pass it yourself only to replay one "
-                         "specific past day on its own.")
+                         "Omit this entirely for normal day-to-day use: it then reads "
+                         "TODAY.txt (a one-line marker file next to the outputs) as "
+                         "today's date -- edit that single file each day instead of this "
+                         "flag, same command every run. Pass this flag yourself only to "
+                         "replay one specific past day on its own.")
     p.add_argument("--since", default=None, metavar="YYYY-MM-DD",
                     help="Widen --show-date into a continuous range: draw every swing, MSS "
                          "and POI, and compute every 5m trade, from --since's own trading day "
@@ -121,10 +125,10 @@ def parse_args():
                          "day: keep --since fixed at your very first traded day and just move "
                          "--show-date/--as-of forward each run -- the SAME fixed output files "
                          "then show the whole run so far, every time, never a new file per day. "
-                         "Omit this entirely (along with --show-date) for normal use: it then "
-                         "auto-detects to the FIRST real trading day present in the CSV, which "
-                         "stays fixed on its own since you only ever append new days to the "
-                         "file, never trim the front of it.")
+                         "Omit this entirely for normal use: it's pinned to dailies_since.txt "
+                         "(a second one-line marker file) the first time it's given -- "
+                         "explicitly or defaulted to --show-date -- then reused automatically "
+                         "on every later run, never needing to be typed again.")
     return p.parse_args()
 
 
@@ -1291,6 +1295,33 @@ def main() -> int:
         if sunday_count:
             minutes = [x for x in minutes if x.t.astimezone(display_tz).weekday() != 6]
             print(f"Dropped {sunday_count} Sunday minutes (not real trading data)")
+        # Auto-detect --show-date/--as-of/--since so the SAME command
+        # runs every day forever, no hand-edit needed (user, 2026-09-29:
+        # "let the python code handle any change"). "Today" can NOT be
+        # guessed from the CSV's own last date -- tried that first, and
+        # it picked up September data this CSV carries far past the
+        # real campaign (started 2026-01-12), feeding the engine 9
+        # months it was never meant to see and overflowing Pine's own
+        # string-literal limit (real crash, caught by the user: "String
+        # is too long"). So "today" is instead read from a tiny marker
+        # file you maintain by hand -- one line, one date, nothing else
+        # to type -- TODAY.txt next to the outputs. Same command every
+        # day; only that one file's single line ever changes.
+        today_marker = base / "TODAY.txt"
+        if not args.show_date:
+            if today_marker.exists():
+                args.show_date = today_marker.read_text().strip()
+            else:
+                today_marker.write_text("2026-01-14")
+                print(f"No --show-date given and no {today_marker.name} found -- created "
+                      f"it with 2026-01-14 (your last known trading day) as a starting "
+                      f"point. Edit that ONE file to today's date each day and re-run "
+                      f"this exact same command -- or pass --show-date yourself.",
+                      file=sys.stderr)
+                return 2
+        if not args.as_of:
+            args.as_of = args.show_date
+
         if args.as_of:
             y, m, d = (int(x) for x in args.as_of.split("-"))
             cutoff_local = datetime(y, m, d, 23, 59, 59, tzinfo=display_tz) + timedelta(seconds=1)
@@ -1300,37 +1331,23 @@ def main() -> int:
                 print(f"No data at or before {args.as_of}", file=sys.stderr)
                 return 2
 
-        # Auto-detect --show-date/--since so the SAME command runs every
-        # day forever, no hand-edit needed (user, 2026-09-29: "let the
-        # python code handle any change" -- having to bump --show-date/
-        # --since by hand each day was the actual bug here, not a chart
-        # display problem). --show-date auto-detects to the LAST
-        # calendar day present in the CSV (i.e. "today", once you've
-        # appended today's minutes). --since can NOT just be "the
-        # earliest date in the CSV" -- this CSV carries history from
-        # before you started trading (e.g. data from Jan 2 when your
-        # campaign only started Jan 12), so that would silently drag
-        # in weeks of pre-campaign noise and slow every run down. So
-        # --since is instead pinned the first time this ever runs with
-        # no --since given: written once to a small marker file next to
-        # the outputs (dailies_since.txt), then read back from it on
-        # every later run -- exactly "keep --since fixed at your very
-        # first traded day," just automatic instead of hand-typed.
-        # Delete that file (or pass --since yourself) to reset the
-        # campaign start.
+        # --since can NOT default to "the earliest date in the CSV"
+        # either, for the same reason (this CSV carries history from
+        # before the campaign started) -- pinned instead the first time
+        # this ever runs with no --since given, to a small marker file
+        # (dailies_since.txt), then read back from it on every later
+        # run: exactly "keep --since fixed at your very first traded
+        # day," automatic instead of hand-typed. Delete that file (or
+        # pass --since yourself) to reset the campaign start.
         since_marker = base / "dailies_since.txt"
-        if not args.show_date and minutes:
-            dates_present = sorted({m.t.astimezone(display_tz).date() for m in minutes})
-            args.show_date = dates_present[-1].isoformat()
-            if not args.since:
-                if since_marker.exists():
-                    args.since = since_marker.read_text().strip()
-                else:
-                    args.since = args.show_date
-                    since_marker.write_text(args.since)
-            print(f"Auto-detected --since {args.since} --show-date {args.show_date} "
-                  f"(since pinned in {since_marker.name}; pass --show-date/--since "
-                  f"yourself to override)")
+        if not args.since and since_marker.exists():
+            args.since = since_marker.read_text().strip()
+        if not args.since:
+            args.since = args.show_date
+        if not since_marker.exists() or since_marker.read_text().strip() != args.since:
+            since_marker.write_text(args.since)
+        print(f"--since {args.since} --show-date {args.show_date} "
+              f"(today from {today_marker.name}, since pinned in {since_marker.name})")
 
         bars_by_tag = {
             "d": dc.aggregate_days(minutes, close_tz, args.day_close_hour),

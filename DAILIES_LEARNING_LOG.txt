@@ -228,24 +228,29 @@ SESSION LOG (newest first)
   what actually caused the "nothing shows for 1H/4H on day 14"
   complaint: the chart the user was looking at was still rendered from
   an old day-13 run, not a code or display bug).
-- Fixed: --show-date now auto-detects to the LAST calendar day
-  (Riyadh) present in the CSV when omitted — i.e. "today," once that
-  day's minutes are pasted in. Confirmed via a real run: auto-picked
-  whatever the CSV's own last date was, with no flag given.
-- --since can NOT just default to "the earliest date in the CSV" —
-  tried that first, and it auto-picked 2026-01-02 (weeks of
-  pre-campaign history baked into this dataset), which would silently
-  drag all of that into every day's chart/ledger and slow every run
-  down. Fixed instead with a small marker file, dailies_since.txt,
-  written once next to the outputs the first time the script ever runs
-  with no --since given, then read back on every later run — same
-  effect as "keep --since fixed at your very first traded day," just
-  automatic instead of hand-typed. Delete the marker (or pass --since
-  yourself) to reset the campaign start.
+- First attempt: auto-detect --show-date to the LAST calendar day
+  present in the CSV. Wrong — this CSV carries data out to September
+  2026, far past the real campaign, so it silently fed the engine 9
+  months of data never meant to be seen and blew up a real Pine limit
+  (user caught it live: "String is too long (43819), max allowed
+  length is 40960"). Reverted.
+- Fixed properly: "today" is read from TODAY.txt, a one-line marker
+  file next to the outputs, maintained by hand — edit that ONE file to
+  today's date, run the exact same command every time. --as-of now
+  defaults to the same value, so the engine never again sees data past
+  the day actually being traded.
+- --since can NOT default to "the earliest date in the CSV" either,
+  same reason (pre-campaign history baked into the file) — pinned
+  instead to a second marker, dailies_since.txt, the first time --since
+  is given (explicitly or defaulted), then reused automatically forever
+  after. Also fixed a bug in this same pass: an explicitly-passed
+  --since wasn't being written to the marker at all, so the very next
+  no-flag run silently lost the seed. Delete either marker (or pass
+  --show-date/--since yourself) to override.
 - One-time step for THIS existing campaign (already started 2026-01-12,
   not "today"): run once more with --since 2026-01-12 explicitly to
-  seed the marker correctly, then drop --since/--show-date/--as-of from
-  every command after that, permanently.
+  seed dailies_since.txt correctly, then drop every date flag from
+  every command after that, permanently — only TODAY.txt ever changes.
 - Also clarified for the user: "session liquidity grab" is not a
   separate implemented rule anywhere in this system — it only appears
   as the plain-English REASON the Asia session is excluded as an entry
