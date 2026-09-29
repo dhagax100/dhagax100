@@ -266,22 +266,36 @@ def calendar_day_bounds(date_str: str, display_tz: ZoneInfo) -> tuple["datetime"
     return win_start, win_start + timedelta(days=1)
 
 
-def find_prev_day_extreme(day_bars: list, date_str: str, display_tz: ZoneInfo, side: str):
+def find_prev_day_extreme(minutes, mt: list, date_str: str, display_tz: ZoneInfo, side: str):
     """"React day" rule (user, 2026-09-29): the previous day's relevant
     extreme -- its LOW for a SELL bias (a sell setup dies as a fresh
     idea once today reclaims yesterday's low), its HIGH for a BUY bias.
-    `day_bars` is the Daily engine's own aggregated bars (dc.aggregate_days),
-    same bars Daily's own structure is built from -- not a second,
-    possibly-inconsistent day boundary. Returns None for side "ALL" (no
-    single bias to check) or if there's no prior day in the dataset."""
+
+    Computed directly from real M1 data over the previous CALENDAR day
+    (same 00:00-24:00 Riyadh definition calendar_day_bounds() uses
+    everywhere else) -- NOT by looking up a bar in the Daily engine's
+    own aggregated bars (dc.aggregate_days), which are indexed by the
+    NY-17:00 forex-day close (01:00 Riyadh in winter), one hour AFTER
+    calendar midnight. That one-hour offset was a real bug (2026-09-29):
+    probing with a midnight timestamp against those NY-anchored bar
+    boundaries always matched the PRIOR bar -- i.e. the day before the
+    one intended -- so every call was silently using the wrong day's
+    extreme, off by one, every single time in winter. Verified: for
+    14 Jan, the old code returned 12 Jan's low (1.16213); the real
+    previous calendar day (13 Jan) low was 1.16339.
+
+    Returns None for side "ALL" (no single bias to check) or if there's
+    no prior day's data in the dataset."""
     if side not in ("SELL", "BUY"):
         return None
-    win_start, _ = calendar_day_bounds(date_str, display_tz)
-    idx = next((i for i, b in enumerate(day_bars) if b.start <= win_start < b.end), None)
-    if idx is None or idx == 0:
+    y, m, d = (int(x) for x in date_str.split("-"))
+    prev_date = (datetime(y, m, d) - timedelta(days=1)).date().isoformat()
+    win_start, win_end = calendar_day_bounds(prev_date, display_tz)
+    i0, i1 = bisect_left(mt, win_start), bisect_left(mt, win_end)
+    if i0 >= i1:
         return None
-    prev_bar = day_bars[idx - 1]
-    return prev_bar.l if side == "SELL" else prev_bar.h
+    day_minutes = minutes[i0:i1]
+    return min(x.l for x in day_minutes) if side == "SELL" else max(x.h for x in day_minutes)
 
 def find_prev_day_sweep_time(minutes, mt: list, date_str: str, display_tz: ZoneInfo, side: str, extreme):
     """First minute, anywhere in today's own full calendar day (same
@@ -298,6 +312,29 @@ def find_prev_day_sweep_time(minutes, mt: list, date_str: str, display_tz: ZoneI
             break
         if (m.l <= extreme) if side == "SELL" else (m.h >= extreme):
             return m.t
+    return None
+
+
+def is_react_day(d_zones_full, side: str, date_str: str, display_tz: ZoneInfo) -> bool:
+    """The react-day rule only ever applies on a REACT day -- the day
+    AFTER the Daily POI's own impact -- never on the impact day itself
+    (2026-09-29, real bug caught while moving to 14 Jan: applying the
+    prior-day-extreme-sweep check unconditionally, every day, silently
+    would have abandoned 1H on 12 Jan too -- 11 Jan's low got swept at
+    01:08 Riyadh that morning -- even though 12 Jan is the day FVG#1
+    itself impacted (10:26 Riyadh), not a react day at all. A day only
+    counts as "react" if NO same-side Daily POI impacted on it -- i.e.
+    today's whole bias is carried in from an earlier day, not set fresh
+    today."""
+    if side not in ("SELL", "BUY"):
+        return False
+    win_start, win_end = calendar_day_bounds(date_str, display_tz)
+    want_bull = side == "BUY"
+    for zones in (d_zones_full.ob_zones, d_zones_full.rb_zones, d_zones_full.fvg_zones):
+        for z in zones:
+            if z.impact_time is not None and z.bullish == want_bull and win_start <= z.impact_time < win_end:
+                return False
+    return True
     return None
 
 
@@ -1306,10 +1343,14 @@ def main() -> int:
             # "React day" rule (user, 2026-09-29): once today sweeps the
             # previous day's relevant extreme (the low for a SELL bias,
             # the high for a BUY bias), 1H setups are abandoned for the
-            # rest of the day and only 4H stays in play.
-            prev_extreme = find_prev_day_extreme(bars_by_tag["d"], args.show_date, display_tz, args.default_side)
-            h1_abandon_at = find_prev_day_sweep_time(minutes, mt_all, args.show_date, display_tz,
-                                                       args.default_side, prev_extreme)
+            # rest of the day and only 4H stays in play. Only applies on
+            # an actual react day -- never the impact day itself (see
+            # is_react_day's own docstring for the real bug this fixed).
+            h1_abandon_at = None
+            if is_react_day(d_zones_full, args.default_side, args.show_date, display_tz):
+                prev_extreme = find_prev_day_extreme(minutes, mt_all, args.show_date, display_tz, args.default_side)
+                h1_abandon_at = find_prev_day_sweep_time(minutes, mt_all, args.show_date, display_tz,
+                                                           args.default_side, prev_extreme)
 
             trades, ledger_rows = compute_5m_trades(tf_full["h4"], tf_full["h1"], e5, minutes,
                                                       window_start, window_end, display_tz,

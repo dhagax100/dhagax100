@@ -9,6 +9,52 @@ Entry format, every day: Bias / Session / Daily driver / 1H+4H context /
 Trade taken / Result / Notes. Short, plain, no fluff.
 
 
+2026-01-14 (Wednesday) — SELL day, "react day," no trade
+---------------------------------
+BIAS: SELL (unchanged). FVG#1 (Daily) still the controlling parent,
+still alive — 14 Jan's own Daily engine had zero events of its own.
+
+REACT-DAY CHECK: is 14 Jan even a react day? Yes — no Daily SELL POI
+impacted ON 14 Jan itself (bias is entirely carried in), so the
+prior-day-extreme-sweep rule applies. 13 Jan's low (1.16339) was NOT
+taken by 14 Jan — both 1H and 4H stayed in play all day.
+
+4H CONTEXT: zero SELL POIs impacted at all on 14 Jan.
+
+1H CONTEXT: four SELL POIs impacted — OB#59/RB#94 (same zone pair,
+15:57), RB#88 (05:51), RB#92 (12:15), RB#96 (18:58). All either
+structurally breached within a minute of impact, or found no entry
+before the window closed. One FVG never reached its own
+premium/discount midpoint.
+
+TRADE TAKEN: none.
+RESULT: no trade, flat day.
+
+SYSTEM STATUS — this day exposed two more real bugs, both fixed and
+verified before this entry was written:
+- find_prev_day_extreme() had a real off-by-one: it looked up
+  "yesterday" against the Daily engine's own bars, which are indexed to
+  the 17:00-NY close (01:00 Riyadh in winter) — one hour after real
+  midnight — so a midnight probe always landed on the day BEFORE the
+  one intended. Fixed to compute directly from real M1 data over the
+  actual previous calendar day.
+- That fix immediately exposed a second, more serious gap: with the
+  day-lookup now correct, 12 Jan itself would have had 1H abandoned
+  from 01:08 Riyadh onward (11 Jan's low got swept that early) — which
+  would have silently erased the RB#67/72 trade, the very first
+  verified result of this whole project. The react-day rule only
+  applies on an actual react day (the day AFTER a Daily POI's own
+  impact) — never on the impact day itself, which 12 Jan is. Fixed with
+  a same-day-impact check that skips the sweep rule entirely on an
+  impact day. 12 Jan's trade is restored and unchanged; 13 Jan's
+  no-trade conclusion is unaffected either way.
+- Separately noted, not yet acted on: the premium/discount gate used
+  throughout this project turns out to be a NEW rule (user's own
+  words) — not part of the validated five_bso_engine.py port or
+  SPEC.md's actual H4/5m entry process. Tabled deliberately until it's
+  a real bottleneck with more data to check it against.
+
+
 2026-01-13 (Tuesday) — SELL day, "react day," no trade
 ---------------------------------
 BIAS: SELL (unchanged). 12 Jan was an impact day — FVG#1 (Daily) wicked

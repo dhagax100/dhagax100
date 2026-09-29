@@ -220,6 +220,40 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 SESSION LOG (newest first)
 ----------------------------
 
+2026-09-29 — Moved to 14 Jan; found and fixed two react-day bugs (off-by-one day, and wrong scope)
+- Premium/discount is confirmed NEW (user's own words) -- not part of
+  the validated five_bso_engine.py port or SPEC.md's H4/5m entry
+  process (SS18-27), which has no premium/discount concept at all.
+  Tabled for later, once it's a real bottleneck with more data to check
+  it against -- NOT removed, NOT kept as validated; flagged honestly as
+  unvalidated in the meantime.
+- Bug 1 (off-by-one day): find_prev_day_extreme() looked up "yesterday"
+  by matching a midnight-Riyadh probe against the Daily engine's own
+  aggregated bars -- but those bars are indexed by the 17:00-NY forex
+  close (01:00 Riyadh in winter), ONE HOUR after real midnight. A
+  midnight probe always lands inside the PRIOR bar's own span, so every
+  call was silently using the day BEFORE the one intended. Verified: for
+  14 Jan the old code returned 12 Jan's low (1.16213) instead of 13 Jan's
+  real low (1.16339). Fixed: computed directly from real M1 data over
+  the actual previous calendar day (same 00:00-24:00 Riyadh definition
+  used everywhere else), no bar-list lookup at all.
+- Bug 2 (wrong scope, found immediately after fixing bug 1): with the
+  day-lookup now correct, re-running 12 Jan showed 1H being abandoned
+  from 01:08 Riyadh onward -- because 11 Jan's low got swept that early
+  -- which would have silently erased the entire RB#67/72 SELL trade,
+  the FIRST verified result of this whole project. Real gap: the
+  react-day rule only ever applies on an actual REACT day (the day
+  AFTER a Daily POI's own impact), never on the impact day itself. 12
+  Jan is the day FVG#1 impacted -- not a react day at all. Fixed with
+  is_react_day(): the sweep check now only runs when NO same-side Daily
+  POI impacted on today's own calendar day.
+- 14 Jan result (SELL bias unchanged, FVG#1 still controlling parent,
+  no new Daily event of its own): zero H4 candidates impacted at all;
+  four 1H SELL candidates (OB#59, RB#88, RB#92, RB#94, RB#96) all
+  POI_BREACHED or NO_ENTRY_IN_WINDOW; one FVG PREMIUM_NOT_REACHED. No
+  trade. 12 Jan's trade (RB#72) and 13 Jan's no-trade conclusion are
+  both unchanged by both fixes.
+
 2026-09-29 — Fixed a swing point being hidden UNDER its own MSS cross mark
 - User's own words: "the swing low below candle 19 that was normally
   exceeded by candle 13 is not shown or drawn, just the cross mark that
