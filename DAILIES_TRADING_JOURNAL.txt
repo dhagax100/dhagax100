@@ -1,0 +1,73 @@
+DHAGAX DAILIES — TRADING JOURNAL
+==================================
+One file. Same name every time. Whatever you save over this replaces it
+in the folder — nothing gets renamed or duplicated. New days go at the
+TOP, newest first. This is the JOURNAL (what happened, day by day) —
+not the rule book. Rules/code changes live in DAILIES_LEARNING_LOG.txt.
+
+Entry format, every day: Bias / Session / Daily driver / 1H+4H context /
+Trade taken / Result / Notes. Short, plain, no fluff.
+
+
+2026-01-12 (Monday) — SELL day
+---------------------------------
+BIAS: SELL. Session: winter hours, 11:00-21:00 Riyadh.
+
+DAILY DRIVER: FVG#1 (SELL), impacted 10:26 Riyadh — this is the zone
+that set the day's bias, before the trading window even opened.
+
+1H CONTEXT: Three SELL zones impacted in one unbroken leg under FVG#1 —
+OB#44 (14:00), RB#67 (14:13), RB#68 (16:07). Per the same-leg rule,
+only one gets to search for a fresh entry at a time: OB#44 handed off
+to RB#67 at 14:13 (RB#67 impacted while OB#44 was still alive), and
+RB#67 handed off to RB#68 at 16:07.
+
+TRADE TAKEN: SELL, entry 1.16847 @ 14:32 (from RB#67, before it was
+superseded), SL 1.16892 @ 16:08, TP 1.16712 (never hit).
+RESULT: SL hit. -1R (4.5 pips risked).
+MFE 9.4 pips / MAE 5.9 pips.
+
+WHY IT DIED: RB#67's own protect_level (1.16892) broke at 16:08 — same
+minute as the SL. Not a coincidence to chase: the SL and the zone's own
+invalidation were the same level here, so the loss and the zone dying
+happened together. RB#68 (the next zone in the leg) impacted one minute
+earlier (16:07) and was itself breached almost immediately (16:08) —
+never got a chance to search for its own entry.
+
+WHAT DIDN'T TRADE, AND WHY:
+- RB#69 (BUY, 17:25) and FVG#9/FVG#31 (BUY) — wrong side for the day's
+  bias, and FVG#9/FVG#31 also never reached premium/discount on their
+  own terms regardless.
+- OB#45 (BUY) — never impacted at all.
+
+STRUCTURAL NOTE LOGGED: price reached the pre-impact swing (1.16754) at
+14:55 — 23 minutes after entry, well before the eventual SL at 16:08.
+Real BE-research data point: if a future rule moves SL to BE once price
+reaches that pre-impact swing, this trade would have been saved.
+
+LESSON: most POIs in a leg die fast once a fresher one takes over —
+impact alone isn't confirmation. A POI whose SL and invalidation level
+coincide is fragile by construction; don't treat "impacted" as strong
+confirmation on its own.
+
+
+SYSTEM STATUS — verified working as of 2026-01-12 close
+-----------------------------------------------------------
+Everything below was built and hand-checked against this real day
+before moving forward, so the same situation next time is handled
+automatically, correctly, the first time:
+- Entry/SL/TP/re-entry/invalidation rules — ported from the validated
+  five_bso_engine.py, not the earlier simplified version.
+- Same-leg POI collapse — only one active opportunity per unbroken
+  leg, entries already found before handoff still stand.
+- Cross-timeframe display — Daily on 4H/1H, 4H/1H on 5m, each with
+  correct settings independence.
+- Daily's own scope — full calendar day, not the narrow session window.
+- Parent-POI traceability — one column in the existing ledger table,
+  no separate table.
+- 5m_trades_ledger.csv — every attempt, entered or not, with stage,
+  MFE/MAE, SL/TP hit times, and an extensible structural-notes column.
+- On-chart 5m table — consolidated, price+time paired per column.
+
+Nothing here is a guess: every rule above was verified against this
+exact day's real M1 data before being trusted.
