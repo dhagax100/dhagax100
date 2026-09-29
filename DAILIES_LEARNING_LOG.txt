@@ -146,6 +146,16 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 SESSION LOG (newest first)
 ----------------------------
 
+2026-09-29 — Fixed a real TradingView compile error (CE10272)
+- The previous fix's tParent column caused a genuine "undeclared
+  identifier" error in TradingView: its packed array was appended to
+  the END of each timeframe's body, but the table-population code that
+  reads it lives earlier in the same body -- Pine runs top-to-bottom,
+  so the array didn't exist yet at that point. Fixed by declaring it
+  right after the input group, before anything that reads it. Verified
+  in the actual generated pine that d_tParent/h4_tParent/h1_tParent are
+  all now declared before their first use, with h1's values unchanged.
+
 2026-09-29 — Corrected: parent-POI folded into existing table; MFE/MAE now on-chart
 - User caught two mistakes in the previous delivery: (1) a separate
   standalone table had been built for the parent-Daily-POI mapping when
