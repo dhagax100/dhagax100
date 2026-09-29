@@ -9,6 +9,42 @@ Entry format, every day: Bias / Session / Daily driver / 1H+4H context /
 Trade taken / Result / Notes. Short, plain, no fluff.
 
 
+2026-01-15 (Thursday) — SELL day, "react day," no trade, third flat day running
+---------------------------------
+BIAS: SELL (unchanged). FVG#1 (Daily) still the controlling parent —
+15 Jan's own Daily engine had zero new events of its own.
+
+REACT-DAY CHECK: yes (no Daily SELL POI impacted on 15 Jan itself).
+14 Jan's low got swept very early — 04:34 Riyadh — so 1H was abandoned
+for the rest of the day from that point on. 4H stayed in play all day.
+
+4H CONTEXT: zero SELL POIs impacted at all on 15 Jan.
+
+1H CONTEXT: three SELL POIs touched today, two came too late to matter
+(1H already shut off by the 04:34 sweep) — RB#95 (02:08, Asia hours,
+broke structurally almost immediately), RB#100 (12:36, well after 1H
+was already abandoned), FVG#40 (19:26, same, already closed).
+
+TRADE TAKEN: none.
+RESULT: no trade, flat. Third day straight with no trade since the
+12th's loss.
+
+SYSTEM STATUS: two real bugs found and fixed while reviewing this day
+(both logged in DAILIES_LEARNING_LOG.txt) --
+- A stripped Sunday's leftover hour was standing alone as a fake ~60-
+  minute candle, and a Daily FVG had been built using it as one of its
+  3 candles. Fixed (aggregate_days/aggregate_hours fold that leftover
+  hour into the following real day's candle now). Verified: 12 Jan's
+  trade unchanged, the fake FVG is gone.
+- "POI from last" was silently clamped to however many Daily zones
+  exist in the current window, refusing to accept a typed number past
+  it. Fixed (maxval is a fixed 999 now, never blocks typing ahead).
+  Verified directly: as of 14 Jan, only 3 Daily POIs have EVER formed
+  in the whole dataset (OB=0, RB=1, FVG=2, all SELL) -- confirmed by
+  running the Daily engine fully unfiltered, no window at all. Rank 4
+  is empty because there is no 4th one yet, not because of a limit.
+
+
 2026-01-14 (Wednesday) — SELL day, "react day," no trade
 ---------------------------------
 BIAS: SELL (unchanged). FVG#1 (Daily) still the controlling parent,
