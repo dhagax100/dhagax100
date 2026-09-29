@@ -191,6 +191,51 @@ def filter_to_calendar_day(engine, date_str: str, display_tz: ZoneInfo) -> None:
     filter_to_window(engine, win_start, win_end)
 
 
+def calendar_day_bounds(date_str: str, display_tz: ZoneInfo) -> tuple["datetime", "datetime"]:
+    """The same full 00:00-24:00 Riyadh calendar day filter_to_calendar_day()
+    uses, factored out so the "react day" checks below (which need
+    today's own calendar-day bounds, not the narrow trading window) share
+    the exact same definition of "today" instead of a second copy."""
+    y, m, d = (int(x) for x in date_str.split("-"))
+    win_start = datetime(y, m, d, 0, 0, 0, tzinfo=display_tz).astimezone(UTC)
+    return win_start, win_start + timedelta(days=1)
+
+
+def find_prev_day_extreme(day_bars: list, date_str: str, display_tz: ZoneInfo, side: str):
+    """"React day" rule (user, 2026-09-29): the previous day's relevant
+    extreme -- its LOW for a SELL bias (a sell setup dies as a fresh
+    idea once today reclaims yesterday's low), its HIGH for a BUY bias.
+    `day_bars` is the Daily engine's own aggregated bars (dc.aggregate_days),
+    same bars Daily's own structure is built from -- not a second,
+    possibly-inconsistent day boundary. Returns None for side "ALL" (no
+    single bias to check) or if there's no prior day in the dataset."""
+    if side not in ("SELL", "BUY"):
+        return None
+    win_start, _ = calendar_day_bounds(date_str, display_tz)
+    idx = next((i for i, b in enumerate(day_bars) if b.start <= win_start < b.end), None)
+    if idx is None or idx == 0:
+        return None
+    prev_bar = day_bars[idx - 1]
+    return prev_bar.l if side == "SELL" else prev_bar.h
+
+def find_prev_day_sweep_time(minutes, mt: list, date_str: str, display_tz: ZoneInfo, side: str, extreme):
+    """First minute, anywhere in today's own full calendar day (same
+    scope as Daily's own -- a sweep can happen before the trading window
+    even opens), that actually takes the previous day's extreme. None if
+    it never happens -- the case the user confirmed by hand for 13 Jan
+    2026 ("13 did not take 12's low")."""
+    if extreme is None:
+        return None
+    win_start, win_end = calendar_day_bounds(date_str, display_tz)
+    i0 = bisect_left(mt, win_start)
+    for m in minutes[i0:]:
+        if m.t >= win_end:
+            break
+        if (m.l <= extreme) if side == "SELL" else (m.h >= extreme):
+            return m.t
+    return None
+
+
 def structural_invalid_at(z, it: "datetime", bars: list, bar_starts: list,
                            minutes, mt: list) -> tuple:
     """Ported from five_bso_engine.py's structural_invalid_at() (SPEC.md
@@ -412,8 +457,8 @@ def run_5m_chain(z, impact_time, bar_starts5: list, events5_sorted: list, minute
     return attempts
 
 
-def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_end, display_tz,
-                       side: str = "ALL") -> tuple[list[dict], list[dict]]:
+def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_end, display_tz,
+                       side: str = "ALL", h1_abandon_at=None) -> tuple[list[dict], list[dict]]:
     """The real entry rule (2026-09-28 this session, ported 2026-09-28
     from the previously-built and dataset-validated `five_bso_engine.py`
     -- SPEC.md SS17/SS20-27 -- after the user asked whether POI
@@ -447,7 +492,27 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_end, display_tz,
     (unchanged shape, for the pine table/boxes); `ledger_rows` is EVERY
     attempt on EVERY qualifying zone, entered or not, with its stage and
     reason -- written to 5m_trades_ledger.csv by the caller so "why
-    didn't this POI trade" never again needs a one-off script."""
+    didn't this POI trade" never again needs a one-off script.
+
+    `h4_engine`/`h1_engine` are expected to be the FULL, unfiltered
+    (pre-date-filter) zone/event snapshots (2026-09-29, "react day" fix
+    -- a POI impacted on a PRIOR day, still alive and still the day's
+    controlling idea today, was previously silently dropped as a
+    candidate entirely, because it only ever got engines[] AFTER
+    filter_to_date() had already trimmed out anything with no lifecycle
+    event inside TODAY's narrow window). A carried-in zone's own entry
+    SEARCH still only starts at `window_start` (today's own open), never
+    re-litigating a trade a prior day's own run already found and
+    reported -- only the zone's *eligibility* (impact, protect_level,
+    invalidation) carries across days, not its already-resolved history.
+
+    `h1_abandon_at`: the "react day" rule (user, 2026-09-29) -- once
+    today sweeps the previous day's relevant extreme (the low, for a
+    SELL bias; the high, for a BUY bias), 1H setups are abandoned for
+    the rest of the day and only 4H stays in play. Same ceiling
+    treatment as same-leg supersession: it caps how much LONGER a 1H
+    zone may keep searching, it does not erase a 1H entry already found
+    before the sweep."""
     mt = [m.t for m in minutes]
     hi = [m.h for m in minutes]
     lo = [m.l for m in minutes]
@@ -469,6 +534,16 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_end, display_tz,
                     continue
                 if side == "BUY" and not z.bullish:
                     continue
+                # `eng` is now the FULL (unfiltered) history, not just
+                # today's window -- so bound candidates to what's still
+                # actually relevant to today: impacted by today's close.
+                # (Real "already dead before today" filtering happens
+                # just below, via structural_invalid_at -- z.stop is
+                # only the zone's own IMPACT bar, same event as
+                # impact_time, not a death marker; using it as one would
+                # have wrongly excluded live zones.)
+                if z.impact_time > window_end:
+                    continue
                 candidates.append((eng, eng_bar_starts, z, ptype, tf_tag))
 
     trades_raw = []  # one dict per zone's own ENTERED attempt, pre-merge
@@ -484,7 +559,7 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_end, display_tz,
                          entry_riyadh="", entry_price="", sl_price="", tp_price="",
                          sl_hit_riyadh="", tp_hit_riyadh="", risk_price="", r_pips="",
                          mfe_pips="", mae_pips="", result="", exit_riyadh="", r_multiple="",
-                         sl_tp_conflict="", structural_notes="")
+                         sl_tp_conflict="", structural_notes="", h1_abandoned_riyadh="")
 
         # Same-leg supersession (see mark_superseded_same_leg): a later
         # same-direction, unbroken-leg POI caps how much longer THIS zone
@@ -494,6 +569,26 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_end, display_tz,
         superseded_at = getattr(z, "superseded_at", None)
         eff_window_end = min(window_end, superseded_at) if superseded_at is not None else window_end
         row_base["superseded_riyadh"] = riyadh(superseded_at)
+
+        # "React day" rule (user, 2026-09-29): once today sweeps the
+        # previous day's relevant extreme, 1H setups are abandoned for
+        # the rest of the day -- same ceiling treatment as supersession,
+        # so a 1H entry already found before the sweep still stands.
+        if tf_tag == "1H" and h1_abandon_at is not None:
+            eff_window_end = min(eff_window_end, h1_abandon_at)
+            row_base["h1_abandoned_riyadh"] = riyadh(h1_abandon_at)
+
+        # A zone carried in from a prior day (candidates now come from
+        # FULL, unfiltered history -- see this function's own docstring)
+        # may simply already be structurally dead by the time today's
+        # window opens. Check that FIRST, before spending any more work
+        # on it: an ancient, long-invalidated zone should never reach
+        # the opposing-swing/premium-discount checks below at all.
+        invalidated_at, reason = structural_invalid_at(z, z.impact_time, eng.w, eng_bar_starts, minutes, mt)
+        if invalidated_at is not None and invalidated_at < window_start:
+            ledger_rows.append(dict(row_base, stage="DEAD_BEFORE_WINDOW",
+                                     invalidated_riyadh=riyadh(invalidated_at), invalidated_reason=reason or ""))
+            continue
 
         opp_kind = 1 if sell else 0  # opposing swing: a LOW for a sell reaction, a HIGH for a buy reaction
         opp_events = [e for e in eng.events if e.kind == opp_kind and eng.w[e.confirm].start <= z.impact_time]
@@ -516,7 +611,6 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_end, display_tz,
             ledger_rows.append(dict(row_base, stage="PREMIUM_NOT_REACHED", premium_mid=f"{mid:.5f}"))
             continue
 
-        invalidated_at, reason = structural_invalid_at(z, z.impact_time, eng.w, eng_bar_starts, minutes, mt)
         # watch_levels: structural reference prices to check for after
         # entry -- room to grow (2026-09-29, user's own words: "I will
         # tell you any more structural note I see in the road"). The
@@ -525,7 +619,14 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_end, display_tz,
         # premium/discount check already uses) -- a candidate future BE
         # trigger the user wants tracked, universally, for every trade.
         watch_levels = [("pre_impact_swing", opp.price)]
-        attempts = run_5m_chain(z, z.impact_time, bar_starts5, events5_sorted, minutes, mt,
+        # Search for a NEW entry never starts before today's own window
+        # open, even for a zone carried in from a prior day (react-day
+        # case) -- otherwise this would just rediscover and re-report
+        # the exact same entry a prior day's own run already found.
+        # Everything else (opposing swing, invalidation, premium/
+        # discount) still measures from the zone's real impact_time.
+        search_from = max(z.impact_time, window_start)
+        attempts = run_5m_chain(z, search_from, bar_starts5, events5_sorted, minutes, mt,
                                  invalidated_at, eff_window_end, watch_levels)
         for a in attempts:
             if a.get("stage") != "ENTERED":
@@ -629,7 +730,8 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_end, display_tz,
 
 LEDGER_FIELDS = [
     "tf", "poi", "side", "zone_bottom", "zone_top", "protect_level",
-    "impact_riyadh", "superseded_riyadh", "invalidated_riyadh", "invalidated_reason", "premium_mid",
+    "impact_riyadh", "superseded_riyadh", "h1_abandoned_riyadh",
+    "invalidated_riyadh", "invalidated_reason", "premium_mid",
     "attempt", "stage", "resting_riyadh", "replacements",
     "entry_riyadh", "entry_price", "sl_price", "tp_price", "sl_hit_riyadh", "tp_hit_riyadh",
     "risk_price", "r_pips", "mfe_pips", "mae_pips",
@@ -1078,12 +1180,20 @@ def main() -> int:
         engines = {}
         raw_lines = {}
         d_zones_full = None  # snapshot of Daily's zone lists BEFORE date-filtering truncates them (see below)
+        tf_full = {}  # h4/h1 full (pre-date-filter) engine snapshots -- see compute_5m_trades' own docstring
         for tag, tf_period, title in TIMEFRAMES:
             engine = wc.WeeklyCombinedEngine(minutes, bars_by_tag[tag])
             engine.run()
             mark_superseded_same_leg(engine, minutes, mt_all)
             if tag in ("h4", "h1"):
                 exclude_old_intraday_zones(engine)
+                # Full (unfiltered) snapshot for compute_5m_trades' own
+                # candidate search -- a POI impacted on a PRIOR day but
+                # still alive today (the "react day" case) must still be
+                # considered, which filter_to_date() below would
+                # otherwise silently drop entirely (2026-09-29).
+                tf_full[tag] = SimpleNamespace(ob_zones=list(engine.ob_zones), rb_zones=list(engine.rb_zones),
+                                                fvg_zones=list(engine.fvg_zones), events=engine.events, w=engine.w)
             if tag == "d":
                 # A Daily POI from a PRIOR day can still be the active
                 # parent today (2026-09-29 -- "react day" case: FVG#1
@@ -1114,9 +1224,19 @@ def main() -> int:
             bars5 = dc.aggregate_minutes(minutes, 5)
             e5 = wc.WeeklyCombinedEngine(minutes, bars5)
             e5.run()
-            _, window_end = trading_window(args.show_date, display_tz)
-            trades, ledger_rows = compute_5m_trades(engines["h4"], engines["h1"], e5, minutes, window_end,
-                                                      display_tz, side=args.default_side)
+            window_start, window_end = trading_window(args.show_date, display_tz)
+
+            # "React day" rule (user, 2026-09-29): once today sweeps the
+            # previous day's relevant extreme (the low for a SELL bias,
+            # the high for a BUY bias), 1H setups are abandoned for the
+            # rest of the day and only 4H stays in play.
+            prev_extreme = find_prev_day_extreme(bars_by_tag["d"], args.show_date, display_tz, args.default_side)
+            h1_abandon_at = find_prev_day_sweep_time(minutes, mt_all, args.show_date, display_tz,
+                                                       args.default_side, prev_extreme)
+
+            trades, ledger_rows = compute_5m_trades(tf_full["h4"], tf_full["h1"], e5, minutes,
+                                                      window_start, window_end, display_tz,
+                                                      side=args.default_side, h1_abandon_at=h1_abandon_at)
 
         # Header: identical across all three except title/onWeekly/maxval --
         # take it from "d", split at the first body-only line.

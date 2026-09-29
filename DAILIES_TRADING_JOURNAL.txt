@@ -9,6 +9,54 @@ Entry format, every day: Bias / Session / Daily driver / 1H+4H context /
 Trade taken / Result / Notes. Short, plain, no fluff.
 
 
+2026-01-13 (Tuesday) — SELL day, "react day," no trade
+---------------------------------
+BIAS: SELL (unchanged). 12 Jan was an impact day — FVG#1 (Daily) wicked
+off/reacted, closed off the POI, and is still alive (never invalidated).
+13 Jan is therefore a "react day": keep looking for SELL setups in both
+1H and 4H, as long as today doesn't take 12 Jan's low. Confirmed from
+real Daily bars: 12 Jan's low (1.16326) was NOT taken by 13 Jan (whose
+low was 1.16339) — so both 1H and 4H stayed in play all day (no 1H
+abandonment triggered).
+
+DAILY DRIVER: FVG#1, still the controlling parent (carried in from 12
+Jan — 13 Jan's own Daily engine had zero events of its own).
+
+4H CONTEXT: every 4H SELL POI in the dataset (OB#2, OB#7, RB#18, FVG#2)
+was already structurally dead — 4H candle closed through, or its own
+protect_level broke — days before 13 Jan even opened. FVG#6 was still
+alive but never reached its own premium/discount midpoint. Net: zero
+live 4H setups today.
+
+1H CONTEXT: two SELL POIs impacted today — RB#76 (11:09) and RB#78
+(16:30). Both got structurally breached (protect_level broken) within
+1-2 minutes of their own impact, before either could find a resting
+swing.
+
+TRADE TAKEN: none.
+RESULT: no trade, flat day.
+
+WHY NO TRADE: not a rule-abandonment case (1H never got dropped) — both
+1H POIs simply died almost immediately after impact, and there was no
+live 4H POI at all left over from the prior leg.
+
+SYSTEM STATUS — this day also fixed two real bugs, verified working:
+- Cross-day Daily-parent-POI visibility: a Daily POI (FVG#1) whose only
+  lifecycle event was on 12 Jan was silently vanishing from 13 Jan's
+  parent-POI column. Fixed — 13 Jan's 1H table now correctly shows
+  "FVG#1" as parent.
+- Cross-day 4H/1H candidate visibility: 4H/1H POIs carried in from a
+  prior day (still alive) were silently never considered as today's
+  candidates at all, because the date filter ran before the trade
+  engine ever saw them. Fixed — every SELL 4H/1H POI back through early
+  January is now actually checked each run, with a real ledger reason
+  (DEAD_BEFORE_WINDOW) recorded for each one no longer alive.
+- "React day" 1H-abandon-on-prior-day-sweep rule: automated (checks the
+  real Daily bars/M1 data every run, no more manual verification
+  needed). Not exercised today (the sweep never happened), but ready
+  for the day it does.
+
+
 2026-01-12 (Monday) — SELL day
 ---------------------------------
 BIAS: SELL. Session: winter hours, 11:00-21:00 Riyadh.

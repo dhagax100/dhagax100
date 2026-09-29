@@ -125,6 +125,42 @@ PARENT-POI TRACEABILITY (2026-09-29, corrected same day)
   table (the one with POI/ID/Type/Side/Bottom/Top/Origin/Trigger/
   Eligible/Impact/Status), not a separate table. First attempt got this
   wrong (built a standalone table) — corrected same day, per the user.
+- The parent search itself must see a Daily POI's FULL lifecycle, not
+  just what happened on today's own calendar day — a Daily POI that
+  impacted on a PRIOR day and is still alive (never invalidated) is
+  still the correct parent today. Fixed 2026-09-29: a snapshot of
+  Daily's zone lists is taken BEFORE the calendar-day filter trims them,
+  and that snapshot (not the filtered engine) is what the parent search
+  uses.
+
+CROSS-DAY CANDIDATES / "REACT DAY" (2026-09-29)
+- A 4H/1H POI that impacted on a PRIOR day and is still alive (not yet
+  structurally invalidated) is still a real candidate for TODAY, not
+  just Daily. Previously, filter_to_date()'s narrow window trimmed
+  these zones out of engines["h4"]/["h1"] entirely before
+  compute_5m_trades ever saw them — so a still-alive POI carried in
+  from yesterday silently produced zero 4H/1H setups today, with no
+  reason recorded anywhere. Fixed: compute_5m_trades now searches the
+  FULL, unfiltered zone history (bounded only to "impacted by today's
+  close, not already structurally dead before today's window opened" —
+  a real ledger stage, DEAD_BEFORE_WINDOW, records exactly why a
+  carried-in zone is excluded).
+- A carried-in zone's own entry SEARCH still only starts at today's own
+  window open — it never re-discovers and re-reports an entry a PRIOR
+  day's own run already found and resolved. Only the zone's continuing
+  ELIGIBILITY (impact, protect_level, invalidation) carries across the
+  day boundary, never its already-settled trade history.
+- "React day" rule (taught by the user, 2026-09-29): the day after an
+  "impact day" (yesterday wicked/reacted off an in-favor POI and closed
+  off it) is a react day. Today keeps looking for BOTH 1H and 4H setups
+  in the same direction, AS LONG AS today hasn't taken out yesterday's
+  relevant extreme (the low, for a SELL bias; the high, for a BUY
+  bias). The moment today sweeps that extreme, 1H setups are abandoned
+  for the rest of the day and only 4H stays in play. Automated the same
+  day: the sweep, if any, is detected from the real Daily bars and real
+  M1 data (not asserted), and acts as a ceiling on 1H searches only —
+  same treatment as same-leg supersession, so a 1H entry already found
+  before the sweep still stands. Ledger column: h1_abandoned_riyadh.
 
 BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 - Visible in BOTH 5m_trades_ledger.csv AND the on-chart 5m trades
@@ -145,6 +181,52 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 
 SESSION LOG (newest first)
 ----------------------------
+
+2026-09-29 — Automated "react day" (1H abandon on prior-day sweep) + fixed cross-day candidates
+- User taught the react-day rule by hand for 13 Jan 2026: yesterday
+  (12 Jan) was an impact day (in-favor Daily FVGs wicked/reacted, still
+  alive/uninvalidated). Today, keep looking for BOTH 1H and 4H setups
+  in the same direction, as long as today hasn't taken yesterday's
+  relevant extreme; the moment it does, abandon 1H and trade 4H only.
+  Manually verified: 13 Jan's low (1.16339) never took 12 Jan's low
+  (1.16326 per the Daily bars) -- so both stayed in play for 13 Jan.
+  Now automated: find_prev_day_extreme()/find_prev_day_sweep_time()
+  check the real Daily bars and real M1 data every run (no more manual
+  checking); h1_abandon_at caps 1H searches only, same ceiling
+  treatment as same-leg supersession (an entry already found before the
+  sweep still stands). New ledger column: h1_abandoned_riyadh.
+- Asking this question also exposed a real, separate bug: compute_5m_trades
+  was only ever given engines["h4"]/["h1"] AFTER filter_to_date() had
+  already trimmed out any zone with no lifecycle event inside TODAY's
+  narrow window -- so a 4H/1H POI carried over from a prior day (alive,
+  still the day's controlling idea) silently never became a candidate
+  at all, with no reason recorded anywhere. Verified on 13 Jan: with the
+  fix, every H4 SELL POI back through early January now actually gets
+  checked, and the honest answer is that all of them were already
+  structurally dead (4H candle close or protect_level break) well
+  before 13 Jan even opened -- DEAD_BEFORE_WINDOW, a new real ledger
+  stage, records exactly why each one doesn't count. Only 1H had live
+  candidates (RB#76, RB#78), both breached within 1-2 minutes of their
+  own impact -- same zero-trades result as before, now for the
+  verified real reason instead of a filtering artifact. Fixed by
+  feeding compute_5m_trades the FULL, unfiltered zone/event history
+  (snapshotted before filter_to_date runs, same pattern as the Daily
+  parent-POI fix below) -- a carried-in zone's own entry SEARCH still
+  only starts at today's own window open, so it can never re-discover a
+  trade a prior day's own run already found and reported.
+
+2026-09-29 — Fixed cross-day Daily-parent-POI bug (FVG#1 vanishing from 13 Jan's parent column)
+- find_parent_daily_poi()/build_parent_column() searched the
+  already-date-filtered Daily engine -- a Daily POI whose only
+  lifecycle event was on a PRIOR day (12 Jan's FVG#1, never invalidated,
+  still 13 Jan's real controlling parent) silently vanished from the
+  parent search the moment the calendar rolled over, even though it was
+  never invalidated. Fixed: a snapshot of Daily's zone lists
+  (d_zones_full) is taken right after mark_superseded_same_leg() runs
+  but BEFORE filter_to_calendar_day() trims the engine down to just
+  that day's own events, and the parent search uses the snapshot
+  instead. Verified: 13 Jan's h1_tParent array changed from all "-" to
+  correctly showing "FVG#1".
 
 2026-09-29 — Consolidated the on-chart 5m table to 8 columns
 - User's own layout: Entry/SL/TP each merge price+time into one column
