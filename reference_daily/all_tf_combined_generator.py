@@ -42,6 +42,7 @@ import tempfile
 from bisect import bisect_left, bisect_right
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 _here = Path(__file__).resolve().parent
@@ -1076,12 +1077,28 @@ def main() -> int:
 
         engines = {}
         raw_lines = {}
+        d_zones_full = None  # snapshot of Daily's zone lists BEFORE date-filtering truncates them (see below)
         for tag, tf_period, title in TIMEFRAMES:
             engine = wc.WeeklyCombinedEngine(minutes, bars_by_tag[tag])
             engine.run()
             mark_superseded_same_leg(engine, minutes, mt_all)
             if tag in ("h4", "h1"):
                 exclude_old_intraday_zones(engine)
+            if tag == "d":
+                # A Daily POI from a PRIOR day can still be the active
+                # parent today (2026-09-29 -- "react day" case: FVG#1
+                # impacted 12 Jan, still alive and in control on 13 Jan,
+                # yet 13 Jan's own Daily engine has zero same-day events
+                # of its own). filter_to_calendar_day() below only keeps
+                # zones with a lifecycle event ON args.show_date, so it
+                # would otherwise silently drop FVG#1 from the parent
+                # search entirely. Snapshot the full (pre-filter) zone
+                # lists here -- the Zone objects themselves aren't
+                # mutated by filtering, only which ones the engine's own
+                # list still references -- and hand the snapshot to
+                # find_parent_daily_poi() instead of the filtered engine.
+                d_zones_full = SimpleNamespace(ob_zones=list(engine.ob_zones), rb_zones=list(engine.rb_zones),
+                                                fvg_zones=list(engine.fvg_zones))
             if args.show_date:
                 if tag == "d":
                     filter_to_calendar_day(engine, args.show_date, display_tz)
@@ -1178,7 +1195,7 @@ def main() -> int:
             # exactly the CE10272 "undeclared identifier" the user hit:
             # Pine executes top-to-bottom, so a `var array` declared
             # after its own first read doesn't exist yet at that point.
-            parent_col = build_parent_column(engines[tag], None if tag == "d" else engines["d"])
+            parent_col = build_parent_column(engines[tag], None if tag == "d" else d_zones_full)
             body = own_inputs + wc.wrb.pack_array("tParent", "string", parent_col) + raw_lines[tag][split_idx:]
             body = rename_arrays(body, tag)
             body = inject_input_params(body, tag)
