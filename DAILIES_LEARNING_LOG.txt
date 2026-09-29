@@ -220,6 +220,36 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 SESSION LOG (newest first)
 ----------------------------
 
+2026-09-29 — "POI from last" ranking made side-aware -- picking a side could silently show nothing
+- User's own screenshots caught it directly: Daily settings, Side=SELL,
+  "POI from last"=4, "Count from the start" ON -- table completely
+  empty. Traced it: the rank number was computed across BOTH sides
+  combined (grank), so "rank 4" checked "is this the 4th zone of ANY
+  side" AND separately "is it SELL" -- if the 4th zone chronologically
+  happened to be BUY (it was, verified: OB#1, 9 Jan), no SELL zone
+  could ever match rank 4, no matter how many SELL zones actually
+  existed (there were 5, as of 15 Jan, full history).
+- Fixed: added a side-specific rank (each zone's rank counted only
+  among same-side zones) and a side-specific total (needed for the
+  "count from start" reversal math) -- Pine now picks the combined
+  ranking when Side=ALL, or the side-specific one when a side is
+  picked. Verified directly: Side=SELL, rank=4, count-from-start now
+  correctly resolves to RB#3 (12 Jan) instead of nothing.
+- This also exposed and fixed a separate, quieter bug: the shared
+  f_drawPoiBox function (defined once, used by all three timeframe
+  bodies) gets parameterized per-timeframe by an exact-string patch in
+  all_tf_combined_generator.py. That patch was matching against the
+  OLD function signature/body text, so when the signature changed here
+  the patch silently stopped applying -- the call sites got the new
+  arguments appended (from a separate, more general patch) but the
+  function definition didn't gain the matching parameters, so def and
+  calls would have mismatched argument counts. Updated the exact-string
+  patch to match the new signature/body. Worth remembering: any future
+  edit to f_drawPoiBox's signature or body in weekly_combined_
+  generator.py needs its matching patch in all_tf_combined_generator.py
+  updated in the same change, or this breaks silently again.
+- Verified 12 Jan's ground-truth trade unchanged throughout.
+
 2026-09-29 — Daily is never --since-scoped anymore -- full history, user picks with the toggles
 - User's own words: "I want all... all the POIs, swings, MSS and
   everything. I get to pick what POI I want to see on daily chart and
