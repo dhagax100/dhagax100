@@ -37,7 +37,7 @@ import argparse
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 from zoneinfo import ZoneInfo
 
 # Two supported layouts, same convention as reference_combined/
@@ -65,17 +65,47 @@ def forex_day_start(t: datetime, close_zone: ZoneInfo, close_hour: int) -> datet
     return start.astimezone(UTC)
 
 
-def aggregate_days(minutes: List["wob.Minute"], close_zone: ZoneInfo, close_hour: int) -> List["wob.Week"]:
+def aggregate_days(minutes: List["wob.Minute"], close_zone: ZoneInfo, close_hour: int,
+                    display_tz: Optional[ZoneInfo] = None) -> List["wob.Week"]:
     """Same aggregation loop as wob.aggregate_weeks(), daily instead of
     weekly. Reuses wob.Week as the bar container -- it is just
     (start, end, o, h, l, c, first, last), nothing week-specific about it.
-    A day with no minutes (weekend) simply never appears -- there is no gap
-    to skip, aggregate_weeks() has the same property for Saturdays."""
+    A day with NO minutes at all (weekend) simply never appears -- there is
+    no gap to skip, aggregate_weeks() has the same property for Saturdays.
+
+    But a day with a FEW minutes is a different, real bug (2026-09-29,
+    user caught it directly: "you are using Sunday data right. check the
+    3rd candle"): Sunday's minutes get stripped upstream (main(), before
+    this ever runs), but the forex-day boundary (17:00 NY / 01:00 Riyadh
+    winter) still starts a "Sunday" bucket -- and the last hour of it
+    (Riyadh midnight to 01:00) is real MONDAY data, always survives the
+    Sunday strip, and would otherwise sit alone as its own tiny ~60-minute
+    "candle" (verified: the Jan-11 slot in this dataset came out
+    O=H=1.16395 L=C=1.16336 -- price only ever fell, because that's not
+    a real day, it's one hour of leftover data pretending to be one).
+    Any zone built using that stub as one of its 3 candles (an FVG's
+    candle3 in this exact case) is built on fake structure. Fixed by
+    folding that leftover hour into the FOLLOWING real day's candle
+    instead of giving it a candle of its own: the merged bar's `start`
+    is set to the fragment's own first real minute (slightly earlier
+    than the grid boundary) and its `end` extends through the NEXT
+    day's own close, so it swallows the fragment plus one full real
+    day in a single, wider-than-usual bar -- correct in substance
+    (one real continuous stretch of trading), off by at most an hour
+    on the label, which nothing downstream depends on. Pass display_tz
+    (the same clock the Sunday strip itself uses) to enable this;
+    omitted (None) keeps the old behavior for callers that never strip
+    Sundays."""
     days: List["wob.Week"] = []
     i = 0
     while i < len(minutes):
         start = forex_day_start(minutes[i].t, close_zone, close_hour)
-        end = (start.astimezone(close_zone) + timedelta(days=1)).astimezone(UTC)
+        if display_tz is not None and start.astimezone(display_tz).weekday() == 6:
+            next_start = (start.astimezone(close_zone) + timedelta(days=1)).astimezone(UTC)
+            start = minutes[i].t
+            end = (next_start.astimezone(close_zone) + timedelta(days=1)).astimezone(UTC)
+        else:
+            end = (start.astimezone(close_zone) + timedelta(days=1)).astimezone(UTC)
         j = i + 1
         high, low = minutes[i].h, minutes[i].l
         while j < len(minutes) and minutes[j].t < end:
@@ -88,7 +118,8 @@ def aggregate_days(minutes: List["wob.Minute"], close_zone: ZoneInfo, close_hour
 
 
 def aggregate_hours(minutes: List["wob.Minute"], hours: int,
-                     close_zone: ZoneInfo, close_hour: int) -> List["wob.Week"]:
+                     close_zone: ZoneInfo, close_hour: int,
+                     display_tz: Optional[ZoneInfo] = None) -> List["wob.Week"]:
     """Same aggregation loop again, for intraday bars (4H, 1H, ...) --
     anchored to the SAME 17:00-NY forex-day rollover aggregate_days()
     uses (via forex_day_start()), not plain UTC-epoch buckets
@@ -101,16 +132,32 @@ def aggregate_hours(minutes: List["wob.Minute"], hours: int,
     1H is unaffected in practice -- 17:00 NY always lands exactly on an
     integer UTC hour in both DST states, so hour-aligned epoch buckets
     already coincided with the real 1H grid -- but this is now anchored
-    the same way for both, so there's only one boundary rule to trust)."""
+    the same way for both, so there's only one boundary rule to trust).
+
+    Same Sunday-fragment bug as aggregate_days() applies here too, at
+    4H granularity specifically (2026-09-29, user: "check the 3rd
+    candle") -- the leftover hour after a stripped Sunday would
+    otherwise become its own anemic ~60-minute 4H candle. Folded into
+    the following day's FIRST 4H bucket the same way, widening it by
+    up to an hour instead of giving the fragment its own candle. 1H is
+    naturally immune (that leftover hour already lines up exactly with
+    a real 1H boundary), but display_tz is accepted here too so the
+    same call site can pass it uniformly without needing to know which
+    granularity actually needs it."""
     bars: List["wob.Week"] = []
     i = 0
     step = timedelta(hours=hours)
     while i < len(minutes):
         t = minutes[i].t
         day_start = forex_day_start(t, close_zone, close_hour)
-        bucket_index = int((t - day_start).total_seconds() // 3600 // hours)
-        start = day_start + bucket_index * step
-        end = start + step
+        if display_tz is not None and day_start.astimezone(display_tz).weekday() == 6:
+            next_day_start = (day_start.astimezone(close_zone) + timedelta(days=1)).astimezone(UTC)
+            start = t
+            end = next_day_start + step
+        else:
+            bucket_index = int((t - day_start).total_seconds() // 3600 // hours)
+            start = day_start + bucket_index * step
+            end = start + step
         j = i + 1
         high, low = minutes[i].h, minutes[i].l
         while j < len(minutes) and minutes[j].t < end:

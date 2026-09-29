@@ -1349,10 +1349,15 @@ def main() -> int:
         print(f"--since {args.since} --show-date {args.show_date} "
               f"(today from {today_marker.name}, since pinned in {since_marker.name})")
 
+        # display_tz passed through so aggregate_days/aggregate_hours can
+        # fold the leftover hour after a stripped Sunday into the
+        # following real day's candle instead of building a fake stub
+        # candle from it (2026-09-29, user: "you are using Sunday data
+        # right. check the 3rd candle" -- verified: it was).
         bars_by_tag = {
-            "d": dc.aggregate_days(minutes, close_tz, args.day_close_hour),
-            "h4": dc.aggregate_hours(minutes, 4, close_tz, args.day_close_hour),
-            "h1": dc.aggregate_hours(minutes, 1, close_tz, args.day_close_hour),
+            "d": dc.aggregate_days(minutes, close_tz, args.day_close_hour, display_tz),
+            "h4": dc.aggregate_hours(minutes, 4, close_tz, args.day_close_hour, display_tz),
+            "h1": dc.aggregate_hours(minutes, 1, close_tz, args.day_close_hour, display_tz),
         }
 
         mt_all = [m.t for m in minutes]

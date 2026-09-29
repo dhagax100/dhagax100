@@ -220,6 +220,37 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 SESSION LOG (newest first)
 ----------------------------
 
+2026-09-29 — Stripped Sunday left a fake leftover-hour candle; fixed
+- User's own words: "you are using Sunday data right. check the 3rd
+  candle" -- while walking through Daily FVG#3 (origin 8 Jan), asked
+  to verify its candle3 directly. It was fake: Sunday's minutes get
+  stripped (see the entry below), but the forex-day boundary (17:00
+  NY / 01:00 Riyadh winter) still opens a candle slot for that Sunday
+  -- and the LAST hour of that slot (Riyadh midnight to 01:00) is real
+  MONDAY data, which always survives the strip and was standing alone
+  as its own ~60-minute "candle." Verified directly: the Jan-11 daily
+  slot came out O=H=1.16395 L=C=1.16336 -- price only ever fell,
+  because that's not a real trading day, it's one leftover hour
+  pretending to be one. Any zone using it as one of its 3 candles (the
+  FVG we were just looking at, whose candle3 landed exactly there) was
+  built on fake structure.
+- Fixed in aggregate_days()/aggregate_hours() (daily_combined_
+  generator.py): when a candle slot's own forex-day boundary falls on
+  a Sunday (display_tz clock, same one the Sunday strip itself uses),
+  its leftover real minutes now fold into the FOLLOWING real day's
+  candle instead of standing alone -- verified: the fake Jan-11 daily
+  candle is gone entirely, Jan-12's candle now correctly starts from
+  that leftover hour (00:39 Riyadh) through the normal close. Same fix
+  applied to 4H (the exact granularity the fake FVG's candle3 actually
+  came from); 1H was already naturally immune (that leftover hour
+  happens to land exactly on a real 1H boundary already).
+- Verified this doesn't touch the one thing every other fix in this
+  project gets checked against: 12 Jan's trade (RB#67, SELL, entry
+  1.16847 @14:32, SL 1.16892 hit 16:08, -1R) is byte-identical after
+  this fix -- only the zone ID shifted (now RB#66), same drift every
+  structural fix causes. The specific fake Daily FVG is confirmed gone:
+  Daily FVG count dropped from 3 to 2 zones.
+
 2026-09-29 — One universal command, forever — no more hand-editing --show-date/--since
 - User's own words: "get rid of this command that limits the code to
   specific day... let the python code handle any change." Every prior
