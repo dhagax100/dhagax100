@@ -259,22 +259,6 @@ def filter_to_date_range(engine, since_str: str, until_str: str, display_tz: Zon
     filter_to_windows(engine, windows)
 
 
-def filter_to_calendar_range(engine, since_str: str, until_str: str, display_tz: ZoneInfo) -> None:
-    """Daily's own multi-day range counterpart to filter_to_date_range()
-    -- deliberately WIDER than the narrow trading window H4/1H use
-    (2026-09-29, real bug the user caught: the Daily POI that sets a
-    whole day's bias can impact at ANY hour, including before the
-    trading window even opens -- the 12 Jan 2026 walk-through earlier
-    this project used exactly such a Daily FVG, impacted well before the
-    11:00 Riyadh open, to set that day's SELL bias. Scoping Daily to the
-    narrow window like H4/1H silently dropped it entirely). Scope is the
-    full calendar day (00:00-24:00 Riyadh) for every day from `since_str`
-    through `until_str` -- still per-range, just not per-session."""
-    win_start, _ = calendar_day_bounds(since_str, display_tz)
-    _, win_end = calendar_day_bounds(until_str, display_tz)
-    filter_to_window(engine, win_start, win_end)
-
-
 def calendar_day_bounds(date_str: str, display_tz: ZoneInfo) -> tuple["datetime", "datetime"]:
     """The same full 00:00-24:00 Riyadh calendar day filter_to_calendar_range()
     uses, factored out so the "react day" checks below (which need
@@ -1401,11 +1385,18 @@ def main() -> int:
                 # find_parent_daily_poi() instead of the filtered engine.
                 d_zones_full = SimpleNamespace(ob_zones=list(engine.ob_zones), rb_zones=list(engine.rb_zones),
                                                 fvg_zones=list(engine.fvg_zones))
-            if args.show_date:
-                if tag == "d":
-                    filter_to_calendar_range(engine, since_date, args.show_date, display_tz)
-                else:
-                    filter_to_date_range(engine, since_date, args.show_date, display_tz)
+            # Daily is deliberately NEVER date-filtered here (2026-09-29,
+            # user: "I want all... all the POIs, swings, MSS and
+            # everything. I get to pick what POI I want to see... by
+            # using the focus toggle" -- --since scoping makes sense for
+            # 1H/4H, which are real per-day trading-session windows, but
+            # Daily should carry its FULL history (bounded only by
+            # --as-of/--show-date so nothing from after "today" ever
+            # shows) and let Focus POI/Side/"POI from last" do the
+            # narrowing on the chart itself, same as a real TradingView
+            # Daily chart always shows full history.
+            if args.show_date and tag != "d":
+                filter_to_date_range(engine, since_date, args.show_date, display_tz)
             engines[tag] = engine
             raw_lines[tag] = build_one(base, engine, args, display_tz, tag)
 

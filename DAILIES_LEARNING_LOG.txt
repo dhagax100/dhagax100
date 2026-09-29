@@ -220,6 +220,26 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 SESSION LOG (newest first)
 ----------------------------
 
+2026-09-29 — Daily is never --since-scoped anymore -- full history, user picks with the toggles
+- User's own words: "I want all... all the POIs, swings, MSS and
+  everything. I get to pick what POI I want to see on daily chart and
+  in table by using the focus toggle." --since scoping (a real trading-
+  session window) makes sense for 1H/4H; it never should have applied
+  to Daily, which has no session concept at all.
+- Fixed: Daily is no longer date-filtered by filter_to_calendar_range()
+  at all -- that function is deleted, its only caller removed. Daily's
+  engine now carries its FULL history from the start of the CSV,
+  bounded only by --as-of/--show-date (so nothing from after "today"
+  ever shows -- that part is untouched). Verified: Daily swings now go
+  back to 2026-01-01 (start of this dataset), not just the single
+  carried-in swing before --since. Focus POI / Side / "POI from last"
+  (see the maxval fix above) are what narrow it down now, same as a
+  real TradingView Daily chart always shows full history.
+- 1H/4H are UNCHANGED -- still scoped to --since through --show-date,
+  still per-real-trading-session (Asia hours still excluded unless a
+  POI impacts inside a real session). Verified 12 Jan's ground-truth
+  trade unchanged.
+
 2026-09-29 — "POI from last" no longer clamps to today's own zone count
 - User's own words: "POI from last must show me whatever number I put
   from the beginning but limiting all of the daily POIs into 4, I can
