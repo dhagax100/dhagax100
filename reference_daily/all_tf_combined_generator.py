@@ -726,44 +726,55 @@ def build_trades_pine(trades: list[dict], display_tz: ZoneInfo) -> list[str]:
         lines.append('// no qualifying trades for this --show-date window')
         return lines
 
-    (side, entry_x, entry_y, sl, tp, r_pips, poi, impact_x, entry_disp,
-     mfe_pips, mae_pips, sl_hit, tp_hit, notes) = [], [], [], [], [], [], [], [], [], [], [], [], [], []
+    # User's own layout (2026-09-29): price+time pairs share ONE column
+    # each (Entry, SL, TP), MFE/MAE share one column, notes shortened,
+    # and the POI column IS the parent-1H/4H link (relabeled so that's
+    # explicit) -- 8 columns instead of 12.
+    side, entry_x, entry_disp, sl_disp, tp_disp, r_pips, poi, impact_x, mfe_mae, notes = \
+        [], [], [], [], [], [], [], [], [], []
     for t in trades:
+        bull = t["side"] == "BUY"
         side.append(t["side"])
         entry_x.append(wc.wrb.pine_epoch(t["entry_time"]))
-        entry_y.append(round(t["entry_price"], 5))
-        sl.append(round(t["sl"], 5))
-        tp.append(round(t["tp"], 5))
+        impact_x.append(wc.wrb.pine_epoch(t["impact_time"]))
+        entry_time_str = t["entry_time"].astimezone(display_tz).strftime("%H:%M")
+        entry_disp.append(f"{t['entry_price']:.5f} @ {entry_time_str}")
+        sl_hit, tp_hit = t.get("sl_hit_riyadh"), t.get("tp_hit_riyadh")
+        sl_time_str = sl_hit[-8:-3] if sl_hit else None  # "...HH:MM:SS" -> "HH:MM"
+        tp_time_str = tp_hit[-8:-3] if tp_hit else None
+        sl_disp.append(f"{t['sl']:.5f} @ {sl_time_str}" if sl_time_str else f"{t['sl']:.5f}")
+        tp_disp.append(f"{t['tp']:.5f} @ {tp_time_str}" if tp_time_str else f"{t['tp']:.5f}")
         r_pips.append(round(t["r_pips"], 1))
         poi.append("+".join(t["poi_sources"]))
-        impact_x.append(wc.wrb.pine_epoch(t["impact_time"]))
-        entry_disp.append(t["entry_time"].astimezone(display_tz).strftime("%Y-%m-%d %H:%M"))
-        mfe_pips.append(round(t.get("mfe_pips", 0.0), 1))
-        mae_pips.append(round(t.get("mae_pips", 0.0), 1))
-        sl_hit.append(t.get("sl_hit_riyadh") or "-")
-        tp_hit.append(t.get("tp_hit_riyadh") or "-")
-        notes.append(t.get("structural_notes") or "-")
+        mfe_mae.append(f"{t.get('mfe_pips', 0.0):.1f} / {t.get('mae_pips', 0.0):.1f}")
+        # Shortened per the user's own ask -- drop the POI prefix (the
+        # POI column already says it), the date (one --show-date day
+        # only) and "RYD" (whole table is Riyadh); keep the label + time.
+        raw_note = t.get("structural_notes") or ""
+        short = re.sub(r'^\S+#\d+:\s*', '', raw_note)              # drop "RB#67: "
+        short = re.sub(r'\s*\(\d+\.\d+\)', '', short)               # drop "(1.16754)"
+        short = re.sub(r'\s+at\s+\d{4}-\d\d-\d\d\s+(\d\d:\d\d):\d\d\s+RYD', r' @\1', short)
+        notes.append(short or "-")
 
     lines += [
         *wc.wrb.pack_array("trSide", "string", side),
         *wc.wrb.pack_array("trEntryX", "int", entry_x),
-        *wc.wrb.pack_array("trEntryY", "float", entry_y),
-        *wc.wrb.pack_array("trSL", "float", sl),
-        *wc.wrb.pack_array("trTP", "float", tp),
+        *wc.wrb.pack_array("trEntryY", "float", [round(t["entry_price"], 5) for t in trades]),
+        *wc.wrb.pack_array("trSL", "float", [round(t["sl"], 5) for t in trades]),
+        *wc.wrb.pack_array("trTP", "float", [round(t["tp"], 5) for t in trades]),
+        *wc.wrb.pack_array("trEntryDisp", "string", entry_disp),
+        *wc.wrb.pack_array("trSlDisp", "string", sl_disp),
+        *wc.wrb.pack_array("trTpDisp", "string", tp_disp),
         *wc.wrb.pack_array("trRPips", "float", r_pips),
         *wc.wrb.pack_array("trPoi", "string", poi),
         *wc.wrb.pack_array("trImpactX", "int", impact_x),
-        *wc.wrb.pack_array("trEntryDisp", "string", entry_disp),
-        *wc.wrb.pack_array("trMfePips", "float", mfe_pips),
-        *wc.wrb.pack_array("trMaePips", "float", mae_pips),
-        *wc.wrb.pack_array("trSlHit", "string", sl_hit),
-        *wc.wrb.pack_array("trTpHit", "string", tp_hit),
+        *wc.wrb.pack_array("trMfeMae", "string", mfe_mae),
         *wc.wrb.pack_array("trNotes", "string", notes),
-        f'var table trTable = table.new(position.bottom_right, 12, {len(trades) + 1}, border_width=1)',
+        f'var table trTable = table.new(position.bottom_right, 8, {len(trades) + 1}, border_width=1)',
         'if barstate.islast and onFive and showTrades and array.size(trSide) > 0',
         '    boxRightOffset = 2 * 60 * 60 * 1000',
-        '    headers2 = array.from("Side", "Entry (RYD)", "Entry", "SL", "TP", "R (pips)", "POI", '
-        '"MFE (pips)", "MAE (pips)", "SL hit (RYD)", "TP hit (RYD)", "Notes")',
+        '    headers2 = array.from("Side", "Entry", "SL", "TP", "R (pips)", "Parent 1H/4H POI", '
+        '"MFE / MAE (pips)", "Notes")',
         '    for c = 0 to array.size(headers2) - 1',
         '        table.cell(trTable, c, 0, array.get(headers2, c), text_color=color.white, bgcolor=color.new(color.purple, 15))',
         '    for i = 0 to array.size(trSide) - 1',
@@ -779,16 +790,12 @@ def build_trades_pine(trades: list[dict], display_tz: ZoneInfo) -> list[str]:
         '        label.new(eX, tpY, "TP " + str.tostring(tpY, format.mintick), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, color=color.green, textcolor=color.white, size=size.small)',
         '        table.cell(trTable, 0, i + 1, array.get(trSide, i), text_color=color.black, bgcolor=na)',
         '        table.cell(trTable, 1, i + 1, array.get(trEntryDisp, i), text_color=color.black, bgcolor=na)',
-        '        table.cell(trTable, 2, i + 1, str.tostring(eY, format.mintick), text_color=color.black, bgcolor=na)',
-        '        table.cell(trTable, 3, i + 1, str.tostring(slY, format.mintick), text_color=color.black, bgcolor=na)',
-        '        table.cell(trTable, 4, i + 1, str.tostring(tpY, format.mintick), text_color=color.black, bgcolor=na)',
-        '        table.cell(trTable, 5, i + 1, str.tostring(array.get(trRPips, i), "#.#"), text_color=color.black, bgcolor=na)',
-        '        table.cell(trTable, 6, i + 1, array.get(trPoi, i), text_color=color.black, bgcolor=na)',
-        '        table.cell(trTable, 7, i + 1, str.tostring(array.get(trMfePips, i), "#.#"), text_color=color.black, bgcolor=na)',
-        '        table.cell(trTable, 8, i + 1, str.tostring(array.get(trMaePips, i), "#.#"), text_color=color.black, bgcolor=na)',
-        '        table.cell(trTable, 9, i + 1, array.get(trSlHit, i), text_color=color.black, bgcolor=na)',
-        '        table.cell(trTable, 10, i + 1, array.get(trTpHit, i), text_color=color.black, bgcolor=na)',
-        '        table.cell(trTable, 11, i + 1, array.get(trNotes, i), text_color=color.black, bgcolor=na)',
+        '        table.cell(trTable, 2, i + 1, array.get(trSlDisp, i), text_color=color.black, bgcolor=na)',
+        '        table.cell(trTable, 3, i + 1, array.get(trTpDisp, i), text_color=color.black, bgcolor=na)',
+        '        table.cell(trTable, 4, i + 1, str.tostring(array.get(trRPips, i), "#.#"), text_color=color.black, bgcolor=na)',
+        '        table.cell(trTable, 5, i + 1, array.get(trPoi, i), text_color=color.black, bgcolor=na)',
+        '        table.cell(trTable, 6, i + 1, array.get(trMfeMae, i), text_color=color.black, bgcolor=na)',
+        '        table.cell(trTable, 7, i + 1, array.get(trNotes, i), text_color=color.black, bgcolor=na)',
     ]
     return lines
 
