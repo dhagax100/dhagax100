@@ -565,12 +565,6 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_end, display_tz,
         # the entry itself coincides -- flagged, not silently dropped.
         sl_tp_conflict = any(abs(m["sl_price"] - first["sl_price"]) > 1e-9
                               or abs(m["tp_price"] - first["tp_price"]) > 1e-9 for m in members[1:])
-        trades.append(dict(
-            side=first["side"], entry_time=first["entry_time"], entry_price=first["entry_price"],
-            sl=first["sl_price"], tp=first["tp_price"], r_pips=first["risk"] * 10000,
-            impact_time=min(m["impact_time"] for m in members),
-            poi_sources=[m["poi"] for m in members],
-        ))
         result = first["result"]
         exit_t = first.get("exit_time")
         # sl_hit_riyadh/tp_hit_riyadh: the SAME exit fact the result/
@@ -592,6 +586,15 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_end, display_tz,
                 notes.append(f"{m['poi']}: reached pre-impact swing ({m['pre_impact_swing_price']:.5f}) "
                              f"at {riyadh(hit_at)} RYD")
         structural_notes = "; ".join(notes)
+
+        trades.append(dict(
+            side=first["side"], entry_time=first["entry_time"], entry_price=first["entry_price"],
+            sl=first["sl_price"], tp=first["tp_price"], r_pips=first["risk"] * 10000,
+            impact_time=min(m["impact_time"] for m in members),
+            poi_sources=[m["poi"] for m in members],
+            mfe_pips=first.get("mfe", 0.0) * 10000, mae_pips=first.get("mae", 0.0) * 10000,
+            sl_hit_riyadh=sl_hit_riyadh, tp_hit_riyadh=tp_hit_riyadh, structural_notes=structural_notes,
+        ))
 
         ledger_rows.append(dict(
             tf="/".join(dict.fromkeys(m["tf"] for m in members)),
@@ -723,7 +726,8 @@ def build_trades_pine(trades: list[dict], display_tz: ZoneInfo) -> list[str]:
         lines.append('// no qualifying trades for this --show-date window')
         return lines
 
-    side, entry_x, entry_y, sl, tp, r_pips, poi, impact_x, entry_disp = [], [], [], [], [], [], [], [], []
+    (side, entry_x, entry_y, sl, tp, r_pips, poi, impact_x, entry_disp,
+     mfe_pips, mae_pips, sl_hit, tp_hit, notes) = [], [], [], [], [], [], [], [], [], [], [], [], [], []
     for t in trades:
         side.append(t["side"])
         entry_x.append(wc.wrb.pine_epoch(t["entry_time"]))
@@ -734,6 +738,11 @@ def build_trades_pine(trades: list[dict], display_tz: ZoneInfo) -> list[str]:
         poi.append("+".join(t["poi_sources"]))
         impact_x.append(wc.wrb.pine_epoch(t["impact_time"]))
         entry_disp.append(t["entry_time"].astimezone(display_tz).strftime("%Y-%m-%d %H:%M"))
+        mfe_pips.append(round(t.get("mfe_pips", 0.0), 1))
+        mae_pips.append(round(t.get("mae_pips", 0.0), 1))
+        sl_hit.append(t.get("sl_hit_riyadh") or "-")
+        tp_hit.append(t.get("tp_hit_riyadh") or "-")
+        notes.append(t.get("structural_notes") or "-")
 
     lines += [
         *wc.wrb.pack_array("trSide", "string", side),
@@ -745,10 +754,16 @@ def build_trades_pine(trades: list[dict], display_tz: ZoneInfo) -> list[str]:
         *wc.wrb.pack_array("trPoi", "string", poi),
         *wc.wrb.pack_array("trImpactX", "int", impact_x),
         *wc.wrb.pack_array("trEntryDisp", "string", entry_disp),
-        f'var table trTable = table.new(position.bottom_right, 7, {len(trades) + 1}, border_width=1)',
+        *wc.wrb.pack_array("trMfePips", "float", mfe_pips),
+        *wc.wrb.pack_array("trMaePips", "float", mae_pips),
+        *wc.wrb.pack_array("trSlHit", "string", sl_hit),
+        *wc.wrb.pack_array("trTpHit", "string", tp_hit),
+        *wc.wrb.pack_array("trNotes", "string", notes),
+        f'var table trTable = table.new(position.bottom_right, 12, {len(trades) + 1}, border_width=1)',
         'if barstate.islast and onFive and showTrades and array.size(trSide) > 0',
         '    boxRightOffset = 2 * 60 * 60 * 1000',
-        '    headers2 = array.from("Side", "Entry (RYD)", "Entry", "SL", "TP", "R (pips)", "POI")',
+        '    headers2 = array.from("Side", "Entry (RYD)", "Entry", "SL", "TP", "R (pips)", "POI", '
+        '"MFE (pips)", "MAE (pips)", "SL hit (RYD)", "TP hit (RYD)", "Notes")',
         '    for c = 0 to array.size(headers2) - 1',
         '        table.cell(trTable, c, 0, array.get(headers2, c), text_color=color.white, bgcolor=color.new(color.purple, 15))',
         '    for i = 0 to array.size(trSide) - 1',
@@ -769,6 +784,11 @@ def build_trades_pine(trades: list[dict], display_tz: ZoneInfo) -> list[str]:
         '        table.cell(trTable, 4, i + 1, str.tostring(tpY, format.mintick), text_color=color.black, bgcolor=na)',
         '        table.cell(trTable, 5, i + 1, str.tostring(array.get(trRPips, i), "#.#"), text_color=color.black, bgcolor=na)',
         '        table.cell(trTable, 6, i + 1, array.get(trPoi, i), text_color=color.black, bgcolor=na)',
+        '        table.cell(trTable, 7, i + 1, str.tostring(array.get(trMfePips, i), "#.#"), text_color=color.black, bgcolor=na)',
+        '        table.cell(trTable, 8, i + 1, str.tostring(array.get(trMaePips, i), "#.#"), text_color=color.black, bgcolor=na)',
+        '        table.cell(trTable, 9, i + 1, array.get(trSlHit, i), text_color=color.black, bgcolor=na)',
+        '        table.cell(trTable, 10, i + 1, array.get(trTpHit, i), text_color=color.black, bgcolor=na)',
+        '        table.cell(trTable, 11, i + 1, array.get(trNotes, i), text_color=color.black, bgcolor=na)',
     ]
     return lines
 
@@ -796,58 +816,58 @@ def find_parent_daily_poi(d_engine, side_bull: bool, child_impact_time: "datetim
     return dz, ptype
 
 
-def build_parent_poi_table(d_engine, h4_engine, h1_engine, display_tz: ZoneInfo) -> list[str]:
-    """User's ask (2026-09-29): "each 1h table should show the parent
-    daily POI name and where it is" -- every impacted 4H/1H POI's own
-    Daily-level driver, found via find_parent_daily_poi(). A separate,
-    small standalone table (not a new column bolted onto the existing
-    shared `ledger` table from weekly_combined_generator.py -- that
-    table's row layout is generic, reused by other standalone viewers
-    too, and isn't something to fork just for this project's own
-    parent-POI concept). Shows on the 4H, 1H and 5m charts."""
-    rows = []
-    for eng, tf_tag in ((h4_engine, "H4"), (h1_engine, "1H")):
-        for zones, ptype in ((eng.ob_zones, "OB"), (eng.rb_zones, "RB"), (eng.fvg_zones, "FVG")):
-            for z in zones:
-                if z.impact_time is None:
-                    continue
-                dz, dptype = find_parent_daily_poi(d_engine, z.bullish, z.impact_time)
-                rows.append(dict(
-                    tf=tf_tag, poi=f"{ptype}#{z.id}",
-                    parent=f"{dptype}#{dz.id}" if dz else "-",
-                    parent_bottom=f"{dz.zb:.5f}" if dz else "", parent_top=f"{dz.zt:.5f}" if dz else "",
-                    parent_impact=wob.display_iso(dz.impact_time, display_tz) if dz else "",
-                ))
-    rows.sort(key=lambda r: (r["tf"], r["poi"]))
+def build_parent_column(engine, d_engine) -> list[str]:
+    """User's correction (2026-09-29): no separate table -- ONE more
+    column in the ALREADY existing shared ledger table. Row order here
+    MUST match weekly_combined_generator.py's own ledger-table row
+    construction exactly (its `_table_rows`/`all_rows`: OB+RB+FVG zones,
+    excluding rejected, sorted by origin week/day descending), since
+    this array is read row-for-row alongside tPoi/tId/etc -- not
+    recomputed independently. `d_engine=None` means this call IS
+    building the Daily engine's own column (Daily has no Daily-level
+    parent of its own, every row is "-")."""
+    all_rows = []
+    for zones, left_of in ((engine.ob_zones, lambda z: z.candle),
+                            (engine.rb_zones, lambda z: z.candle),
+                            (engine.fvg_zones, lambda z: z.left)):
+        for z in zones:
+            if getattr(z, "rejected", False):
+                continue
+            all_rows.append((engine.w[left_of(z)].start, z))
+    all_rows.sort(key=lambda pair: pair[0], reverse=True)
 
-    lines = ['bool showParentTable = input.bool(true, "Show parent Daily POI table", group="Trades")']
-    if not rows:
-        lines.append('// no impacted 4H/1H POIs for this --show-date window')
-        return lines
+    if d_engine is None:
+        return ["-" for _ in all_rows]
+    out = []
+    for _, z in all_rows:
+        if z.impact_time is None:
+            out.append("-")
+            continue
+        dz, dptype = find_parent_daily_poi(d_engine, z.bullish, z.impact_time)
+        out.append(f"{dptype}#{dz.id}" if dz else "-")
+    return out
 
-    tf, poi, parent, pbottom, ptop, pimpact = ([r[k] for r in rows] for k in
-                                                ("tf", "poi", "parent", "parent_bottom", "parent_top", "parent_impact"))
-    lines += [
-        *wc.wrb.pack_array("ppTf", "string", tf),
-        *wc.wrb.pack_array("ppPoi", "string", poi),
-        *wc.wrb.pack_array("ppParent", "string", parent),
-        *wc.wrb.pack_array("ppBottom", "string", pbottom),
-        *wc.wrb.pack_array("ppTop", "string", ptop),
-        *wc.wrb.pack_array("ppImpact", "string", pimpact),
-        f'var table ppTable = table.new(position.bottom_left, 6, {len(rows) + 1}, border_width=1)',
-        'if barstate.islast and (onH4 or onH1 or onFive) and showParentTable and array.size(ppTf) > 0',
-        '    ppHeaders = array.from("TF", "POI", "Daily parent", "Parent bottom", "Parent top", "Parent impact (RYD)")',
-        '    for c = 0 to array.size(ppHeaders) - 1',
-        '        table.cell(ppTable, c, 0, array.get(ppHeaders, c), text_color=color.white, bgcolor=color.new(color.navy, 15))',
-        '    for i = 0 to array.size(ppTf) - 1',
-        '        table.cell(ppTable, 0, i + 1, array.get(ppTf, i), text_color=color.black, bgcolor=na)',
-        '        table.cell(ppTable, 1, i + 1, array.get(ppPoi, i), text_color=color.black, bgcolor=na)',
-        '        table.cell(ppTable, 2, i + 1, array.get(ppParent, i), text_color=color.black, bgcolor=na)',
-        '        table.cell(ppTable, 3, i + 1, array.get(ppBottom, i), text_color=color.black, bgcolor=na)',
-        '        table.cell(ppTable, 4, i + 1, array.get(ppTop, i), text_color=color.black, bgcolor=na)',
-        '        table.cell(ppTable, 5, i + 1, array.get(ppImpact, i), text_color=color.black, bgcolor=na)',
-    ]
-    return lines
+
+def inject_parent_column(body_lines: list[str], tag: str) -> list[str]:
+    """Adds the 'Daily Parent' column (index 11) to the shared ledger
+    table this body already writes into -- widens this body's own
+    table.clear() range and its own headers = array.from(...) line, and
+    adds one more table.cell(...) call (reading {tag}_tParent) right
+    after the existing Status column (index 10) in the per-row
+    population loop. No new table."""
+    header_re = re.compile(r'^(\s*)headers = array\.from\((.*)\)$')
+    out = []
+    for ln in body_lines:
+        ln = ln.replace('table.clear(ledger, 0, 0, 10, 20)', 'table.clear(ledger, 0, 0, 11, 20)')
+        m = header_re.match(ln)
+        if m:
+            ln = f'{m.group(1)}headers = array.from({m.group(2)}, "Daily Parent")'
+        out.append(ln)
+        if ln.strip().startswith(f'table.cell(ledger, 10, rowN, array.get({tag}_tStatus, i)'):
+            indent = ln[:len(ln) - len(ln.lstrip())]
+            out.append(f'{indent}table.cell(ledger, 11, rowN, array.get({tag}_tParent, i), '
+                        'text_color=color.black, bgcolor=na)')
+    return out
 
 
 def build_one(base: Path, engine, args, display_tz, tag: str) -> list[str]:
@@ -1083,6 +1103,11 @@ def main() -> int:
         header = [ln.replace(
             'indicator("FXCM Weekly OB+RB+FVG Combined - Python Reference"',
             'indicator("Dhagax Dailies -- Daily+4H+1H OB+RB+FVG Combined"',
+        ).replace(
+            # One more shared-ledger-table column: "Daily Parent" (see
+            # build_parent_column/inject_parent_column) -- NOT a new
+            # table, the same one every body already writes into.
+            'table.new(position.top_right, 11,', 'table.new(position.top_right, 12,',
         ) for ln in header]
 
         # Pull the 5 Combined-settings inputs OUT of the shared header --
@@ -1134,10 +1159,19 @@ def main() -> int:
             own_maxvals[tag] = own_maxval
             own_inputs = build_own_inputs(shared_input_lines, tag, title, own_maxval, args.default_side)
             body = own_inputs + raw_lines[tag][split_idx:]
+            # Daily-parent-POI column (2026-09-29, user's own words: "we
+            # want the daily parent POI ID to appear in the already
+            # established 1h table, nowhere else, no new table") -- one
+            # more packed array, generic-named like every other one here
+            # so rename_arrays tag-prefixes it the same way; row order
+            # matches build_parent_column()'s own docstring exactly.
+            parent_col = build_parent_column(engines[tag], None if tag == "d" else engines["d"])
+            body = body + wc.wrb.pack_array("tParent", "string", parent_col)
             body = rename_arrays(body, tag)
             body = inject_input_params(body, tag)
             body = regate(body, gate_by_tag[tag])
             body = collapse_pack_blocks(body)
+            body = inject_parent_column(body, tag)
             bodies.append(body)
 
         # 5m's own settings group ("just like other timeframes have") --
@@ -1204,9 +1238,6 @@ def main() -> int:
             final_lines += body
         final_lines += h4_on5 + h1_on5
         final_lines += collapse_pack_blocks(build_trades_pine(trades, display_tz))
-        if args.show_date:
-            final_lines += collapse_pack_blocks(
-                build_parent_poi_table(engines["d"], engines["h4"], engines["h1"], display_tz))
         (base / out_name).write_text("\n".join(final_lines), encoding="utf-8")
 
         print("Created:")
