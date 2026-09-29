@@ -220,6 +220,24 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 SESSION LOG (newest first)
 ----------------------------
 
+2026-09-29 — Unbounded Daily-in-the-combined-script reverted -- still hit CE10295
+- The side-rank array compaction (below) got the combined script back
+  down to 809 lines, but the SAME "main body too long" error persisted
+  -- proof the real problem wasn't the array-declaration count alone,
+  it was Daily carrying a whole multi-month dataset's worth of POIs
+  (152 zones) inside the SAME file as 4H/1H/5m. Reverted: this combined
+  script's Daily body is capped at --show-date again, same as 1H/4H
+  always were (Daily still isn't --since-FLOOR-scoped -- that part
+  was always safe and stays). Verified: same 809 structural lines but
+  normal small data volume again, 12 Jan's ground-truth trade
+  unchanged.
+- The right way to see Daily's FULL history with no "today" cap is a
+  genuinely SEPARATE script -- daily_full_dataset_viewer.pine, already
+  generated once and sent as its own file. Add it as a second indicator
+  alongside the day-by-day all_tf_combined_viewer.pine, don't try to
+  merge them into one file -- that's the actual, hard Pine limit this
+  whole round of fixes ran into.
+
 2026-09-29 — Real Pine compile error fixed: "main body too long" (CE10295)
 - User pasted the actual TradingView error: "The main body of the
   script is too long. Try wrapping code in functions (CE10295)." This
