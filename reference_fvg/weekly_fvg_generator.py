@@ -353,7 +353,10 @@ class WeeklyFVGEngine:
         swl_ext = new_swl_i + 1 if new_swl_i + 1 <= k - 1 else new_swl_i
         lo = max(0, min(armed_swh - 1, swl_ext))
         hi = max(armed_swh - 1, swl_ext)
-        self.try_create_afvgs(lo, hi, True, k, new_swl_p, at, self.last_l)
+        # protect_idx must match the zone's FINAL tag (SELL, after the
+        # 2026-09-29 fix), not the "bullish" case-selector -- see
+        # try_create_afvgs's own docstring.
+        self.try_create_afvgs(lo, hi, True, k, new_swl_p, at, self.last_h)
 
     def try_bear_afvg(self, preg: int, armed_swl: int, new_swh_i: int, new_swh_p: float, k: int, at: Optional[datetime]) -> None:
         if preg != 2 or armed_swl < 0:
@@ -363,7 +366,9 @@ class WeeklyFVGEngine:
         swh_ext = new_swh_i + 1 if new_swh_i + 1 <= k - 1 else new_swh_i
         lo = max(0, min(armed_swl - 1, swh_ext))
         hi = max(armed_swl - 1, swh_ext)
-        self.try_create_afvgs(lo, hi, False, k, new_swh_p, at, self.last_h)
+        # See try_bull_afvg's own comment -- same fix, mirrored: this
+        # zone's final tag is BUY, so protect_idx must be a swing LOW.
+        self.try_create_afvgs(lo, hi, False, k, new_swh_p, at, self.last_l)
 
     def consume_break(self, bull: bool, k: int) -> bool:
         if bull:

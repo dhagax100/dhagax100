@@ -499,7 +499,15 @@ class WeeklyCombinedEngine:
         swl_ext = new_swl_i + 1 if new_swl_i + 1 <= k - 1 else new_swl_i
         lo = max(0, min(armed_swh - 1, swl_ext))
         hi = max(armed_swh - 1, swl_ext)
-        self.fvg_try_create_afvgs(lo, hi, True, k, new_swl_p, at, self.last_l)
+        # protect_idx must match the zone's FINAL tag (SELL, after the
+        # 2026-09-29 fix), not the "bullish" case-selector -- a SELL
+        # zone's protect_level is a swing HIGH, so self.last_h, not
+        # self.last_l (which fvg_add would misread as a HIGH off the
+        # wrong bar entirely, producing a protect_level BELOW the zone
+        # itself -- an instant, spurious swing_break invalidation, which
+        # is exactly what surfaced testing this: FVG#7 showing
+        # POI_BREACHED one minute after its own impact).
+        self.fvg_try_create_afvgs(lo, hi, True, k, new_swl_p, at, self.last_h)
 
     def fvg_try_bear_afvg(self, preg: int, armed_swl: int, new_swh_i: int, new_swh_p: float, k: int, at: Optional[datetime]) -> None:
         if preg != 2 or armed_swl < 0:
@@ -509,7 +517,10 @@ class WeeklyCombinedEngine:
         swh_ext = new_swh_i + 1 if new_swh_i + 1 <= k - 1 else new_swh_i
         lo = max(0, min(armed_swl - 1, swh_ext))
         hi = max(armed_swl - 1, swh_ext)
-        self.fvg_try_create_afvgs(lo, hi, False, k, new_swh_p, at, self.last_h)
+        # See fvg_try_bull_afvg's own comment -- same fix, mirrored: this
+        # zone's final tag is BUY, so protect_idx must be a swing LOW
+        # (self.last_l), not self.last_h.
+        self.fvg_try_create_afvgs(lo, hi, False, k, new_swh_p, at, self.last_l)
 
     def week_extreme_time(self, k: int, want_low: bool) -> Optional[datetime]:
         wk = self.w[k]

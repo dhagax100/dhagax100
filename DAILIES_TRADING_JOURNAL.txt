@@ -9,38 +9,48 @@ Entry format, every day: Bias / Session / Daily driver / 1H+4H context /
 Trade taken / Result / Notes. Short, plain, no fluff.
 
 
-2026-01-13 (Tuesday) — SELL day, "react day," no trade
+2026-01-13 (Tuesday) — SELL day, "react day," 4H SELL win (+3R)
 ---------------------------------
 BIAS: SELL (unchanged). 12 Jan was an impact day — FVG#1 (Daily) wicked
 off/reacted, closed off the POI, and is still alive (never invalidated).
 13 Jan is therefore a "react day": keep looking for SELL setups in both
 1H and 4H, as long as today doesn't take 12 Jan's low. Confirmed from
-real Daily bars: 12 Jan's low (1.16326) was NOT taken by 13 Jan (whose
-low was 1.16339) — so both 1H and 4H stayed in play all day (no 1H
-abandonment triggered).
+real Daily bars: 12 Jan's low was NOT taken by 13 Jan — so both 1H and
+4H stayed in play all day (no 1H abandonment triggered).
 
 DAILY DRIVER: FVG#1, still the controlling parent (carried in from 12
 Jan — 13 Jan's own Daily engine had zero events of its own).
 
-4H CONTEXT: every 4H SELL POI in the dataset (OB#2, OB#7, RB#18, FVG#2)
-was already structurally dead — 4H candle closed through, or its own
-protect_level broke — days before 13 Jan even opened. FVG#6 was still
-alive but never reached its own premium/discount midpoint. Net: zero
-live 4H setups today.
+4H CONTEXT: FVG#7, an Aggressive FVG (AFVG) sitting inside the 12-13 Jan
+uptrend leg's own retracement — correctly tagged SELL (Aggressive POIs
+trade opposite the leg they're found in, same family as Old POIs).
+Impacted 13:00 Riyadh, 13 Jan.
 
 1H CONTEXT: two SELL POIs impacted today — RB#76 (11:09) and RB#78
 (16:30). Both got structurally breached (protect_level broken) within
 1-2 minutes of their own impact, before either could find a resting
 swing.
 
-TRADE TAKEN: none.
-RESULT: no trade, flat day.
+TRADE TAKEN: SELL, entry 1.16692 @ 13:17 Riyadh (FVG#7, 4H), SL 1.16740,
+TP 1.16548.
+RESULT: TP hit 15:56 Riyadh. +3R (4.8 pips risked). MFE 15.7 pips / MAE
+0.8 pips.
 
-WHY NO TRADE: not a rule-abandonment case (1H never got dropped) — both
-1H POIs simply died almost immediately after impact, and there was no
-live 4H POI at all left over from the prior leg.
+WHY IT WORKED: 4H stayed live specifically because FVG#7 is an
+Aggressive (counter-leg) POI, not a continuation one — the only 4H SELL
+idea in the whole dataset that hadn't already died before 13 Jan opened.
+1H contributed nothing today (both its POIs died within 1-2 minutes of
+impact); this was purely a 4H trade.
 
-SYSTEM STATUS — this day also fixed two real bugs, verified working:
+CORRECTION — this entry originally reported "no trade" for 13 Jan. That
+was wrong: FVG#7 existed in the data but was mistagged BUY (a real bug —
+Aggressive FVGs weren't being tagged opposite the trend, unlike Aggressive
+OB/RB which already did this correctly) and its protect_level was reading
+off the wrong swing entirely, causing a false instant invalidation. Both
+fixed; re-verified against real M1 data before revising this entry.
+
+SYSTEM STATUS — this day fixed four real bugs across two sessions,
+verified working:
 - Cross-day Daily-parent-POI visibility: a Daily POI (FVG#1) whose only
   lifecycle event was on 12 Jan was silently vanishing from 13 Jan's
   parent-POI column. Fixed — 13 Jan's 1H table now correctly shows
@@ -48,9 +58,17 @@ SYSTEM STATUS — this day also fixed two real bugs, verified working:
 - Cross-day 4H/1H candidate visibility: 4H/1H POIs carried in from a
   prior day (still alive) were silently never considered as today's
   candidates at all, because the date filter ran before the trade
-  engine ever saw them. Fixed — every SELL 4H/1H POI back through early
-  January is now actually checked each run, with a real ledger reason
-  (DEAD_BEFORE_WINDOW) recorded for each one no longer alive.
+  engine ever saw them. Fixed — this is what surfaced FVG#7 at all.
+- 4H candle boundaries: were UTC-midnight-aligned instead of the real
+  17:00-NY-anchored grid (01:00/05:00/09:00/13:00/17:00/21:00 Riyadh in
+  winter) — every 4H zone, including FVG#7, was being built against the
+  wrong candles until this was fixed.
+- Aggressive POI mistagging (AFVG only — AOB/ARB were already correct):
+  Aggressive POIs must trade OPPOSITE the leg/trend they're found in.
+  FVG#7 was tagged BUY, should be SELL. Fixing the tag then exposed a
+  second bug in the same code path: its protect_level anchor hadn't
+  been flipped to match, causing an instant false invalidation. Both
+  fixed and re-verified.
 - "React day" 1H-abandon-on-prior-day-sweep rule: automated (checks the
   real Daily bars/M1 data every run, no more manual verification
   needed). Not exercised today (the sweep never happened), but ready

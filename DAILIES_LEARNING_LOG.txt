@@ -209,6 +209,26 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 SESSION LOG (newest first)
 ----------------------------
 
+2026-09-29 — Fixed AFVG's protect_level anchor (found while re-verifying the mistagging fix)
+- Immediately after flipping AFVG's side tag (previous entry below),
+  re-ran it: FVG#7 went from BUY to correctly SELL, but showed
+  POI_BREACHED one minute after its own impact -- suspiciously fast.
+  Checked why: protect_idx (the bar fvg_add reads its protect_level
+  from) was NOT flipped along with the tag -- fvg_try_bull_afvg/
+  fvg_try_bear_afvg still passed self.last_l/self.last_h matching the
+  OLD tag, so the newly-SELL-tagged zone was reading a swing LOW's
+  candle HIGH as its "protecting swing high" -- a value BELOW the zone
+  itself, which is structurally invalid for a SELL zone's protect_level
+  and triggered an immediate false invalidation. Fixed: protect_idx now
+  passed matching the FINAL tag (self.last_h for the now-SELL case,
+  self.last_l for the now-BUY case) in both weekly_combined_generator.py
+  and weekly_fvg_generator.py.
+- Verified: FVG#7 now shows a REAL entry -- SELL 1.16692 @ 13:17 Riyadh,
+  13 Jan 2026, SL 1.16740, TP 1.16548 hit 15:56. +3R. This is 13 Jan's
+  first real trade found under the corrected rules (12 Jan's RB#67
+  trade and result are unchanged; 13 Jan was reported "no trade" before
+  this fix -- that conclusion is now revised to a real 4H SELL win).
+
 2026-09-29 — Fixed a real AFVG mistagging bug: Aggressive POIs were not tagged opposite the trend
 - User's rule, stated directly: "Aggressives (...) and ARB and so on...
   are traded the opposite direction of the trend. Here the 4h leg was
