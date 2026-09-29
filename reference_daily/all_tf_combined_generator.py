@@ -1292,7 +1292,9 @@ def main() -> int:
         # to type -- TODAY.txt next to the outputs. Same command every
         # day; only that one file's single line ever changes.
         today_marker = base / "TODAY.txt"
+        show_date_from_marker = False
         if not args.show_date:
+            show_date_from_marker = True
             if today_marker.exists():
                 args.show_date = today_marker.read_text().strip()
             else:
@@ -1330,8 +1332,9 @@ def main() -> int:
             args.since = args.show_date
         if not since_marker.exists() or since_marker.read_text().strip() != args.since:
             since_marker.write_text(args.since)
+        today_src = today_marker.name if show_date_from_marker else "--show-date"
         print(f"--since {args.since} --show-date {args.show_date} "
-              f"(today from {today_marker.name}, since pinned in {since_marker.name})")
+              f"(today from {today_src}, since pinned in {since_marker.name})")
 
         # display_tz passed through so aggregate_days/aggregate_hours can
         # fold the leftover hour after a stripped Sunday into the
