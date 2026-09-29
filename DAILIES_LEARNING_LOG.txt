@@ -133,6 +133,21 @@ PARENT-POI TRACEABILITY (2026-09-29, corrected same day)
   and that snapshot (not the filtered engine) is what the parent search
   uses.
 
+MULTI-DAY VIEW (2026-09-29)
+- --since START (with --show-date END) shows the WHOLE continuous run
+  from START through END in one chart/ledger — every swing, MSS, POI,
+  setup and entry from every day in between, not one day at a time.
+  Trading forward: keep --since fixed at day one, just move
+  --show-date/--as-of forward each new day. Omit --since and behavior
+  is exactly the single-day behavior --show-date always had.
+- The entry-search itself still respects each day's OWN real session
+  hours even across a multi-day range — Asia (or any off-hours minute)
+  can update structure (candidate replacement, invalidation) but can
+  never itself trigger an entry, on ANY day in the range, not just the
+  first.
+- Output filenames are ALWAYS the same fixed set, overwritten in place
+  — never a dated/per-day copy. One pine file, one ledger, period.
+
 CROSS-DAY CANDIDATES / "REACT DAY" (2026-09-29)
 - A 4H/1H POI that impacted on a PRIOR day and is still alive (not yet
   structurally invalidated) is still a real candidate for TODAY, not
@@ -181,6 +196,45 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 
 SESSION LOG (newest first)
 ----------------------------
+
+2026-09-29 — Added --since (multi-day continuous view); fixed an Asia-hours entry bug it exposed
+- User's real complaint: --show-date treated every day as its own
+  vacuum -- day 13's chart/ledger showed only day 13, with no way to
+  see 12 and 13 together, and I had (wrongly) sent per-day COPIES of
+  the output files with dates baked into the filename, which directly
+  breaks the standing "one fixed filename, always overwritten in place,
+  never a new file per day" rule. Corrected: never send/produce dated
+  filename variants again -- one file per output, every time.
+- Added --since: widens --show-date into one continuous range. Give
+  --since your very first traded day once, then just move
+  --show-date/--as-of forward each new day -- the SAME fixed output
+  files then always show the WHOLE run so far (every swing, MSS, POI,
+  setup, and entry from every day in range), not one day at a time.
+  Omit --since and behavior is byte-identical to single-day --show-date
+  (it defaults to --show-date itself).
+- This exposed a real, separate bug while testing it: the entry-search
+  loop (run_5m_bso/run_5m_chain) never actually checked trading-session
+  hours itself -- it only ever trusted a single window_start floor and
+  window_end ceiling to keep it inside session, which was harmless in
+  single-day mode (both were always the same day's own bounds) but
+  meant a multi-day chain could scan straight through an overnight Asia
+  session and "trigger" an entry there -- verified happening in testing
+  (a spurious 02:51 Riyadh entry, hours before any real session opens).
+  Fixed: a new in_trading_window() check gates the actual entry test on
+  every bar to ITS OWN calendar day's real session hours (candidate
+  replacement/invalidation still update regardless of session -- those
+  are real structural facts, not entries). Re-verified after the fix:
+  the spurious entries are gone, 12 Jan's real trade is unchanged, and
+  13 Jan's own conclusion (no entry) is unchanged and now reached
+  through the exact same session-respecting logic as a single day run.
+- Investigated the user's specific claim of "a 4H POI created on 12,
+  impacted on 13 in the trading window, that got missed": no such H4
+  zone exists anywhere in this dataset (checked directly against the
+  real data). Two 1H zones do match that "created 12, impacted 13"
+  pattern -- OB#46 (SELL, already correctly in the ledger) and RB#73
+  (BUY, correctly excluded by the day's SELL bias) -- so nothing was
+  actually missing; asked the user to point to the specific POI if they
+  still see one, since I can't see their own chart directly.
 
 2026-09-29 — Automated "react day" (1H abandon on prior-day sweep) + fixed cross-day candidates
 - User taught the react-day rule by hand for 13 Jan 2026: yesterday

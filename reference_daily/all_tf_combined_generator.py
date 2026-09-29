@@ -97,7 +97,19 @@ def parse_args():
                          "--as-of controls what data the engine sees (so structure isn't "
                          "computed from the future); --show-date controls what gets drawn from "
                          "the already-computed structure. Use both together for 'only this "
-                         "trading window, as it would have looked standing in it.'")
+                         "trading window, as it would have looked standing in it.' Trades "
+                         "before this day are still real candidates (see --since) even when "
+                         "this alone is given -- --show-date is always the LAST day shown.")
+    p.add_argument("--since", default=None, metavar="YYYY-MM-DD",
+                    help="Widen --show-date into a continuous range: draw every swing, MSS "
+                         "and POI, and compute every 5m trade, from --since's own trading day "
+                         "through --show-date's, all in the SAME one chart/ledger -- not one "
+                         "day in a vacuum (2026-09-29, user's own words: 'day 13 is with day "
+                         "12'). Omit this to keep the single-day behavior --show-date always "
+                         "had (--since defaults to --show-date itself). Trading forward day by "
+                         "day: keep --since fixed at your very first traded day and just move "
+                         "--show-date/--as-of forward each run -- the SAME fixed output files "
+                         "then show the whole run so far, every time, never a new file per day.")
     return p.parse_args()
 
 
@@ -118,6 +130,22 @@ def trading_window(date_str: str, display_tz: ZoneInfo) -> tuple[datetime, datet
     start = datetime(y, m, d, start_h, 0, 0, tzinfo=display_tz).astimezone(UTC)
     end = datetime(y, m, d, end_h, 0, 0, tzinfo=display_tz).astimezone(UTC)
     return start, end
+
+
+def in_trading_window(t: "datetime", display_tz: ZoneInfo) -> bool:
+    """Is `t` inside its OWN calendar day's real trading window --
+    per-day, not a single fixed floor/ceiling (2026-09-29, --since fix:
+    a multi-day range's chain search has no other way to keep rejecting
+    Asia-session hours on day 2+ once the run spans more than one day's
+    own window; a single window_start/window_end pair only ever bounded
+    day one and the LAST day, leaving every overnight Asia session in
+    between wide open to produce an "entry" that was never a real one).
+    Asia is liquidity-grab only, never an entry session -- this is what
+    actually enforces that, on every bar, regardless of how long a
+    chain's own search has been running for."""
+    date_str = t.astimezone(display_tz).date().isoformat()
+    win_start, win_end = trading_window(date_str, display_tz)
+    return win_start <= t < win_end
 
 
 def filter_to_window(engine, win_start: "datetime", win_end: "datetime") -> None:
@@ -164,35 +192,42 @@ def filter_to_window(engine, win_start: "datetime", win_end: "datetime") -> None
     engine.fvg_zones = [z for z in engine.fvg_zones if happened_in_window(engine.w[z.left].start, z)]
 
 
-def filter_to_date(engine, date_str: str, display_tz: ZoneInfo) -> None:
-    """H4/1H scoping: the narrow real trading window (10:00-20:00 /
-    11:00-21:00 Riyadh, see trading_window()) -- NOT the whole calendar
-    day. Different from --as-of, which keeps everything ACCUMULATED up
-    to that day (so a swing from three months earlier still shows)."""
-    win_start, win_end = trading_window(date_str, display_tz)
+def filter_to_date_range(engine, since_str: str, until_str: str, display_tz: ZoneInfo) -> None:
+    """H4/1H scoping across one or more consecutive trading days
+    (2026-09-29, user's own words: "day 13 is with day 12" -- a single
+    day shown in a vacuum is not how this system is actually traded:
+    every new day carries forward what's still alive from the ones
+    before it, and the chart should too). The narrow real trading window
+    (10:00-20:00 / 11:00-21:00 Riyadh, see trading_window()) -- NOT the
+    whole calendar day. Different from --as-of, which keeps everything
+    ACCUMULATED up to that day (so a swing from three months earlier
+    still shows). `since_str` is the FIRST day's own trading-window
+    open, `until_str` (== --show-date) is the LAST day's own
+    trading-window close -- when they're the same day (--since omitted)
+    this is exactly the single-day window it always was."""
+    win_start, _ = trading_window(since_str, display_tz)
+    _, win_end = trading_window(until_str, display_tz)
     filter_to_window(engine, win_start, win_end)
 
 
-def filter_to_calendar_day(engine, date_str: str, display_tz: ZoneInfo) -> None:
-    """Daily scoping is deliberately WIDER than filter_to_date()'s narrow
-    trading window (2026-09-29, real bug the user caught: the Daily POI
-    that sets a whole day's bias can impact at ANY hour, including
-    before the trading window even opens -- the 12 Jan 2026 walk-through
-    earlier this project used exactly such a Daily FVG, impacted well
-    before the 11:00 Riyadh open, to set that day's SELL bias. Scoping
-    Daily to the narrow window like H4/1H silently dropped it: Daily
-    showed 0 POIs no matter what the Daily settings toggles were set to,
-    since there was nothing left in engine.ob_zones/rb_zones/fvg_zones
-    for them to filter. Scope is the full calendar day (00:00-24:00
-    Riyadh) instead -- still per-day, just not per-session."""
-    y, m, d = (int(x) for x in date_str.split("-"))
-    win_start = datetime(y, m, d, 0, 0, 0, tzinfo=display_tz).astimezone(UTC)
-    win_end = win_start + timedelta(days=1)
+def filter_to_calendar_range(engine, since_str: str, until_str: str, display_tz: ZoneInfo) -> None:
+    """Daily's own multi-day range counterpart to filter_to_date_range()
+    -- deliberately WIDER than the narrow trading window H4/1H use
+    (2026-09-29, real bug the user caught: the Daily POI that sets a
+    whole day's bias can impact at ANY hour, including before the
+    trading window even opens -- the 12 Jan 2026 walk-through earlier
+    this project used exactly such a Daily FVG, impacted well before the
+    11:00 Riyadh open, to set that day's SELL bias. Scoping Daily to the
+    narrow window like H4/1H silently dropped it entirely). Scope is the
+    full calendar day (00:00-24:00 Riyadh) for every day from `since_str`
+    through `until_str` -- still per-range, just not per-session."""
+    win_start, _ = calendar_day_bounds(since_str, display_tz)
+    _, win_end = calendar_day_bounds(until_str, display_tz)
     filter_to_window(engine, win_start, win_end)
 
 
 def calendar_day_bounds(date_str: str, display_tz: ZoneInfo) -> tuple["datetime", "datetime"]:
-    """The same full 00:00-24:00 Riyadh calendar day filter_to_calendar_day()
+    """The same full 00:00-24:00 Riyadh calendar day filter_to_calendar_range()
     uses, factored out so the "react day" checks below (which need
     today's own calendar-day bounds, not the narrow trading window) share
     the exact same definition of "today" instead of a second copy."""
@@ -285,7 +320,8 @@ def structural_invalid_at(z, it: "datetime", bars: list, bar_starts: list,
 
 
 def run_5m_bso(z, it, bar_starts5: list, events5_sorted: list, minutes, mt: list,
-               invalidated_at, window_end, watch_levels: list[tuple[str, float]] | None = None) -> dict:
+               invalidated_at, window_end, display_tz: ZoneInfo,
+               watch_levels: list[tuple[str, float]] | None = None) -> dict:
     """Ported from five_bso_engine.py's run_bso() -- a single attempt.
     Genuinely different from the previous "first swing after impact is
     the entry" rule: this races an entry CANDIDATE against replacement
@@ -368,6 +404,8 @@ def run_5m_bso(z, it, bar_starts5: list, events5_sorted: list, minutes, mt: list
             current = later_candidates[cand_ptr]
             replacements += 1
             cand_ptr += 1
+        if not in_trading_window(m.t, display_tz):
+            continue  # Asia (or any off-hours minute) never triggers an entry, structure still updates above
         broke = (m.h > current.price) if bull else (m.l < current.price)
         if broke:
             entry_m = m
@@ -424,7 +462,8 @@ def run_5m_bso(z, it, bar_starts5: list, events5_sorted: list, minutes, mt: list
 
 
 def run_5m_chain(z, impact_time, bar_starts5: list, events5_sorted: list, minutes, mt: list,
-                  invalidated_at, window_end, watch_levels: list[tuple[str, float]] | None = None) -> list:
+                  invalidated_at, window_end, display_tz: ZoneInfo,
+                  watch_levels: list[tuple[str, float]] | None = None) -> list:
     """Ported from five_bso_engine.py's run_bso_chain() (SS27, "made
     universal per the user's explicit instruction"). After a plain SL,
     re-arm and search again from the SL's own exit time, as long as the
@@ -440,7 +479,7 @@ def run_5m_chain(z, impact_time, bar_starts5: list, events5_sorted: list, minute
     attempt_no = 1
     while True:
         res = run_5m_bso(z, search_from, bar_starts5, events5_sorted, minutes, mt, invalidated_at, window_end,
-                          watch_levels)
+                          display_tz, watch_levels)
         entered = res.get("stage") == "ENTERED"
         if attempt_no == 1 or entered:
             res["attempt"] = attempt_no
@@ -499,8 +538,8 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
     -- a POI impacted on a PRIOR day, still alive and still the day's
     controlling idea today, was previously silently dropped as a
     candidate entirely, because it only ever got engines[] AFTER
-    filter_to_date() had already trimmed out anything with no lifecycle
-    event inside TODAY's narrow window). A carried-in zone's own entry
+    filter_to_date_range() had already trimmed out anything with no
+    lifecycle event inside TODAY's narrow window). A carried-in zone's own entry
     SEARCH still only starts at `window_start` (today's own open), never
     re-litigating a trade a prior day's own run already found and
     reported -- only the zone's *eligibility* (impact, protect_level,
@@ -627,7 +666,7 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
         # discount) still measures from the zone's real impact_time.
         search_from = max(z.impact_time, window_start)
         attempts = run_5m_chain(z, search_from, bar_starts5, events5_sorted, minutes, mt,
-                                 invalidated_at, eff_window_end, watch_levels)
+                                 invalidated_at, eff_window_end, display_tz, watch_levels)
         for a in attempts:
             if a.get("stage") != "ENTERED":
                 ledger_rows.append(dict(row_base, stage=a.get("stage"), premium_mid=f"{mid:.5f}",
@@ -1177,6 +1216,13 @@ def main() -> int:
 
         mt_all = [m.t for m in minutes]
 
+        # --since widens --show-date into a continuous multi-day range
+        # (2026-09-29, user's own words: "day 13 is with day 12" -- one
+        # day in a vacuum is not how this is actually traded). Defaults
+        # to --show-date itself, i.e. the exact single-day behavior this
+        # always had, when --since is omitted.
+        since_date = args.since or args.show_date
+
         engines = {}
         raw_lines = {}
         d_zones_full = None  # snapshot of Daily's zone lists BEFORE date-filtering truncates them (see below)
@@ -1190,7 +1236,7 @@ def main() -> int:
                 # Full (unfiltered) snapshot for compute_5m_trades' own
                 # candidate search -- a POI impacted on a PRIOR day but
                 # still alive today (the "react day" case) must still be
-                # considered, which filter_to_date() below would
+                # considered, which filter_to_date_range() below would
                 # otherwise silently drop entirely (2026-09-29).
                 tf_full[tag] = SimpleNamespace(ob_zones=list(engine.ob_zones), rb_zones=list(engine.rb_zones),
                                                 fvg_zones=list(engine.fvg_zones), events=engine.events, w=engine.w)
@@ -1199,7 +1245,7 @@ def main() -> int:
                 # parent today (2026-09-29 -- "react day" case: FVG#1
                 # impacted 12 Jan, still alive and in control on 13 Jan,
                 # yet 13 Jan's own Daily engine has zero same-day events
-                # of its own). filter_to_calendar_day() below only keeps
+                # of its own). filter_to_calendar_range() below only keeps
                 # zones with a lifecycle event ON args.show_date, so it
                 # would otherwise silently drop FVG#1 from the parent
                 # search entirely. Snapshot the full (pre-filter) zone
@@ -1211,9 +1257,9 @@ def main() -> int:
                                                 fvg_zones=list(engine.fvg_zones))
             if args.show_date:
                 if tag == "d":
-                    filter_to_calendar_day(engine, args.show_date, display_tz)
+                    filter_to_calendar_range(engine, since_date, args.show_date, display_tz)
                 else:
-                    filter_to_date(engine, args.show_date, display_tz)
+                    filter_to_date_range(engine, since_date, args.show_date, display_tz)
             engines[tag] = engine
             raw_lines[tag] = build_one(base, engine, args, display_tz, tag)
 
@@ -1224,7 +1270,8 @@ def main() -> int:
             bars5 = dc.aggregate_minutes(minutes, 5)
             e5 = wc.WeeklyCombinedEngine(minutes, bars5)
             e5.run()
-            window_start, window_end = trading_window(args.show_date, display_tz)
+            window_start, _ = trading_window(since_date, display_tz)
+            _, window_end = trading_window(args.show_date, display_tz)
 
             # "React day" rule (user, 2026-09-29): once today sweeps the
             # previous day's relevant extreme (the low for a SELL bias,
@@ -1414,7 +1461,7 @@ def main() -> int:
             # scoped to the same trading-window+carry-in filter AFTER trades
             # are computed (compute_5m_trades needs e5's FULL event history
             # for correct resting/candidate lookups; the audit files don't).
-            filter_to_date(e5, args.show_date, display_tz)
+            filter_to_date_range(e5, since_date, args.show_date, display_tz)
             swings5_name, report5_name = "5m_tf_swings.csv", "5m_tf_report.txt"
             dc.write_swings_csv(base, e5, display_tz, swings5_name)
             dc.write_report(base, minutes, bars5, e5, display_tz, report5_name,
