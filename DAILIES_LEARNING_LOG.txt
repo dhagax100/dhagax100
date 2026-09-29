@@ -220,6 +220,24 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 SESSION LOG (newest first)
 ----------------------------
 
+2026-09-29 — "POI from last" no longer clamps to today's own zone count
+- User's own words: "POI from last must show me whatever number I put
+  from the beginning but limiting all of the daily POIs into 4, I can
+  never accept... I never said only show me 4 daily POIs." The input's
+  maxval was tied to however many zones exist in THIS run's window --
+  TradingView silently snapped any typed value back down to it, so
+  typing ahead (e.g. 12 when today's window only has 4 zones so far)
+  was refused outright, not just empty.
+- Fixed: maxval is now a fixed, generous ceiling (999), independent of
+  today's actual zone count. Past whatever really exists, the lookup
+  just returns nothing for that rank -- never blocked at the input.
+- This is a display-input fix only, nothing about which POIs exist or
+  how they're filtered by day/window changed -- the standing rule (see
+  MULTI-DAY VIEW / CROSS-DAY CANDIDATES above) already covers seeing
+  12/13/14/... each within its own real trading window, added day by
+  day to the same chart/table/log/CSV. Verified 12 Jan's ground-truth
+  trade unchanged.
+
 2026-09-29 — Stripped Sunday left a fake leftover-hour candle; fixed
 - User's own words: "you are using Sunday data right. check the 3rd
   candle" -- while walking through Daily FVG#3 (origin 8 Jan), asked
