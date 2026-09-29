@@ -705,6 +705,9 @@ def build_own_inputs(base_input_lines: list[str], tag: str, title: str, maxval: 
     return out
 
 
+_IMPACT_COLOR_BY_TAG = {"d": "color.red", "h4": "color.green", "h1": "color.green"}
+
+
 def inject_input_params(body_lines: list[str], tag: str) -> list[str]:
     """f_drawPoiBox is a shared function (defined ONCE in the header,
     reused by weekly/daily's own standalone viewers too -- left
@@ -713,10 +716,14 @@ def inject_input_params(body_lines: list[str], tag: str) -> list[str]:
     timeframe has its OWN copy of those 4 (see build_own_inputs), the
     shared function can't close over a single global any more -- they
     have to be passed in as real parameters at each call site instead.
-    Only touches lines that literally start with 'f_drawPoiBox(' (the 3
-    calls per timeframe body); the function DEFINITION itself is
-    patched once, separately, in main()."""
-    extra = f"{tag}_sideFilter, {tag}_inspectOnePoi, {tag}_focusPoi, {tag}_poiFromLast, {tag}_countFromStart"
+    Also appends the impact-line color (2026-09-29: the user wants
+    Daily's own impact lines red, 4H/1H's green -- a fixed per-timeframe
+    literal, not a user setting, so it's baked in here rather than in
+    build_own_inputs). Only touches lines that literally start with
+    'f_drawPoiBox(' (the 3 calls per timeframe body); the function
+    DEFINITION itself is patched once, separately, in main()."""
+    extra = (f"{tag}_sideFilter, {tag}_inspectOnePoi, {tag}_focusPoi, {tag}_poiFromLast, "
+             f"{tag}_countFromStart, {_IMPACT_COLOR_BY_TAG[tag]}")
     out = []
     for ln in body_lines:
         if ln.strip().startswith("f_drawPoiBox("):
@@ -952,7 +959,10 @@ def main() -> int:
         header = [
             ln.replace(
                 'f_drawPoiBox(left, top, bottom, fallbackRight, hasImp, impX, colCode, rank, grank, bull, total, gTotal, dashed, filled) =>',
-                'f_drawPoiBox(left, top, bottom, fallbackRight, hasImp, impX, colCode, rank, grank, bull, total, gTotal, dashed, filled, sideFilterP, inspectOnePoiP, focusPoiP, poiFromLastP, countFromStartP) =>',
+                'f_drawPoiBox(left, top, bottom, fallbackRight, hasImp, impX, colCode, rank, grank, bull, total, gTotal, dashed, filled, sideFilterP, inspectOnePoiP, focusPoiP, poiFromLastP, countFromStartP, impactColorP) =>',
+            ).replace(
+                'line.new(boxRight, array.get(bottom, i), boxRight, array.get(top, i), xloc=xloc.bar_time, extend=extend.both, color=color.new(color.red, 30), width=1)',
+                'line.new(boxRight, array.get(bottom, i), boxRight, array.get(top, i), xloc=xloc.bar_time, extend=extend.both, color=color.new(impactColorP, 30), width=1)',
             ).replace(
                 'effRank = countFromStart ? total - array.get(rank, i) + 1 : array.get(rank, i)',
                 'effRank = countFromStartP ? total - array.get(rank, i) + 1 : array.get(rank, i)',
