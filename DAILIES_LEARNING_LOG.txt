@@ -220,6 +220,22 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 SESSION LOG (newest first)
 ----------------------------
 
+2026-09-29 — Fixed a swing point being hidden UNDER its own MSS cross mark
+- User's own words: "the swing low below candle 19 that was normally
+  exceeded by candle 13 is not shown or drawn, just the cross mark that
+  says the MSS to down is there." Real drawing bug, not missing data:
+  an MSS's cross mark ("✕") is drawn at the EXACT same (bar, price) as
+  the swing it broke -- by construction, since it's labeled at that
+  swing's own coordinates. The swing's own triangle ("▲"/"▼") WAS being
+  drawn there too, just painted first and then fully covered by the
+  cross drawn on top of it at the identical spot -- later labels render
+  over earlier ones at the same position in Pine.
+- Fixed: MSS marks now get an extra offset beyond the swing's own
+  small "stay off the price line" gap, so both the swing and the MSS
+  that broke it stay visible instead of stacking exactly on top of each
+  other. New packed array (structIsMss) distinguishes the two kinds so
+  only MSS marks get the extra push.
+
 2026-09-29 — Fixed high_first(): dual-break bars were ordered by the WRONG comparison, invalidating 13 Jan's 4H "win"
 - User walked the 13:00 4H candle on 13 Jan 2026 by hand: it broke
   ABOVE the prior candle's high FIRST, then later broke below the

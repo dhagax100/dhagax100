@@ -1138,18 +1138,24 @@ def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int
     ]
 
     # ---- shared swing/MSS labels, drawn ONCE ----
-    struct_x, struct_y, struct_txt, struct_col, struct_low = [], [], [], [], []
+    # struct_is_mss (2026-09-29 fix, user caught this on the real chart):
+    # an MSS's own (bar, price) is LITERALLY the swing it broke -- same
+    # coordinates -- so the "✕" was drawing directly on top of that
+    # swing's own "▲"/"▼", fully hiding it (later-drawn labels cover
+    # earlier ones at the same spot). Both still get computed and
+    # packed; only the Y offset below (structYY) now separates them.
+    struct_x, struct_y, struct_txt, struct_col, struct_low, struct_is_mss = [], [], [], [], [], []
     for e in sh:
         struct_x.append(pine_epoch(engine.w[e.swing].start)); struct_y.append(e.price)
-        struct_txt.append("▲"); struct_col.append("B"); struct_low.append(False)
+        struct_txt.append("▲"); struct_col.append("B"); struct_low.append(False); struct_is_mss.append(False)
     for e in sl:
         struct_x.append(pine_epoch(engine.w[e.swing].start)); struct_y.append(e.price)
-        struct_txt.append("▼"); struct_col.append("K"); struct_low.append(True)
+        struct_txt.append("▼"); struct_col.append("K"); struct_low.append(True); struct_is_mss.append(False)
     for m in ms:
         struct_x.append(pine_epoch(engine.w[m.broken].start))
         struct_y.append(m.price)
         struct_txt.append("✕"); struct_col.append("B" if m.up else "K")
-        struct_low.append(not m.up)
+        struct_low.append(not m.up); struct_is_mss.append(True)
 
     def _box_arrays(zones, total_count, left_of, prefix_label):
         left, top, bottom, fallback_right, impact_stamp, has_impact, col, audit, rank, grank, bull = ([] for _ in range(11))
@@ -1240,6 +1246,7 @@ def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int
         *pack_array("structTxt", "string", struct_txt),
         *pack_array("structColCode", "string", struct_col),
         *pack_array("structLow", "bool", struct_low),
+        *pack_array("structIsMss", "bool", struct_is_mss),
         *pack_array("obLeft", "int", ob_left), *pack_array("obTop", "float", ob_top), *pack_array("obBottom", "float", ob_bottom),
         *pack_array("obFallbackRight", "int", ob_fallback_right), *pack_array("obImpactStamp", "int", ob_impact_stamp),
         *pack_array("obHasImpact", "bool", ob_has_impact), *pack_array("obColCode", "string", ob_col), *pack_array("obAudit", "string", ob_audit),
@@ -1267,7 +1274,8 @@ def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int
         "    if onWeekly and array.size(structX) > 0",
         "        for i = 0 to array.size(structX) - 1",
         f"            structCol = {colour_ternary('array.get(structColCode, i)')}",
-        "            structYY = array.get(structLow, i) ? array.get(structY, i) - lowGap : array.get(structY, i)",
+        "            mssGap = lowGap * 2",
+        "            structYY = array.get(structIsMss, i) ? (array.get(structLow, i) ? array.get(structY, i) - mssGap : array.get(structY, i) + mssGap) : (array.get(structLow, i) ? array.get(structY, i) - lowGap : array.get(structY, i))",
         "            label.new(array.get(structX, i), structYY, array.get(structTxt, i), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=structCol, size=size.small)",
         "    if onWeekly or onH4 or onFive",
         "        if focusPoi == \"ALL\" or focusPoi == \"OB\"",
