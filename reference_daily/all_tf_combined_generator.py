@@ -1577,8 +1577,8 @@ def main() -> int:
         # inject_input_params -- every call site already passes them now).
         header = [
             ln.replace(
-                'f_drawPoiBox(left, top, bottom, fallbackRight, hasImp, impX, colCode, rank, grank, sideGRank, bull, total, gTotal, sideGTotalBuy, sideGTotalSell, dashed, filled) =>',
-                'f_drawPoiBox(left, top, bottom, fallbackRight, hasImp, impX, colCode, rank, grank, sideGRank, bull, total, gTotal, sideGTotalBuy, sideGTotalSell, dashed, filled, sideFilterP, inspectOnePoiP, focusPoiP, poiFromLastP, countFromStartP, impactColorP) =>',
+                'f_drawPoiBox(left, top, bottom, fallbackRight, hasImp, impX, colCode, rank, grank, bull, total, gTotal, sideGTotalBuy, sideGTotalSell, dashed, filled) =>',
+                'f_drawPoiBox(left, top, bottom, fallbackRight, hasImp, impX, colCode, rank, grank, bull, total, gTotal, sideGTotalBuy, sideGTotalSell, dashed, filled, sideFilterP, inspectOnePoiP, focusPoiP, poiFromLastP, countFromStartP, impactColorP) =>',
             ).replace(
                 'line.new(boxRight, array.get(bottom, i), boxRight, array.get(top, i), xloc=xloc.bar_time, extend=extend.both, color=color.new(color.red, 30), width=1)',
                 'line.new(boxRight, array.get(bottom, i), boxRight, array.get(top, i), xloc=xloc.bar_time, extend=extend.both, color=color.new(impactColorP, 30), width=1)',
@@ -1589,8 +1589,8 @@ def main() -> int:
                 'sideGTotal = sideFilter == "BUY" ? sideGTotalBuy : sideFilter == "SELL" ? sideGTotalSell : gTotal',
                 'sideGTotal = sideFilterP == "BUY" ? sideGTotalBuy : sideFilterP == "SELL" ? sideGTotalSell : gTotal',
             ).replace(
-                'effGRank = countFromStart ? sideGTotal - (sideFilter == "ALL" ? array.get(grank, i) : array.get(sideGRank, i)) + 1 : (sideFilter == "ALL" ? array.get(grank, i) : array.get(sideGRank, i))',
-                'effGRank = countFromStartP ? sideGTotal - (sideFilterP == "ALL" ? array.get(grank, i) : array.get(sideGRank, i)) + 1 : (sideFilterP == "ALL" ? array.get(grank, i) : array.get(sideGRank, i))',
+                'effGRank = countFromStart ? sideGTotal - (sideFilter == "ALL" ? realGRank : realSideGRank) + 1 : (sideFilter == "ALL" ? realGRank : realSideGRank)',
+                'effGRank = countFromStartP ? sideGTotal - (sideFilterP == "ALL" ? realGRank : realSideGRank) + 1 : (sideFilterP == "ALL" ? realGRank : realSideGRank)',
             ).replace(
                 'sideOk = sideFilter == "ALL" or (sideFilter == "BUY" and array.get(bull, i)) or (sideFilter == "SELL" and not array.get(bull, i))',
                 'sideOk = sideFilterP == "ALL" or (sideFilterP == "BUY" and array.get(bull, i)) or (sideFilterP == "SELL" and not array.get(bull, i))',
