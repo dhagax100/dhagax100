@@ -146,6 +146,14 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 SESSION LOG (newest first)
 ----------------------------
 
+2026-09-29 — Consolidated the on-chart 5m table to 8 columns
+- User's own layout: Entry/SL/TP each merge price+time into one column
+  ("1.16847 @ 14:32"), MFE/MAE share one column ("9.4 / 5.9"), the POI
+  column relabeled "Parent 1H/4H POI" (it already cross-referenced the
+  1H/4H source, now explicit), and notes shortened to just the label +
+  time ("reached pre-impact swing @14:55"). CSV ledger keeps its full
+  granular columns unchanged -- that one's for analysis, not glancing.
+
 2026-09-29 — Fixed a real TradingView compile error (CE10272)
 - The previous fix's tParent column caused a genuine "undeclared
   identifier" error in TradingView: its packed array was appended to
