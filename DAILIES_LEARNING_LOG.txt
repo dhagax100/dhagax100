@@ -220,6 +220,36 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 SESSION LOG (newest first)
 ----------------------------
 
+2026-09-29 — Daily chart now shows the WHOLE dataset, "today" cap removed for display
+- User's own words: "I want to see everything on daily timeframe
+  chart. if I want to see one POI, I will use the focus toggle. tell
+  me, why am I not able to see the daily engine?" Earlier this session
+  Daily was made --since-unscoped (full history from the start of the
+  file), but it was still capped at the TOP end by --as-of/--show-date
+  -- because --as-of truncates the raw MINUTES before any engine ever
+  runs, so structure after "today" wasn't hidden by a display filter,
+  it was never computed in the first place. Confirmed directly:
+  generated a one-off whole-dataset Daily reference (181 real daily
+  candles, 152 POIs, 27 MSS, the full Jan-Sep 2026 file) and sent it
+  separately so the user could see for themselves what the engine
+  actually finds across everything.
+- Fixed properly this time, in the real script: Daily's DISPLAY now
+  comes from a SECOND, fully unbounded engine (full_minutes -- Sunday-
+  stripped but never --as-of-truncated). The original bounded Daily
+  engine still exists and is untouched -- it still feeds d_zones_full
+  and is_react_day(), which must NEVER see past "today" or every 4H/
+  1H/5m trading decision downstream (bias, react-day sweep check,
+  parent-POI lookup) would be silently cheating by looking into the
+  future. Only what gets DRAWN on the Daily chart changed.
+- Verified: 152 Daily POIs now show across the whole file (up from the
+  handful in whatever narrow --show-date window before), 12 Jan's
+  ground-truth trade is unchanged, and there's no Pine string-length
+  risk from this (checked directly: max literal 2.7KB against a 40KB
+  limit) -- Daily zones are sparse enough across a whole year that this
+  is safe, unlike 1H/4H which genuinely cannot span that much data at
+  once (that's the real, separate reason 1H/4H/5m stay capped at
+  --show-date -- not an arbitrary restriction, an actual Pine limit).
+
 2026-09-29 — "POI from last" ranking made side-aware -- picking a side could silently show nothing
 - User's own screenshots caught it directly: Daily settings, Side=SELL,
   "POI from last"=4, "Count from the start" ON -- table completely
