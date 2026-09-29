@@ -455,6 +455,15 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_end, display_tz,
                          entry_riyadh="", entry_price="", sl_price="", tp_price="", risk_price="",
                          r_pips="", result="", exit_riyadh="", r_multiple="", sl_tp_conflict="")
 
+        # Same-leg supersession (see mark_superseded_same_leg): a later
+        # same-direction, unbroken-leg POI caps how much longer THIS zone
+        # may still search for a NEW entry -- not a hard skip, so a real
+        # entry this zone already found before the newer POI's own
+        # impact still stands.
+        superseded_at = getattr(z, "superseded_at", None)
+        eff_window_end = min(window_end, superseded_at) if superseded_at is not None else window_end
+        row_base["superseded_riyadh"] = riyadh(superseded_at)
+
         opp_kind = 1 if sell else 0  # opposing swing: a LOW for a sell reaction, a HIGH for a buy reaction
         opp_events = [e for e in eng.events if e.kind == opp_kind and eng.w[e.confirm].start <= z.impact_time]
         if not opp_events:
@@ -478,7 +487,7 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_end, display_tz,
 
         invalidated_at, reason = structural_invalid_at(z, z.impact_time, eng.w, eng_bar_starts, minutes, mt)
         attempts = run_5m_chain(z, z.impact_time, bar_starts5, events5_sorted, minutes, mt,
-                                 invalidated_at, window_end)
+                                 invalidated_at, eff_window_end)
         for a in attempts:
             if a.get("stage") != "ENTERED":
                 ledger_rows.append(dict(row_base, stage=a.get("stage"), premium_mid=f"{mid:.5f}",
@@ -488,7 +497,7 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_end, display_tz,
                 continue
             trades_raw.append(dict(
                 tf=tf_tag, poi=poi, side="SELL" if sell else "BUY", zone_bottom=z.zb, zone_top=z.zt,
-                protect_level=z.protect_level, impact_time=z.impact_time,
+                protect_level=z.protect_level, impact_time=z.impact_time, superseded_at=superseded_at,
                 invalidated_at=invalidated_at, invalidated_reason=reason, premium_mid=mid,
                 attempt=a.get("attempt"), resting_at=a.get("resting_at"), replacements=a.get("replacements"),
                 entry_time=a["entry_time"], entry_price=a["entry_price"], sl_price=a["sl_price"],
@@ -530,6 +539,7 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_end, display_tz,
             zone_top="/".join(f"{m['zone_top']:.5f}" for m in members),
             protect_level="/".join(f"{m['protect_level']:.5f}" for m in members),
             impact_riyadh="/".join(riyadh(m["impact_time"]) for m in members),
+            superseded_riyadh="/".join(riyadh(m["superseded_at"]) for m in members),
             invalidated_riyadh="/".join(riyadh(m["invalidated_at"]) for m in members),
             invalidated_reason="/".join(m["invalidated_reason"] or "-" for m in members),
             premium_mid="/".join(f"{m['premium_mid']:.5f}" for m in members),
@@ -550,7 +560,7 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_end, display_tz,
 
 LEDGER_FIELDS = [
     "tf", "poi", "side", "zone_bottom", "zone_top", "protect_level",
-    "impact_riyadh", "invalidated_riyadh", "invalidated_reason", "premium_mid",
+    "impact_riyadh", "superseded_riyadh", "invalidated_riyadh", "invalidated_reason", "premium_mid",
     "attempt", "stage", "resting_riyadh", "replacements",
     "entry_riyadh", "entry_price", "sl_price", "tp_price", "risk_price", "r_pips",
     "result", "exit_riyadh", "r_multiple", "sl_tp_conflict",
@@ -588,6 +598,50 @@ def exclude_old_intraday_zones(engine) -> None:
     engine.ob_zones = [z for z in engine.ob_zones if wc.ob_status(z) != "OOB"]
     engine.rb_zones = [z for z in engine.rb_zones if wc.rb_status(z) != "ORB"]
     engine.fvg_zones = [z for z in engine.fvg_zones if wc.fvg_status(z) != "OFVG"]
+
+
+def mark_superseded_same_leg(engine, minutes, mt: list) -> None:
+    """User's rule (2026-09-29): when a POI impacts while another
+    same-direction POI in the same unbroken leg is still active (not yet
+    structurally invalidated), they are ONE opportunity, not two -- e.g.
+    the 12 Jan 2026 case: a lower Daily FVG impacted, was never
+    invalidated, and price ran on into a higher Daily FVG which is what
+    the day's 1H setups actually came from. Cuts across zone TYPE too --
+    an OB followed later by an RB in the same unbroken same-direction
+    move collapses exactly like FVG-then-FVG does, since the type
+    doesn't matter to "are we still in the same leg."
+
+    Sets `z.superseded_at` (a datetime, or None) instead of a plain
+    boolean: supersession takes effect from the LATER zone's own impact
+    time onward, not retroactively. If the earlier zone had already
+    found its own resting swing and entered BEFORE the later zone even
+    impacted, that entry is real and already happened -- it must stand,
+    not vanish because a newer POI showed up afterward. What supersession
+    actually stops is any NEW entry attempt (or re-entry) starting after
+    that moment: compute_5m_trades() uses superseded_at as an additional
+    ceiling alongside the trading-window close, exactly the same way.
+
+    "Let them be there" (the user's own words) -- this does NOT remove
+    anything from engine.ob_zones/rb_zones/fvg_zones, so the pine boxes
+    and table are untouched."""
+    for zones in (engine.ob_zones, engine.rb_zones, engine.fvg_zones):
+        for z in zones:
+            z.superseded_at = None
+
+    all_zones = list(engine.ob_zones) + list(engine.rb_zones) + list(engine.fvg_zones)
+    bar_starts = [b.start for b in engine.w]
+
+    for bull in (True, False):
+        impacted = sorted(
+            (z for z in all_zones if z.bullish == bull and z.impact_time is not None and z.protect_level is not None),
+            key=lambda z: z.impact_time)
+        active = None
+        for z in impacted:
+            if active is not None:
+                inv_at, _ = structural_invalid_at(active, active.impact_time, engine.w, bar_starts, minutes, mt)
+                if inv_at is None or inv_at > z.impact_time:
+                    active.superseded_at = z.impact_time  # same unbroken leg -> superseded by z, from here on
+            active = z
 
 
 def build_trades_pine(trades: list[dict], display_tz: ZoneInfo) -> list[str]:
@@ -848,11 +902,14 @@ def main() -> int:
             "h1": dc.aggregate_hours(minutes, 1),
         }
 
+        mt_all = [m.t for m in minutes]
+
         engines = {}
         raw_lines = {}
         for tag, tf_period, title in TIMEFRAMES:
             engine = wc.WeeklyCombinedEngine(minutes, bars_by_tag[tag])
             engine.run()
+            mark_superseded_same_leg(engine, minutes, mt_all)
             if tag in ("h4", "h1"):
                 exclude_old_intraday_zones(engine)
             if args.show_date:
