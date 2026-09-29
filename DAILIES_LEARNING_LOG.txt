@@ -115,14 +115,25 @@ SAME-LEG SUPERSESSION (2026-09-29)
 - Both zones still show on the chart/table ("let them be there") — this
   only affects which one(s) get to search for a 5m entry.
 
-CROSS-TIMEFRAME DISPLAY (2026-09-29)
-- Daily's own POIs/labels also draw on the 4H and 1H charts (Daily's
-  own settings govern it, no separate toggle).
-- 4H's and 1H's own POIs also draw on the 5m chart, controlled by a
+CROSS-TIMEFRAME DISPLAY (2026-09-29, corrected same day)
+- ONLY POI boxes and impact lines ever transfer to another timeframe —
+  NEVER swing points or MSS labels, on any transfer, including 4H/1H
+  onto 5m. First attempt widened Daily's entire gate (swing/MSS block
+  included) to also fire on 4H/1H, which put Daily's own swing dots and
+  MSS labels on the 4H/1H charts too — wrong, corrected same day, per
+  the user directly.
+- Daily's own POI boxes also draw on the 4H and 1H charts (Daily's own
+  settings govern it, no separate toggle needed).
+- 4H's and 1H's own POI boxes also draw on the 5m chart, controlled by a
   SEPARATE "5m settings" group — toggling it never silently changes
   what the 4H or 1H chart itself shows.
 - Impact-line color: Daily = red, 4H/1H = green (on their own chart AND
   wherever they're projected).
+- Mechanism: every timeframe's own body stays 100% natively gated
+  (onD/onH4/onH1/onFive) — cross-timeframe display is built SEPARATELY,
+  by extracting just the POI-box block from the source body and
+  projecting it (regated, and if needed re-tagged to an independent
+  settings group) onto the target chart.
 
 DAILY SCOPING (2026-09-29)
 - Daily's own POIs are scoped to the FULL calendar day (00:00-24:00
@@ -208,6 +219,28 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 
 SESSION LOG (newest first)
 ----------------------------
+
+2026-09-29 — Fixed a real cross-timeframe display leak: Daily's swing points/MSS were showing on 4H/1H
+- User's own words: "we transfer the POIs and impact lines only to any
+  other timeframe we decide. so, even the 1h and 4h swing points and
+  MSSs can never be transferred to 5m." Checked the actual generated
+  pine against this: it was true, and worse than just a 4H/1H-to-5m
+  risk — Daily's swing dots and MSS labels were ALREADY showing up on
+  the 4H and 1H charts today. Root cause: the Daily-onto-4H/1H
+  projection was built by widening Daily's ENTIRE gate (regate() on the
+  whole body -- swing/MSS block, POI-box block, and the ledger-table
+  block all together) to `(onD or onH4 or onH1)`, instead of keeping
+  Daily's body 100% native and projecting ONLY the POI-box block
+  separately, the way 4H/1H-onto-5m was already correctly built.
+- Fixed: every timeframe's own body now stays fully native-gated
+  (onD/onH4/onH1/onFive, no OR'd gates anywhere in a body itself).
+  Daily's POI boxes are now projected onto 4H and 1H the exact same way
+  4H's/1H's are projected onto 5m (extract_poibox_block +
+  project_poibox_block) -- reusing Daily's OWN settings group (no new
+  one needed, same as before), impact-line color (red) unchanged.
+  Verified directly in the generated pine: Daily's swing/MSS block now
+  reads `if onD` only; the projected 4H/1H blocks contain nothing but
+  f_drawPoiBox calls.
 
 2026-09-29 — Fixed AFVG's protect_level anchor (found while re-verifying the mistagging fix)
 - Immediately after flipping AFVG's side tag (previous entry below),

@@ -1360,18 +1360,21 @@ def main() -> int:
                 new_header.append(ln)
         header = new_header
 
-        # Cross-timeframe context (2026-09-28): "the daily FVG we are
-        # trading from" should be visible on 4H/1H, and "the 1H OB/RB we
-        # are trading from" on 5m -- not just on their own native chart.
-        # Daily's own gate is simply widened to also fire on 4H/1H,
-        # reusing Daily's OWN settings group (no new group needed: it's
-        # the same POI data either way, and Daily's own Side/Focus/etc.
-        # already govern it regardless of which chart is open). 4H/1H
-        # projected onto 5m is different -- that needs its OWN
-        # independent settings group (see project_poibox_block), so
-        # toggling Side/Inspect-one/etc. for the 5m view never silently
-        # also changes the 4H or 1H chart's own display.
-        gate_by_tag = {"d": "(onD or onH4 or onH1)", "h4": "onH4", "h1": "onH1"}
+        # Cross-timeframe context (2026-09-28, corrected 2026-09-29): "the
+        # daily FVG we are trading from" should be visible on 4H/1H, and
+        # "the 1H OB/RB we are trading from" on 5m -- but ONLY the POI
+        # boxes and impact lines, never the swing points/MSS labels of
+        # the source timeframe (user's own correction: "we transfer the
+        # POIs and impact lines only to any other timeframe we decide...
+        # even the 1h and 4h swing points and MSSs can never be
+        # transferred to 5m"). The first attempt widened Daily's ENTIRE
+        # gate (swing/MSS block included, via regate()) to also fire on
+        # 4H/1H -- wrong, it put Daily's own swing dots and MSS labels on
+        # the 4H/1H charts too. Every body now stays fully NATIVE-gated
+        # (onD/onH4/onH1 only); cross-timeframe POI display is built
+        # SEPARATELY below via extract_poibox_block/project_poibox_block
+        # -- the same mechanism 4H/1H-onto-5m already used correctly.
+        gate_by_tag = {"d": "onD", "h4": "onH4", "h1": "onH1"}
 
         bodies = []
         own_maxvals = {}
@@ -1413,6 +1416,19 @@ def main() -> int:
         h4_body, h1_body = bodies[1], bodies[2]
         h4_on5 = project_poibox_block(extract_poibox_block(h4_body, "onH4"), "onH4", "h4", "onFive", "m5")
         h1_on5 = project_poibox_block(extract_poibox_block(h1_body, "onH1"), "onH1", "h1", "onFive", "m5")
+
+        # Project Daily's own POI boxes onto 4H and 1H -- same mechanism,
+        # but reusing Daily's OWN settings group (settings_tag="d" ==
+        # source_tag, so project_poibox_block's input re-tagging is a
+        # no-op): unlike the 4H/1H-onto-5m projection, this one was
+        # already explicitly decided to need no separate settings group
+        # (same POI data, Daily's own Side/Focus/etc. already govern it
+        # regardless of which chart is open) -- just the swing/MSS labels
+        # that must never come along, which the native-only gate_by_tag
+        # above now guarantees.
+        d_body = bodies[0]
+        d_on4 = project_poibox_block(extract_poibox_block(d_body, "onD"), "onD", "d", "onH4", "d")
+        d_on1 = project_poibox_block(extract_poibox_block(d_body, "onD"), "onD", "d", "onH1", "d")
 
         # Patch the shared f_drawPoiBox definition to take the 4 inputs as
         # real parameters instead of closing over a single global set (see
@@ -1463,7 +1479,7 @@ def main() -> int:
         final_lines = header + m5_inputs
         for body in bodies:
             final_lines += body
-        final_lines += h4_on5 + h1_on5
+        final_lines += h4_on5 + h1_on5 + d_on4 + d_on1
         final_lines += collapse_pack_blocks(build_trades_pine(trades, display_tz))
         (base / out_name).write_text("\n".join(final_lines), encoding="utf-8")
 
