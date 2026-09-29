@@ -118,9 +118,43 @@ DAILY SCOPING (2026-09-29)
   Daily POI can set the whole day's bias from any hour, including
   before the trading window even opens.
 
+PARENT-POI TRACEABILITY (2026-09-29)
+- Every impacted 4H/1H POI maps to whichever Daily POI was actually
+  "active" (per same-leg supersession, above) at the moment it
+  impacted — shown in its own small table (not bolted onto the shared
+  ledger table) on the 4H/1H/5m charts.
+
+BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
+- MFE/MAE (Maximum Favorable/Adverse Excursion), price-based: tracked
+  per trade from entry (exclusive) through exit (inclusive), or through
+  all available data if still open.
+- Structural notes: an EXTENSIBLE mechanism (not a one-off) — a list of
+  named price levels checked during the same scan, first-touch time
+  recorded per label. First one implemented: whether/when price reached
+  the immediate pre-impact opposing swing after entry (same swing the
+  premium/discount check uses) — a candidate future structure-based BE
+  trigger ("aim for the immediate swing formed before the 4H/1H
+  impact"). More notes get added here over time as they're identified —
+  this is the room for them, nothing more needs building to add one.
+
 
 SESSION LOG (newest first)
 ----------------------------
+
+2026-09-29 — MFE/MAE restored, structural notes, SL/TP hit times, parent-POI table
+- Two more things the user asked for, both landing with this same code
+  delivery (not as a separate follow-up):
+  1. Traceability: each 4H/1H POI now shows which Daily POI it actually
+     traces back to (find_parent_daily_poi + a new small table).
+  2. BE-rule research material in 5m_trades_ledger.csv: MFE/MAE
+     (dropped during the original SS34 port — restored now, a real
+     gap, not intentional), split sl_hit_riyadh/tp_hit_riyadh columns,
+     and an extensible structural_notes column (first note: did price
+     reach the pre-impact opposing swing after entry, and when).
+- Verified for 12 Jan 2026: the real RB#67 entry shows mfe_pips=9.4,
+  mae_pips=5.9, sl_hit_riyadh=16:08 (tp_hit_riyadh correctly empty),
+  and a real note firing at 14:55 RYD. Parent-POI table correctly maps
+  that day's 1H POIs to Daily FVG#1.
 
 2026-09-29 — Same-leg POI collapse, cross-timeframe display, Daily scope, colors
 - Real scenario caught by the user: on 12 Jan, a lower Daily FVG
