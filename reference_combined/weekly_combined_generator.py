@@ -1077,14 +1077,29 @@ def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int
     global_entries = []
     for z in engine.ob_zones:
         if not z.rejected:
-            global_entries.append((engine.w[z.candle].start, "OB", z.id))
+            global_entries.append((engine.w[z.candle].start, "OB", z.id, z.bullish))
     for z in engine.rb_zones:
-        global_entries.append((engine.w[z.candle].start, "RB", z.id))
+        global_entries.append((engine.w[z.candle].start, "RB", z.id, z.bullish))
     for z in engine.fvg_zones:
-        global_entries.append((engine.w[z.left].start, "FVG", z.id))
+        global_entries.append((engine.w[z.left].start, "FVG", z.id, z.bullish))
     global_entries.sort(key=lambda e: e[0], reverse=True)
-    global_rank_map = {(poi, zid): idx + 1 for idx, (_, poi, zid) in enumerate(global_entries)}
+    global_rank_map = {(poi, zid): idx + 1 for idx, (_, poi, zid, _) in enumerate(global_entries)}
     max_global_rank = max(1, len(global_entries))
+    # Side-aware counterpart (2026-09-29, real bug the user's own Daily
+    # settings caught: Side=SELL, "POI from last"=4, count-from-start ON,
+    # showed NOTHING -- because global_rank_map ranks across BOTH sides
+    # combined, and the chronologically 4th zone overall happened to be a
+    # BUY one. With Side=SELL, "rank 4" must mean the 4th SELL zone, not
+    # "whichever zone is 4th of any side, IF it also happens to be SELL"
+    # -- otherwise picking a side and a rank can silently return nothing
+    # even though plenty of zones of that side exist.
+    side_rank_map = {}
+    for bull in (True, False):
+        same_side = [e for e in global_entries if e[3] == bull]
+        for idx, (_, poi, zid, _) in enumerate(same_side):
+            side_rank_map[(poi, zid)] = idx + 1
+    max_buy_rank = max(1, sum(1 for e in global_entries if e[3]))
+    max_sell_rank = max(1, sum(1 for e in global_entries if not e[3]))
 
     lines = [
         "//@version=6",
@@ -1126,11 +1141,21 @@ def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int
         "                hiStamp = array.get(impStamp, hi)",
         "                if na(array.get(impX, hi)) and time <= hiStamp and hiStamp < time_close",
         "                    array.set(impX, hi, time)",
-        "f_drawPoiBox(left, top, bottom, fallbackRight, hasImp, impX, colCode, rank, grank, bull, total, gTotal, dashed, filled) =>",
+        # sideGRank/sideGTotal added (2026-09-29, real bug the user's own
+        # Daily settings caught: Side=SELL, rank=4, count-from-start ON
+        # showed NOTHING, because grank ranks across BOTH sides combined
+        # -- the chronologically 4th zone overall was a BUY one, so no
+        # SELL zone ever had grank==4, however many SELL zones actually
+        # existed). With a specific side picked, rank now means "Nth
+        # zone of THAT side," via sideGRank (each zone's own rank among
+        # same-side zones only) and sideGTotal (picked at runtime: the
+        # BUY count, SELL count, or the old combined count for ALL).
+        "f_drawPoiBox(left, top, bottom, fallbackRight, hasImp, impX, colCode, rank, grank, sideGRank, bull, total, gTotal, sideGTotalBuy, sideGTotalSell, dashed, filled) =>",
         "    if array.size(left) > 0",
         "        for i = 0 to array.size(left) - 1",
         "            effRank = countFromStart ? total - array.get(rank, i) + 1 : array.get(rank, i)",
-        "            effGRank = countFromStart ? gTotal - array.get(grank, i) + 1 : array.get(grank, i)",
+        "            sideGTotal = sideFilter == \"BUY\" ? sideGTotalBuy : sideFilter == \"SELL\" ? sideGTotalSell : gTotal",
+        "            effGRank = countFromStart ? sideGTotal - (sideFilter == \"ALL\" ? array.get(grank, i) : array.get(sideGRank, i)) + 1 : (sideFilter == \"ALL\" ? array.get(grank, i) : array.get(sideGRank, i))",
         "            sideOk = sideFilter == \"ALL\" or (sideFilter == \"BUY\" and array.get(bull, i)) or (sideFilter == \"SELL\" and not array.get(bull, i))",
         "            if sideOk and (not inspectOnePoi or (focusPoi == \"ALL\" ? effGRank == poiFromLast : effRank == poiFromLast))",
         "                boxRight = array.get(hasImp, i) and not na(array.get(impX, i)) ? array.get(impX, i) : array.get(fallbackRight, i)",
@@ -1166,7 +1191,8 @@ def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int
         struct_low.append(not m.up); struct_is_mss.append(True)
 
     def _box_arrays(zones, total_count, left_of, prefix_label):
-        left, top, bottom, fallback_right, impact_stamp, has_impact, col, audit, rank, grank, bull = ([] for _ in range(11))
+        left, top, bottom, fallback_right, impact_stamp, has_impact, col, audit, rank, grank, side_grank, bull = \
+            ([] for _ in range(12))
         for z in zones:
             if getattr(z, "rejected", False):
                 continue
@@ -1179,22 +1205,23 @@ def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int
             audit.append(f"{prefix_label} #{z.id} {'BUY' if z.bullish else 'SELL'}")
             rank.append(total_count - z.id + 1)
             grank.append(global_rank_map[(prefix_label, z.id)])
+            side_grank.append(side_rank_map[(prefix_label, z.id)])
             bull.append(z.bullish)
-        return left, top, bottom, fallback_right, impact_stamp, has_impact, col, audit, rank, grank, bull
+        return left, top, bottom, fallback_right, impact_stamp, has_impact, col, audit, rank, grank, side_grank, bull
 
     ob_shown = engine.ob_zones[-ob_cap:]
-    ob_left, ob_top, ob_bottom, ob_fallback_right, ob_impact_stamp, ob_has_impact, ob_col, ob_audit, ob_rank, ob_grank, ob_bull = _box_arrays(ob_shown, len(engine.ob_zones), lambda z: z.candle, "OB")
+    ob_left, ob_top, ob_bottom, ob_fallback_right, ob_impact_stamp, ob_has_impact, ob_col, ob_audit, ob_rank, ob_grank, ob_side_grank, ob_bull = _box_arrays(ob_shown, len(engine.ob_zones), lambda z: z.candle, "OB")
     for z in ob_shown:
         if not z.rejected:
             ob_col.append(COLOUR_CODE[wob.pine_colour(z)])
 
     rb_shown = engine.rb_zones[-rb_cap:]
-    rb_left, rb_top, rb_bottom, rb_fallback_right, rb_impact_stamp, rb_has_impact, rb_col, rb_audit, rb_rank, rb_grank, rb_bull = _box_arrays(rb_shown, len(engine.rb_zones), lambda z: z.candle, "RB")
+    rb_left, rb_top, rb_bottom, rb_fallback_right, rb_impact_stamp, rb_has_impact, rb_col, rb_audit, rb_rank, rb_grank, rb_side_grank, rb_bull = _box_arrays(rb_shown, len(engine.rb_zones), lambda z: z.candle, "RB")
     for z in rb_shown:
         rb_col.append(COLOUR_CODE[wrb.rb_colour(z)])
 
     fvg_shown = engine.fvg_zones[-fvg_cap:]
-    fvg_left, fvg_top, fvg_bottom, fvg_fallback_right, fvg_impact_stamp, fvg_has_impact, fvg_col, fvg_audit, fvg_rank, fvg_grank, fvg_bull = _box_arrays(fvg_shown, len(engine.fvg_zones), lambda z: z.left, "FVG")
+    fvg_left, fvg_top, fvg_bottom, fvg_fallback_right, fvg_impact_stamp, fvg_has_impact, fvg_col, fvg_audit, fvg_rank, fvg_grank, fvg_side_grank, fvg_bull = _box_arrays(fvg_shown, len(engine.fvg_zones), lambda z: z.left, "FVG")
     for z in fvg_shown:
         fvg_col.append(COLOUR_CODE[wfvg.fvg_colour(z)])
 
@@ -1219,6 +1246,7 @@ def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int
                 impact=wob.display_iso(z.impact_time, display_zone),
                 status=status_fn(z), bg=COLOUR_CODE[colour_fn(z)],
                 rank=total_count - z.id + 1, grank=global_rank_map[(poi_label, z.id)],
+                side_grank=side_rank_map[(poi_label, z.id)],
             )))
         return rows
 
@@ -1240,12 +1268,14 @@ def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int
     table_rows = [r for _, r in all_rows]
 
     row_total = {"OB": len(engine.ob_zones), "RB": len(engine.rb_zones), "FVG": len(engine.fvg_zones)}
-    t_poi, t_id, t_type, t_side, t_bottom, t_top, t_origin, t_trigger, t_eligible, t_impact, t_status, t_bg, t_rank, t_grank, t_total = ([] for _ in range(15))
+    t_poi, t_id, t_type, t_side, t_bottom, t_top, t_origin, t_trigger, t_eligible, t_impact, t_status, t_bg, \
+        t_rank, t_grank, t_side_grank, t_total = ([] for _ in range(16))
     for r in table_rows:
         t_poi.append(r["poi"]); t_id.append(r["id"]); t_type.append(r["type"]); t_side.append(r["side"])
         t_bottom.append(r["bottom"]); t_top.append(r["top"]); t_origin.append(r["origin"])
         t_trigger.append(r["trigger"]); t_eligible.append(r["eligible"]); t_impact.append(r["impact"])
         t_status.append(r["status"]); t_bg.append(r["bg"]); t_rank.append(r["rank"]); t_grank.append(r["grank"])
+        t_side_grank.append(r["side_grank"])
         t_total.append(row_total[r["poi"]])
 
     lines += [
@@ -1258,20 +1288,24 @@ def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int
         *pack_array("obLeft", "int", ob_left), *pack_array("obTop", "float", ob_top), *pack_array("obBottom", "float", ob_bottom),
         *pack_array("obFallbackRight", "int", ob_fallback_right), *pack_array("obImpactStamp", "int", ob_impact_stamp),
         *pack_array("obHasImpact", "bool", ob_has_impact), *pack_array("obColCode", "string", ob_col), *pack_array("obAudit", "string", ob_audit),
-        *pack_array("obRank", "int", ob_rank), *pack_array("obGRank", "int", ob_grank), *pack_array("obBull", "bool", ob_bull),
+        *pack_array("obRank", "int", ob_rank), *pack_array("obGRank", "int", ob_grank),
+        *pack_array("obSideGRank", "int", ob_side_grank), *pack_array("obBull", "bool", ob_bull),
         *pack_array("rbLeft", "int", rb_left), *pack_array("rbTop", "float", rb_top), *pack_array("rbBottom", "float", rb_bottom),
         *pack_array("rbFallbackRight", "int", rb_fallback_right), *pack_array("rbImpactStamp", "int", rb_impact_stamp),
         *pack_array("rbHasImpact", "bool", rb_has_impact), *pack_array("rbColCode", "string", rb_col), *pack_array("rbAudit", "string", rb_audit),
-        *pack_array("rbRank", "int", rb_rank), *pack_array("rbGRank", "int", rb_grank), *pack_array("rbBull", "bool", rb_bull),
+        *pack_array("rbRank", "int", rb_rank), *pack_array("rbGRank", "int", rb_grank),
+        *pack_array("rbSideGRank", "int", rb_side_grank), *pack_array("rbBull", "bool", rb_bull),
         *pack_array("fvgLeft", "int", fvg_left), *pack_array("fvgTop", "float", fvg_top), *pack_array("fvgBottom", "float", fvg_bottom),
         *pack_array("fvgFallbackRight", "int", fvg_fallback_right), *pack_array("fvgImpactStamp", "int", fvg_impact_stamp),
         *pack_array("fvgHasImpact", "bool", fvg_has_impact), *pack_array("fvgColCode", "string", fvg_col), *pack_array("fvgAudit", "string", fvg_audit),
-        *pack_array("fvgRank", "int", fvg_rank), *pack_array("fvgGRank", "int", fvg_grank), *pack_array("fvgBull", "bool", fvg_bull),
+        *pack_array("fvgRank", "int", fvg_rank), *pack_array("fvgGRank", "int", fvg_grank),
+        *pack_array("fvgSideGRank", "int", fvg_side_grank), *pack_array("fvgBull", "bool", fvg_bull),
         *pack_array("tPoi", "string", t_poi), *pack_array("tId", "string", t_id), *pack_array("tType", "string", t_type),
         *pack_array("tSide", "string", t_side), *pack_array("tBottom", "string", t_bottom), *pack_array("tTop", "string", t_top),
         *pack_array("tOrigin", "string", t_origin), *pack_array("tTrigger", "string", t_trigger), *pack_array("tEligible", "string", t_eligible),
         *pack_array("tImpact", "string", t_impact), *pack_array("tStatus", "string", t_status), *pack_array("tBgCode", "string", t_bg),
-        *pack_array("tRank", "int", t_rank), *pack_array("tGRank", "int", t_grank), *pack_array("tTotal", "int", t_total),
+        *pack_array("tRank", "int", t_rank), *pack_array("tGRank", "int", t_grank),
+        *pack_array("tSideGRank", "int", t_side_grank), *pack_array("tTotal", "int", t_total),
         f"var array<int> obImpactX = array.new<int>({len(ob_left)}, na)",
         f"var array<int> rbImpactX = array.new<int>({len(rb_left)}, na)",
         f"var array<int> fvgImpactX = array.new<int>({len(fvg_left)}, na)",
@@ -1287,11 +1321,11 @@ def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int
         "            label.new(array.get(structX, i), structYY, array.get(structTxt, i), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=structCol, size=size.small)",
         "    if onWeekly or onH4 or onFive",
         "        if focusPoi == \"ALL\" or focusPoi == \"OB\"",
-        f"            f_drawPoiBox(obLeft, obTop, obBottom, obFallbackRight, obHasImpact, obImpactX, obColCode, obRank, obGRank, obBull, {len(engine.ob_zones)}, {max_global_rank}, false, false)",
+        f"            f_drawPoiBox(obLeft, obTop, obBottom, obFallbackRight, obHasImpact, obImpactX, obColCode, obRank, obGRank, obSideGRank, obBull, {len(engine.ob_zones)}, {max_global_rank}, {max_buy_rank}, {max_sell_rank}, false, false)",
         "        if focusPoi == \"ALL\" or focusPoi == \"RB\"",
-        f"            f_drawPoiBox(rbLeft, rbTop, rbBottom, rbFallbackRight, rbHasImpact, rbImpactX, rbColCode, rbRank, rbGRank, rbBull, {len(engine.rb_zones)}, {max_global_rank}, true, false)",
+        f"            f_drawPoiBox(rbLeft, rbTop, rbBottom, rbFallbackRight, rbHasImpact, rbImpactX, rbColCode, rbRank, rbGRank, rbSideGRank, rbBull, {len(engine.rb_zones)}, {max_global_rank}, {max_buy_rank}, {max_sell_rank}, true, false)",
         "        if focusPoi == \"ALL\" or focusPoi == \"FVG\"",
-        f"            f_drawPoiBox(fvgLeft, fvgTop, fvgBottom, fvgFallbackRight, fvgHasImpact, fvgImpactX, fvgColCode, fvgRank, fvgGRank, fvgBull, {len(engine.fvg_zones)}, {max_global_rank}, false, true)",
+        f"            f_drawPoiBox(fvgLeft, fvgTop, fvgBottom, fvgFallbackRight, fvgHasImpact, fvgImpactX, fvgColCode, fvgRank, fvgGRank, fvgSideGRank, fvgBull, {len(engine.fvg_zones)}, {max_global_rank}, {max_buy_rank}, {max_sell_rank}, false, true)",
         "    if onWeekly",
         f"        table.clear(ledger, 0, 0, 10, {table_cap})",
         "        headers = array.from(\"POI\", \"ID\", \"Type\", \"Side\", \"Bottom\", \"Top\", \"Origin (RYD)\", \"Trigger (RYD)\", \"Eligible (RYD)\", \"Impact (RYD)\", \"Status\")",
@@ -1301,7 +1335,9 @@ def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int
         "        if array.size(tId) > 0",
         "            for i = 0 to array.size(tId) - 1",
         "                tEffRank = countFromStart ? array.get(tTotal, i) - array.get(tRank, i) + 1 : array.get(tRank, i)",
-        f"                tEffGRank = countFromStart ? {max_global_rank} - array.get(tGRank, i) + 1 : array.get(tGRank, i)",
+        f"                tSideGTotal = sideFilter == \"BUY\" ? {max_buy_rank} : sideFilter == \"SELL\" ? {max_sell_rank} : {max_global_rank}",
+        "                tSideOrGRank = sideFilter == \"ALL\" ? array.get(tGRank, i) : array.get(tSideGRank, i)",
+        "                tEffGRank = countFromStart ? tSideGTotal - tSideOrGRank + 1 : tSideOrGRank",
         f"                if rowN < {table_cap} and (focusPoi == \"ALL\" or array.get(tPoi, i) == focusPoi) and (sideFilter == \"ALL\" or array.get(tSide, i) == sideFilter) and (not inspectOnePoi or (focusPoi == \"ALL\" ? tEffGRank == poiFromLast : tEffRank == poiFromLast))",
         "                    rowN += 1",
         "                    table.cell(ledger, 0, rowN, array.get(tPoi, i), text_color=color.black, bgcolor=na)",
