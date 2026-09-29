@@ -239,7 +239,7 @@ def structural_invalid_at(z, it: "datetime", bars: list, bar_starts: list,
 
 
 def run_5m_bso(z, it, bar_starts5: list, events5_sorted: list, minutes, mt: list,
-               invalidated_at, window_end) -> dict:
+               invalidated_at, window_end, watch_levels: list[tuple[str, float]] | None = None) -> dict:
     """Ported from five_bso_engine.py's run_bso() -- a single attempt.
     Genuinely different from the previous "first swing after impact is
     the entry" rule: this races an entry CANDIDATE against replacement
@@ -263,7 +263,21 @@ def run_5m_bso(z, it, bar_starts5: list, events5_sorted: list, minutes, mt: list
     otherwise (NO_RESTING_SWING, NO_CANDIDATE, POI_BREACHED,
     NO_ENTRY_IN_WINDOW, NO_SL_POOL, ZERO_RISK) -- so every attempt,
     entered or not, can be written to the 5m trades ledger with a real
-    reason instead of a bare skip."""
+    reason instead of a bare skip.
+
+    On ENTERED, also tracks (2026-09-29, ported from five_bso_engine.py's
+    own SS34 MFE/MAE, previously dropped in the port -- a real gap, not
+    an intentional cut):
+      - mfe/mae: Maximum Favorable/Adverse Excursion, entry (exclusive)
+        through exit (inclusive) -- or through all available data if the
+        trade never resolves (OPEN). Price-based BE-rule material.
+      - watch_hits: a generic, EXTENSIBLE structural-note mechanism --
+        `watch_levels` is a list of (label, price) pairs to watch for
+        during the same scan; the first minute each one is reached (in
+        the trade's own favorable direction) is recorded as
+        {label: datetime}. Structure-based BE-rule material, meant to
+        grow over time as more structural events are identified -- this
+        is the room for that, not a one-off special case."""
     bull = z.bullish
     need_rest_kind = 1 if bull else 0   # buy needs a resting LOW (SL anchor); sell needs a resting HIGH
     need_cand_kind = 0 if bull else 1   # entry-trigger kind is the opposite: HIGH for buy, LOW for sell
@@ -331,8 +345,20 @@ def run_5m_bso(z, it, bar_starts5: list, events5_sorted: list, minutes, mt: list
     tp_price = entry_price + 3 * risk if bull else entry_price - 3 * risk
 
     result, exit_time = None, None
+    mfe_price, mae_price = entry_price, entry_price
+    watch_hits: dict[str, "datetime"] = {}
     for i in range(bisect_left(mt, entry_time) + 1, len(minutes)):
         m = minutes[i]
+        if bull:
+            mfe_price = max(mfe_price, m.h)
+            mae_price = min(mae_price, m.l)
+        else:
+            mfe_price = min(mfe_price, m.l)
+            mae_price = max(mae_price, m.h)
+        if watch_levels:
+            for label, lvl in watch_levels:
+                if label not in watch_hits and ((m.h >= lvl) if bull else (m.l <= lvl)):
+                    watch_hits[label] = m.t
         hit_sl = (m.l <= sl_price) if bull else (m.h >= sl_price)
         hit_tp = (m.h >= tp_price) if bull else (m.l <= tp_price)
         if hit_sl and hit_tp:
@@ -347,11 +373,12 @@ def run_5m_bso(z, it, bar_starts5: list, events5_sorted: list, minutes, mt: list
 
     return dict(stage="ENTERED", resting_at=resting.at, replacements=replacements,
                 entry_time=entry_time, entry_price=entry_price, sl_price=sl_price,
-                tp_price=tp_price, risk=risk, result=result or "OPEN", exit_time=exit_time)
+                tp_price=tp_price, risk=risk, result=result or "OPEN", exit_time=exit_time,
+                mfe=abs(mfe_price - entry_price), mae=abs(mae_price - entry_price), watch_hits=watch_hits)
 
 
 def run_5m_chain(z, impact_time, bar_starts5: list, events5_sorted: list, minutes, mt: list,
-                  invalidated_at, window_end) -> list:
+                  invalidated_at, window_end, watch_levels: list[tuple[str, float]] | None = None) -> list:
     """Ported from five_bso_engine.py's run_bso_chain() (SS27, "made
     universal per the user's explicit instruction"). After a plain SL,
     re-arm and search again from the SL's own exit time, as long as the
@@ -366,7 +393,8 @@ def run_5m_chain(z, impact_time, bar_starts5: list, events5_sorted: list, minute
     search_from = impact_time
     attempt_no = 1
     while True:
-        res = run_5m_bso(z, search_from, bar_starts5, events5_sorted, minutes, mt, invalidated_at, window_end)
+        res = run_5m_bso(z, search_from, bar_starts5, events5_sorted, minutes, mt, invalidated_at, window_end,
+                          watch_levels)
         entered = res.get("stage") == "ENTERED"
         if attempt_no == 1 or entered:
             res["attempt"] = attempt_no
@@ -452,8 +480,10 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_end, display_tz,
                          protect_level=f"{z.protect_level:.5f}", impact_riyadh=riyadh(z.impact_time),
                          invalidated_riyadh="", invalidated_reason="", premium_mid="",
                          attempt="", resting_riyadh="", replacements="",
-                         entry_riyadh="", entry_price="", sl_price="", tp_price="", risk_price="",
-                         r_pips="", result="", exit_riyadh="", r_multiple="", sl_tp_conflict="")
+                         entry_riyadh="", entry_price="", sl_price="", tp_price="",
+                         sl_hit_riyadh="", tp_hit_riyadh="", risk_price="", r_pips="",
+                         mfe_pips="", mae_pips="", result="", exit_riyadh="", r_multiple="",
+                         sl_tp_conflict="", structural_notes="")
 
         # Same-leg supersession (see mark_superseded_same_leg): a later
         # same-direction, unbroken-leg POI caps how much longer THIS zone
@@ -486,8 +516,16 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_end, display_tz,
             continue
 
         invalidated_at, reason = structural_invalid_at(z, z.impact_time, eng.w, eng_bar_starts, minutes, mt)
+        # watch_levels: structural reference prices to check for after
+        # entry -- room to grow (2026-09-29, user's own words: "I will
+        # tell you any more structural note I see in the road"). The
+        # first one: the immediate opposing swing that formed right
+        # before this POI's own impact (the same `opp` swing the
+        # premium/discount check already uses) -- a candidate future BE
+        # trigger the user wants tracked, universally, for every trade.
+        watch_levels = [("pre_impact_swing", opp.price)]
         attempts = run_5m_chain(z, z.impact_time, bar_starts5, events5_sorted, minutes, mt,
-                                 invalidated_at, eff_window_end)
+                                 invalidated_at, eff_window_end, watch_levels)
         for a in attempts:
             if a.get("stage") != "ENTERED":
                 ledger_rows.append(dict(row_base, stage=a.get("stage"), premium_mid=f"{mid:.5f}",
@@ -502,6 +540,8 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_end, display_tz,
                 attempt=a.get("attempt"), resting_at=a.get("resting_at"), replacements=a.get("replacements"),
                 entry_time=a["entry_time"], entry_price=a["entry_price"], sl_price=a["sl_price"],
                 tp_price=a["tp_price"], risk=a["risk"], result=a["result"], exit_time=a.get("exit_time"),
+                mfe=a.get("mfe"), mae=a.get("mae"), watch_hits=a.get("watch_hits") or {},
+                pre_impact_swing_price=opp.price,
             ))
 
     # Dedup: identical entry (same price, same trigger minute) -> ONE real
@@ -532,6 +572,27 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_end, display_tz,
             poi_sources=[m["poi"] for m in members],
         ))
         result = first["result"]
+        exit_t = first.get("exit_time")
+        # sl_hit_riyadh/tp_hit_riyadh: the SAME exit fact the result/
+        # exit_riyadh columns already carry, just split into whichever
+        # column matches -- so which one fired is readable at a glance
+        # without cross-referencing the result column (the user's own
+        # ask), not a second independent computation.
+        sl_hit_riyadh = riyadh(exit_t) if result == "SL" else ""
+        tp_hit_riyadh = riyadh(exit_t) if result == "TP" else ""
+
+        # Structural notes -- extensible (see watch_levels in run_5m_bso;
+        # more checks land here over time, never replacing this one).
+        # Note #1: did price reach the immediate pre-impact opposing
+        # swing after entry, and when -- a candidate future BE trigger.
+        notes = []
+        for m in members:
+            hit_at = (m.get("watch_hits") or {}).get("pre_impact_swing")
+            if hit_at is not None:
+                notes.append(f"{m['poi']}: reached pre-impact swing ({m['pre_impact_swing_price']:.5f}) "
+                             f"at {riyadh(hit_at)} RYD")
+        structural_notes = "; ".join(notes)
+
         ledger_rows.append(dict(
             tf="/".join(dict.fromkeys(m["tf"] for m in members)),
             poi="+".join(m["poi"] for m in members), side=first["side"],
@@ -549,10 +610,14 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_end, display_tz,
             replacements="/".join(str(m["replacements"]) for m in members),
             entry_riyadh=riyadh(first["entry_time"]), entry_price=f"{first['entry_price']:.5f}",
             sl_price=f"{first['sl_price']:.5f}", tp_price=f"{first['tp_price']:.5f}",
+            sl_hit_riyadh=sl_hit_riyadh, tp_hit_riyadh=tp_hit_riyadh,
             risk_price=f"{first['risk']:.5f}", r_pips=f"{first['risk'] * 10000:.1f}",
-            result=result or "", exit_riyadh=riyadh(first.get("exit_time")),
+            mfe_pips=f"{first['mfe'] * 10000:.1f}" if first.get("mfe") is not None else "",
+            mae_pips=f"{first['mae'] * 10000:.1f}" if first.get("mae") is not None else "",
+            result=result or "", exit_riyadh=riyadh(exit_t),
             r_multiple="+3.00" if result == "TP" else ("-1.00" if result == "SL" else ""),
             sl_tp_conflict="YES" if sl_tp_conflict else "",
+            structural_notes=structural_notes,
         ))
 
     return sorted(trades, key=lambda t: t["entry_time"]), ledger_rows
@@ -562,8 +627,9 @@ LEDGER_FIELDS = [
     "tf", "poi", "side", "zone_bottom", "zone_top", "protect_level",
     "impact_riyadh", "superseded_riyadh", "invalidated_riyadh", "invalidated_reason", "premium_mid",
     "attempt", "stage", "resting_riyadh", "replacements",
-    "entry_riyadh", "entry_price", "sl_price", "tp_price", "risk_price", "r_pips",
-    "result", "exit_riyadh", "r_multiple", "sl_tp_conflict",
+    "entry_riyadh", "entry_price", "sl_price", "tp_price", "sl_hit_riyadh", "tp_hit_riyadh",
+    "risk_price", "r_pips", "mfe_pips", "mae_pips",
+    "result", "exit_riyadh", "r_multiple", "sl_tp_conflict", "structural_notes",
 ]
 
 
@@ -703,6 +769,83 @@ def build_trades_pine(trades: list[dict], display_tz: ZoneInfo) -> list[str]:
         '        table.cell(trTable, 4, i + 1, str.tostring(tpY, format.mintick), text_color=color.black, bgcolor=na)',
         '        table.cell(trTable, 5, i + 1, str.tostring(array.get(trRPips, i), "#.#"), text_color=color.black, bgcolor=na)',
         '        table.cell(trTable, 6, i + 1, array.get(trPoi, i), text_color=color.black, bgcolor=na)',
+    ]
+    return lines
+
+
+def find_parent_daily_poi(d_engine, side_bull: bool, child_impact_time: "datetime"):
+    """The Daily POI that was 'active' (per mark_superseded_same_leg) at
+    the moment a 4H/1H zone impacted -- the LATEST same-direction Daily
+    POI whose own impact happened at/before child_impact_time and that
+    hadn't yet been superseded by then. (None, None) if no such Daily
+    POI exists (e.g. the child's own leg has no Daily-level driver
+    impacted yet)."""
+    candidates = []
+    for zones, ptype in ((d_engine.ob_zones, "OB"), (d_engine.rb_zones, "RB"), (d_engine.fvg_zones, "FVG")):
+        for dz in zones:
+            if dz.bullish != side_bull or dz.impact_time is None or dz.impact_time > child_impact_time:
+                continue
+            sup = getattr(dz, "superseded_at", None)
+            if sup is not None and sup <= child_impact_time:
+                continue
+            candidates.append((dz.impact_time, dz, ptype))
+    if not candidates:
+        return None, None
+    candidates.sort(key=lambda c: c[0])
+    _, dz, ptype = candidates[-1]
+    return dz, ptype
+
+
+def build_parent_poi_table(d_engine, h4_engine, h1_engine, display_tz: ZoneInfo) -> list[str]:
+    """User's ask (2026-09-29): "each 1h table should show the parent
+    daily POI name and where it is" -- every impacted 4H/1H POI's own
+    Daily-level driver, found via find_parent_daily_poi(). A separate,
+    small standalone table (not a new column bolted onto the existing
+    shared `ledger` table from weekly_combined_generator.py -- that
+    table's row layout is generic, reused by other standalone viewers
+    too, and isn't something to fork just for this project's own
+    parent-POI concept). Shows on the 4H, 1H and 5m charts."""
+    rows = []
+    for eng, tf_tag in ((h4_engine, "H4"), (h1_engine, "1H")):
+        for zones, ptype in ((eng.ob_zones, "OB"), (eng.rb_zones, "RB"), (eng.fvg_zones, "FVG")):
+            for z in zones:
+                if z.impact_time is None:
+                    continue
+                dz, dptype = find_parent_daily_poi(d_engine, z.bullish, z.impact_time)
+                rows.append(dict(
+                    tf=tf_tag, poi=f"{ptype}#{z.id}",
+                    parent=f"{dptype}#{dz.id}" if dz else "-",
+                    parent_bottom=f"{dz.zb:.5f}" if dz else "", parent_top=f"{dz.zt:.5f}" if dz else "",
+                    parent_impact=wob.display_iso(dz.impact_time, display_tz) if dz else "",
+                ))
+    rows.sort(key=lambda r: (r["tf"], r["poi"]))
+
+    lines = ['bool showParentTable = input.bool(true, "Show parent Daily POI table", group="Trades")']
+    if not rows:
+        lines.append('// no impacted 4H/1H POIs for this --show-date window')
+        return lines
+
+    tf, poi, parent, pbottom, ptop, pimpact = ([r[k] for r in rows] for k in
+                                                ("tf", "poi", "parent", "parent_bottom", "parent_top", "parent_impact"))
+    lines += [
+        *wc.wrb.pack_array("ppTf", "string", tf),
+        *wc.wrb.pack_array("ppPoi", "string", poi),
+        *wc.wrb.pack_array("ppParent", "string", parent),
+        *wc.wrb.pack_array("ppBottom", "string", pbottom),
+        *wc.wrb.pack_array("ppTop", "string", ptop),
+        *wc.wrb.pack_array("ppImpact", "string", pimpact),
+        f'var table ppTable = table.new(position.bottom_left, 6, {len(rows) + 1}, border_width=1)',
+        'if barstate.islast and (onH4 or onH1 or onFive) and showParentTable and array.size(ppTf) > 0',
+        '    ppHeaders = array.from("TF", "POI", "Daily parent", "Parent bottom", "Parent top", "Parent impact (RYD)")',
+        '    for c = 0 to array.size(ppHeaders) - 1',
+        '        table.cell(ppTable, c, 0, array.get(ppHeaders, c), text_color=color.white, bgcolor=color.new(color.navy, 15))',
+        '    for i = 0 to array.size(ppTf) - 1',
+        '        table.cell(ppTable, 0, i + 1, array.get(ppTf, i), text_color=color.black, bgcolor=na)',
+        '        table.cell(ppTable, 1, i + 1, array.get(ppPoi, i), text_color=color.black, bgcolor=na)',
+        '        table.cell(ppTable, 2, i + 1, array.get(ppParent, i), text_color=color.black, bgcolor=na)',
+        '        table.cell(ppTable, 3, i + 1, array.get(ppBottom, i), text_color=color.black, bgcolor=na)',
+        '        table.cell(ppTable, 4, i + 1, array.get(ppTop, i), text_color=color.black, bgcolor=na)',
+        '        table.cell(ppTable, 5, i + 1, array.get(ppImpact, i), text_color=color.black, bgcolor=na)',
     ]
     return lines
 
@@ -1061,6 +1204,9 @@ def main() -> int:
             final_lines += body
         final_lines += h4_on5 + h1_on5
         final_lines += collapse_pack_blocks(build_trades_pine(trades, display_tz))
+        if args.show_date:
+            final_lines += collapse_pack_blocks(
+                build_parent_poi_table(engines["d"], engines["h4"], engines["h1"], display_tz))
         (base / out_name).write_text("\n".join(final_lines), encoding="utf-8")
 
         print("Created:")
