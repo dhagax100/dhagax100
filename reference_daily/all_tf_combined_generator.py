@@ -886,24 +886,33 @@ def mark_open_inside_trigger(engine) -> None:
     "if the open of the impact candle is already in the OB, RB (not
     FVG) zones we are done, we do not trade from that OB or RB."
 
-    Concretely: `z.trigger` is the bar index that fires the zone's own
-    hunt (the break/mid-arm moment -- for a Daily-level zone this is
-    also its eligible/impact moment, no separate premium/discount
-    staging exists there). If that bar's own OPEN price already sits
-    inside [zb, zt], the "break away from the zone" never really
-    happened -- price was already inside it before the bar even
-    started -- so trading from it would put a candle body inside the
-    zone from the very start. Applies to OB and RB only, at every
-    timeframe (Daily/4H/1H) -- FVG has no equivalent concept and is
-    untouched. Reuses the SAME `rejected` field OB already had and RB
-    now has too, so every existing `getattr(z, "rejected", False)`
-    check (drawing, table, ledger) picks this up with no other change."""
+    User's own correction (2026-09-30, after `z.trigger` mistakenly
+    caught real, unrelated cases): this is specifically about the
+    IMPACT candle, not the trigger candle -- for Aggressive POIs
+    (AOB/ARB) those two happen to be the same bar, which is what made
+    the first version look right on the AOB/ARB example, but for other
+    zone types (IRB, IFOB, ...) trigger and impact are genuinely
+    different bars, and only the impact candle's open matters: if that
+    candle's own open is already inside [zb, zt], its body will close
+    inside the zone the moment it forms, which the zone can't survive.
+    Found the impact bar by locating the bar whose own [start, end)
+    span contains z.impact_time (same bisect-against-bar-starts pattern
+    used everywhere else in this file for exactly that lookup).  Applies
+    to OB and RB only, at every timeframe (Daily/4H/1H) -- FVG has no
+    equivalent concept and is untouched. Reuses the SAME `rejected`
+    field OB already had and RB now has too, so every existing
+    `getattr(z, "rejected", False)` check (drawing, table, ledger)
+    picks this up with no other change."""
+    bar_starts = [b.start for b in engine.w]
     for zones in (engine.ob_zones, engine.rb_zones):
         for z in zones:
-            if z.rejected or not (0 <= z.trigger < len(engine.w)):
+            if z.rejected or z.impact_time is None:
                 continue
-            trigger_open = engine.w[z.trigger].o
-            if z.zb <= trigger_open <= z.zt:
+            impact_idx = bisect_right(bar_starts, z.impact_time) - 1
+            if not (0 <= impact_idx < len(engine.w)):
+                continue
+            impact_open = engine.w[impact_idx].o
+            if z.zb <= impact_open <= z.zt:
                 z.rejected = True
 
 
