@@ -295,6 +295,37 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 SESSION LOG (newest first)
 ----------------------------
 
+2026-09-30 — Real bug fixed: 1H abandonment made per-zone/bias-aware (handles an intraday bias flip); also fixed a dormant bug that silently disabled it under --default-side ALL
+- User's rule, stated directly: "if we are buying today and price take
+  previous daily high, 1h is abandoned for buying, the mirror is true
+  for sell." Caught live on 20 Jan: bias flips SELL->BUY intraday
+  (11:10), and the old h1_abandon_at was computed ONCE per day off
+  args.default_side (a manually-typed flag), never the code's own
+  computed bias -- it had no way to represent "abandoned for BUY from
+  the start, even though SELL was fine earlier that same day."
+- Fixed: abandonment is now computed PER ZONE, inside compute_5m_trades
+  itself, using daily_controlling_bias() at the zone's OWN impact
+  moment to decide if it's in-favor (subject to this rule) or opposing
+  (governed only by its own invalidation, untouched by this rule).
+  Verified: 20 Jan's 1H BUY (FVG#51, RB#132, RB#133) all correctly
+  abandoned from 06:19 (19 Jan's high, swept before the 11:10 flip) --
+  1H BUY was never armed at all that day.
+- Bonus dormant bug caught in the same pass: is_react_day() (and so the
+  whole old abandonment mechanic) silently no-op'd whenever
+  --default-side ALL was used, since "ALL" isn't "SELL" or "BUY" and
+  the function returns False immediately for any other value -- every
+  --default-side ALL diagnostic run this session never actually applied
+  1H abandonment on ANY day. Earlier single-day --default-side SELL/BUY
+  runs (e.g. the original 15 Jan walkthrough) were never affected --
+  only ALL-mode runs were silently skipping it. Fixed for good as a
+  side effect of making the check per-zone (each zone now uses its own
+  real side, "ALL" is never passed into is_react_day again).
+- Verified no regression: 12 Jan ground truth (RB#66) unchanged; every
+  other change in the ledger is a relabeling among already-non-entered
+  rows (e.g. POI_BREACHED -> NO_ENTRY_IN_WINDOW once correctly
+  abandoned) or a newly-populated h1_abandoned_riyadh column -- zero
+  ENTERED rows changed anywhere.
+
 2026-09-30 — CORRECTED: bias is continuous, never "undefined" -- POI going spent is a setup fact, not a bias fact
 - Reverses part of the entry directly above (same day). User's own
   correction: "there is no a day without a bias. the bias was sell

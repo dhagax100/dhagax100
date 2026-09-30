@@ -739,7 +739,7 @@ def run_5m_chain(z, impact_time, bar_starts5: list, events5_sorted: list, minute
 
 
 def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_end, display_tz,
-                       side: str = "ALL", h1_abandon_at=None) -> tuple[list[dict], list[dict]]:
+                       side: str = "ALL", h1_abandon_at=None, d_zones_full=None) -> tuple[list[dict], list[dict]]:
     """The real entry rule (2026-09-28 this session, ported 2026-09-28
     from the previously-built and dataset-validated `five_bso_engine.py`
     -- SPEC.md SS17/SS20-27 -- after the user asked whether POI
@@ -855,9 +855,35 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
         # previous day's relevant extreme, 1H setups are abandoned for
         # the rest of the day -- same ceiling treatment as supersession,
         # so a 1H entry already found before the sweep still stands.
-        if tf_tag == "1H" and h1_abandon_at is not None:
-            eff_window_end = min(eff_window_end, h1_abandon_at)
-            row_base["h1_abandoned_riyadh"] = riyadh(h1_abandon_at)
+        #
+        # Made PER-ZONE and bias-aware (2026-09-30, real gap caught on
+        # 20 Jan): the old version computed ONE abandon time for the
+        # whole day off args.default_side (a manually-typed flag), never
+        # the code's own computed bias -- so it couldn't handle a day
+        # where bias itself flips intraday (20 Jan: SELL until 11:10,
+        # BUY after). User's own words: "if we are buying today and
+        # price take previous daily high, 1h is abandoned for buying,
+        # the mirror is true for sell." This only ever applies to a zone
+        # IN FAVOR of the bias that was controlling AT ITS OWN IMPACT
+        # MOMENT -- an opposing zone (authorized via a same-day Daily
+        # ARB/ORB) lives or dies by its own invalidation only, this rule
+        # doesn't touch it. Verified: 20 Jan's 1H BUY (FVG#51, impact
+        # 13:21) is now correctly abandoned -- 19 Jan's high (1.16484)
+        # was already swept at 06:19, well before the 11:10 flip, so 1H
+        # BUY was never armed at all that day, even though 4H BUY and
+        # the RB#1-authorized 1H SELL both still traded normally.
+        if tf_tag == "1H" and d_zones_full is not None:
+            controlling = daily_controlling_bias(d_zones_full, z.impact_time, minutes, mt)
+            if controlling is not None and z.bullish == controlling:
+                zone_side = "BUY" if z.bullish else "SELL"
+                zone_date = z.impact_time.astimezone(display_tz).date().isoformat()
+                if is_react_day(d_zones_full, zone_side, zone_date, display_tz):
+                    prev_extreme = find_prev_day_extreme(minutes, mt, zone_date, display_tz, zone_side)
+                    zone_abandon_at = find_prev_day_sweep_time(minutes, mt, zone_date, display_tz,
+                                                                zone_side, prev_extreme)
+                    if zone_abandon_at is not None:
+                        eff_window_end = min(eff_window_end, zone_abandon_at)
+                        row_base["h1_abandoned_riyadh"] = riyadh(zone_abandon_at)
 
         # Born-violated OB/RB (2026-09-30, see mark_open_inside_trigger's
         # own docstring -- checked before anything else, same reasoning
@@ -1784,21 +1810,13 @@ def main() -> int:
             window_start, _ = trading_window(since_date, display_tz)
             _, window_end = trading_window(args.show_date, display_tz)
 
-            # "React day" rule (user, 2026-09-29): once today sweeps the
-            # previous day's relevant extreme (the low for a SELL bias,
-            # the high for a BUY bias), 1H setups are abandoned for the
-            # rest of the day and only 4H stays in play. Only applies on
-            # an actual react day -- never the impact day itself (see
-            # is_react_day's own docstring for the real bug this fixed).
-            h1_abandon_at = None
-            if is_react_day(d_zones_full, args.default_side, args.show_date, display_tz):
-                prev_extreme = find_prev_day_extreme(minutes, mt_all, args.show_date, display_tz, args.default_side)
-                h1_abandon_at = find_prev_day_sweep_time(minutes, mt_all, args.show_date, display_tz,
-                                                           args.default_side, prev_extreme)
-
+            # 1H abandonment is now computed PER-ZONE, bias-aware, inside
+            # compute_5m_trades itself (see its own comment there) --
+            # handles a day whose bias flips intraday, which a single
+            # day-wide side flag never could.
             trades, ledger_rows = compute_5m_trades(tf_full["h4"], tf_full["h1"], e5, minutes,
                                                       window_start, window_end, display_tz,
-                                                      side=args.default_side, h1_abandon_at=h1_abandon_at)
+                                                      side=args.default_side, d_zones_full=d_zones_full)
 
         # Header: identical across all three except title/onWeekly/maxval --
         # take it from "d", split at the first body-only line.
