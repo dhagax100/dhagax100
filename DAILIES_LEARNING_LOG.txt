@@ -295,6 +295,31 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 SESSION LOG (newest first)
 ----------------------------
 
+2026-09-30 — Real bug fixed: "yesterday" for the continuation-day sweep check now always resolves to the last real trading day
+- User's own correction, flat: "Monday's yesterday is always Friday,
+  period." find_prev_day_extreme() was computing a plain
+  calendar-day-minus-1, which for any Monday lands on Sunday -- a
+  real market-closed day with zero minutes. Caught on 26 Jan (a
+  Monday): the function silently returned None, which was wrongly
+  read as "no prior day exists, so no abandonment possible" -- not
+  because there was genuinely no prior structure, but because Sunday
+  has no data. 19 Jan (also a Monday) happened to get a real answer
+  by coincidence -- some early-Monday-session minutes land on the
+  Sunday calendar date in Riyadh time -- which masked the exact same
+  bug there; not reliable either way.
+- Fixed: rolls back day-by-day past Saturday/Sunday to the last real
+  trading day before computing the extreme. Verified against real
+  data: 26 Jan's "yesterday" is now correctly Friday 23 Jan (high
+  1.18262) -- and price had ALREADY exceeded it at 00:00 Riyadh
+  Monday morning (the Asian session opens Sunday evening NY time,
+  already "Monday" in Riyadh calendar terms) -- a genuine sweep, not
+  an artifact.
+- REVOKES a trade reported earlier this session: 26 Jan's OB#131 (BUY,
+  1H, entry 1.18523 @ 14:36, -1R) should never have counted -- 1H BUY
+  was abandoned from the very first minute of the day. Verified zero
+  impact anywhere else: 12-23 Jan ledger unchanged (full diff, zero
+  rows), 12 Jan ground truth (RB#66) unchanged.
+
 2026-09-30 — Display fix: a zone stranded by a later MSS now shows as Old (OOB/ORB/OFVG), not its stale creation-time label
 - User's own correction: "fix the label so it shows Old after MSS."
   RB#1 (Daily) was created in favor of the old downtrend (6 Jan) and

@@ -428,7 +428,21 @@ def find_prev_day_extreme(minutes, mt: list, date_str: str, display_tz: ZoneInfo
     if side not in ("SELL", "BUY"):
         return None
     y, m, d = (int(x) for x in date_str.split("-"))
-    prev_date = (datetime(y, m, d) - timedelta(days=1)).date().isoformat()
+    prev_date = (datetime(y, m, d) - timedelta(days=1)).date()
+    # "Monday's yesterday is always Friday, period" (user, 2026-09-30) --
+    # a plain calendar_day-1 lands on Saturday/Sunday for any Monday,
+    # both of which are real market-closed/no-data days, not "no prior
+    # day exists." Roll back to the last real trading day instead. Real
+    # bug this fixes: 26 Jan (a Monday) silently returned None here --
+    # not because there was genuinely no prior structure, but because
+    # 25 Jan (Sunday) has zero minutes, so the abandonment check could
+    # never even run that day. 19 Jan happened to get a non-None answer
+    # by coincidence (some early-Monday-session minutes land on the
+    # Sunday calendar date in Riyadh time), which masked the same bug --
+    # inconsistent, not reliable, fixed the same way for every Monday.
+    while prev_date.weekday() >= 5:  # 5=Saturday, 6=Sunday
+        prev_date -= timedelta(days=1)
+    prev_date = prev_date.isoformat()
     win_start, win_end = calendar_day_bounds(prev_date, display_tz)
     i0, i1 = bisect_left(mt, win_start), bisect_left(mt, win_end)
     if i0 >= i1:
