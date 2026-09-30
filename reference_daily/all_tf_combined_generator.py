@@ -174,6 +174,102 @@ def in_trading_window(t: "datetime", display_tz: ZoneInfo) -> bool:
     return win_start <= t < win_end
 
 
+# Exact session hours (user, 2026-09-30, "never forget it, never" --
+# Riyadh clock). Asia is liquidity-grab-only (see trading_window());
+# London/New York are the two real entry sessions the sweep rule below
+# actually gates.
+_SESSION_HOURS = {
+    True:  {"ASIA": (3, 7), "LONDON": (10, 14), "NEWYORK": (15, 19)},   # summer
+    False: {"ASIA": (4, 8), "LONDON": (11, 15), "NEWYORK": (16, 20)},   # winter
+}
+
+
+def _is_summer_ny(date_str: str) -> bool:
+    y, m, d = (int(x) for x in date_str.split("-"))
+    ny_noon = datetime(y, m, d, 12, tzinfo=ZoneInfo("America/New_York"))
+    return ny_noon.dst() != timedelta(0)
+
+
+def _session_bounds(date_str: str, name: str, display_tz: ZoneInfo) -> tuple["datetime", "datetime"]:
+    y, m, d = (int(x) for x in date_str.split("-"))
+    start_h, end_h = _SESSION_HOURS[_is_summer_ny(date_str)][name]
+    start = datetime(y, m, d, start_h, 0, 0, tzinfo=display_tz).astimezone(UTC)
+    end = datetime(y, m, d, end_h, 0, 0, tzinfo=display_tz).astimezone(UTC)
+    return start, end
+
+
+def session_of(t: "datetime", display_tz: ZoneInfo) -> str | None:
+    """Which of Asia/London/New York (or neither -- an off-hours minute)
+    `t` falls in, on its own calendar day."""
+    lt = t.astimezone(display_tz)
+    date_str = lt.date().isoformat()
+    hrs = _SESSION_HOURS[_is_summer_ny(date_str)]
+    for name, (sh, eh) in hrs.items():
+        if sh <= lt.hour < eh:
+            return name
+    return None
+
+
+def _swept_between(mt: list, minutes, t0: "datetime", t1: "datetime", level: float | None, bull: bool) -> bool:
+    """Did price cross `level` (the opposing direction's liquidity --
+    a LOW for a buy setup, a HIGH for a sell setup) anywhere in
+    [t0, t1)? None `level` (session never traded, e.g. no data yet)
+    means "nothing to sweep," never satisfied."""
+    if level is None or t0 >= t1:
+        return False
+    i0, i1 = bisect_left(mt, t0), bisect_left(mt, t1)
+    for i in range(i0, i1):
+        m = minutes[i]
+        if (m.l < level) if bull else (m.h > level):
+            return True
+    return False
+
+
+def session_sweep_satisfied(hunt_time: "datetime", bull: bool, minutes, mt: list, display_tz: ZoneInfo) -> bool:
+    """User's rule (2026-09-30): trading in London or New York requires
+    the PRIOR session's own liquidity to have been swept first.
+
+    SELL example (BUY is the exact mirror -- lows instead of highs):
+    to trade in London, price must have traded above the Asian session's
+    own high at least once between Asian close and `hunt_time` (the
+    moment we're looking for a 5m entry candidate). To trade in New
+    York, price must likewise have traded above LONDON's own high
+    between London close and `hunt_time` -- UNLESS Asian high was
+    already swept at any point between Asian close and London's own
+    close, in which case that ONE sweep satisfies both sessions and New
+    York needs no separate sweep of its own.
+
+    Only London/New York minutes are gated at all -- Asia itself is
+    already excluded as an entry session entirely (in_trading_window),
+    and this rule has nothing to say about a minute in neither."""
+    sess = session_of(hunt_time, display_tz)
+    if sess not in ("LONDON", "NEWYORK"):
+        return True
+    date_str = hunt_time.astimezone(display_tz).date().isoformat()
+    asia_start, asia_end = _session_bounds(date_str, "ASIA", display_tz)
+    london_start, london_end = _session_bounds(date_str, "LONDON", display_tz)
+    asia_level = _minutes_extreme(mt, minutes, asia_start, asia_end, bull)
+    if sess == "LONDON":
+        return _swept_between(mt, minutes, asia_end, hunt_time, asia_level, bull)
+    # NEWYORK: the Asian sweep, if it already happened by London's own
+    # close, covers New York too -- no separate London sweep required.
+    if _swept_between(mt, minutes, asia_end, london_end, asia_level, bull):
+        return True
+    london_level = _minutes_extreme(mt, minutes, london_start, london_end, bull)
+    return _swept_between(mt, minutes, london_end, hunt_time, london_level, bull)
+
+
+def _minutes_extreme(mt: list, minutes, t0: "datetime", t1: "datetime", bull: bool) -> float | None:
+    """The session's own opposing-direction extreme (the LOW for a buy
+    setup's mirror-check, the HIGH for a sell setup) -- None if the
+    session has no data at all yet (nothing to sweep)."""
+    i0, i1 = bisect_left(mt, t0), bisect_left(mt, t1)
+    if i0 >= i1:
+        return None
+    seg = minutes[i0:i1]
+    return (min(m.l for m in seg) if bull else max(m.h for m in seg))
+
+
 def filter_to_window(engine, win_start: "datetime", win_end: "datetime") -> None:
     """Single-window convenience wrapper around filter_to_windows() --
     see there for what actually counts as "in the window.\""""
@@ -483,6 +579,8 @@ def run_5m_bso(z, it, bar_starts5: list, events5_sorted: list, minutes, mt: list
             cand_ptr += 1
         if not in_trading_window(m.t, display_tz):
             continue  # Asia (or any off-hours minute) never triggers an entry, structure still updates above
+        if not session_sweep_satisfied(m.t, bull, minutes, mt, display_tz):
+            continue  # user's rule (2026-09-30): London/New York need the prior session's own liquidity swept first
         broke = (m.h > current.price) if bull else (m.l < current.price)
         if broke:
             entry_m = m
