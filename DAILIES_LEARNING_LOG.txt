@@ -286,6 +286,19 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 SESSION LOG (newest first)
 ----------------------------
 
+2026-09-30 — New standalone diagnostic: show_candles.py
+- Not part of the main pipeline -- a one-off-style utility (like
+  gen_full_daily.py) but kept in reference_daily/ since it's generic and
+  reusable, not a single-use script. Prints any day's OHLC bars as a
+  table and saves a candlestick PNG, for any of d/4h/1h/5m.
+- Run the same way as the main generator: `python show_candles.py
+  EURUSD_m1_BidAndAsk.csv --tf 4h --date 2026-01-16` (needs `pip install
+  matplotlib` once). Reuses weekly_ob_generator/daily_combined_generator
+  directly, so it always reads the exact same real data as everything
+  else -- built to visually/tabularly sanity-check specific candles
+  (e.g. 16 Jan's 4H impact/entry/invalidation/swing-high bars) on
+  demand, without needing a full pipeline regen.
+
 2026-09-30 — CORRECTED: Old POIs are the same category as Aggressive, fully tradeable on H4/1H -- 15 Jan's ORB reopens 1H BUY
 - Reverses the entry directly above (same day, same topic). User's own
   correction: "there is no a single point where I said Old POIs are not
