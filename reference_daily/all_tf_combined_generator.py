@@ -687,6 +687,15 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
             eff_window_end = min(eff_window_end, h1_abandon_at)
             row_base["h1_abandoned_riyadh"] = riyadh(h1_abandon_at)
 
+        # Born-violated OB/RB (2026-09-30, see mark_open_inside_trigger's
+        # own docstring -- checked before anything else, same reasoning
+        # as DEAD_BEFORE_WINDOW below: a zone that was never valid to
+        # begin with should never reach the opposing-swing/premium
+        # checks that assume a real zone.
+        if getattr(z, "rejected", False):
+            ledger_rows.append(dict(row_base, stage="OPEN_INSIDE_ZONE"))
+            continue
+
         # A zone carried in from a prior day (candidates now come from
         # FULL, unfiltered history -- see this function's own docstring)
         # may simply already be structurally dead by the time today's
@@ -867,6 +876,35 @@ def write_5m_trades_ledger(base: Path, ledger_rows: list[dict],
         wr.writeheader()
         for row in ledger_rows:
             wr.writerow(row)
+
+
+def mark_open_inside_trigger(engine) -> None:
+    """User's rule (2026-09-30, real ICT concept, NOT in five_bso_engine.py
+    or SPEC.md -- checked, absent, same status as premium/discount: new,
+    directed now, not yet validated against the original port):
+
+    "if the open of the impact candle is already in the OB, RB (not
+    FVG) zones we are done, we do not trade from that OB or RB."
+
+    Concretely: `z.trigger` is the bar index that fires the zone's own
+    hunt (the break/mid-arm moment -- for a Daily-level zone this is
+    also its eligible/impact moment, no separate premium/discount
+    staging exists there). If that bar's own OPEN price already sits
+    inside [zb, zt], the "break away from the zone" never really
+    happened -- price was already inside it before the bar even
+    started -- so trading from it would put a candle body inside the
+    zone from the very start. Applies to OB and RB only, at every
+    timeframe (Daily/4H/1H) -- FVG has no equivalent concept and is
+    untouched. Reuses the SAME `rejected` field OB already had and RB
+    now has too, so every existing `getattr(z, "rejected", False)`
+    check (drawing, table, ledger) picks this up with no other change."""
+    for zones in (engine.ob_zones, engine.rb_zones):
+        for z in zones:
+            if z.rejected or not (0 <= z.trigger < len(engine.w)):
+                continue
+            trigger_open = engine.w[z.trigger].o
+            if z.zb <= trigger_open <= z.zt:
+                z.rejected = True
 
 
 def exclude_old_intraday_zones(engine) -> None:
@@ -1363,6 +1401,7 @@ def main() -> int:
         for tag, tf_period, title in TIMEFRAMES:
             engine = wc.WeeklyCombinedEngine(minutes, bars_by_tag[tag])
             engine.run()
+            mark_open_inside_trigger(engine)
             mark_superseded_same_leg(engine, minutes, mt_all)
             if tag in ("h4", "h1"):
                 exclude_old_intraday_zones(engine)

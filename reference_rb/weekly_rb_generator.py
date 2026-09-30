@@ -83,6 +83,14 @@ class RBZone:
     eligible_time: Optional[datetime] = None
     impact_time: Optional[datetime] = None
     trigger_time: Optional[datetime] = None
+    # Mirrors OB's own `rejected` field (weekly_ob_generator.py's Zone
+    # class already has one; RBZone never did). Used by the new "open
+    # already inside the zone" check (2026-09-30, user-directed, real
+    # ICT rule not in five_bso_engine.py/SPEC.md -- see
+    # mark_open_inside_trigger() in all_tf_combined_generator.py): a
+    # candle whose own OPEN sits inside [zb, zt] can't be the clean
+    # break that validates an OB/RB, so the zone is born violated.
+    rejected: bool = False
     created_state: int = -1              # immutable creation type, for audit (mirrors OB's created_state)
     promotion_from_state: int = -1       # mirrors OB's promotion_from_state; -1 = never promoted
     promotion_time: Optional[datetime] = None
