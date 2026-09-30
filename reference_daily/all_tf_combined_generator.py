@@ -1269,6 +1269,24 @@ def daily_controlling_bias(d_zones_full, as_of: "datetime", minutes=None, mt: li
     zone. `minutes`/`mt` optional only for backward compatibility with
     any caller that can't supply them -- always pass them when
     available, skipping the check silently returns the old (buggy)
+    behavior.
+
+    THIRD rule, same day (2026-09-30, user's own words): "Daily MSS_UP
+    flip bias on its own, the minute the protected swing high is
+    exceeded we have change to uptrend" -- a Daily MSS is a bias-setting
+    event in its own right, equal to an in-favor POI impact, not
+    something a POI has to separately confirm. Caught live on 20 Jan:
+    price broke the Daily swing high (1.16981) protecting the SELL
+    trend at 11:10 Riyadh, the engine's own MSS detection registered a
+    real Daily MSS_UP for it, yet bias was still reading SELL because
+    daily_controlling_bias() never looked at MSS at all. Fixed: every
+    Daily MSS is folded into the SAME candidate list as the in-favor POI
+    impacts, timestamped to its real exact M1 minute (not just the bar
+    it falls in -- MSS doesn't carry that itself, so it's found the same
+    way Event.at is: first minute price actually crosses the MSS's own
+    broken level), and the single latest event of either kind (POI
+    impact or MSS) wins. `d_zones_full.msses`, if present, supplies the
+    MSS list -- omit it (or minutes/mt) to keep the old POI-only
     behavior."""
     candidates = []
     for zones in (d_zones_full.ob_zones, d_zones_full.rb_zones, d_zones_full.fvg_zones):
@@ -1285,6 +1303,19 @@ def daily_controlling_bias(d_zones_full, as_of: "datetime", minutes=None, mt: li
                 if inv_at is not None and inv_at <= as_of:
                     continue
             candidates.append((dz.impact_time, dz.bullish))
+
+    if minutes is not None and mt is not None and hasattr(d_zones_full, "msses") and hasattr(d_zones_full, "w"):
+        bar_starts = [b.start for b in d_zones_full.w]
+        for x in d_zones_full.msses:
+            broken_start = d_zones_full.w[x.broken].start
+            idx = bisect_right(mt, broken_start)
+            for m in minutes[idx:]:
+                if m.t > as_of:
+                    break
+                if (m.h > x.price) if x.up else (m.l < x.price):
+                    candidates.append((m.t, x.up))
+                    break
+
     if not candidates:
         return None
     candidates.sort(key=lambda c: c[0])
@@ -1734,7 +1765,8 @@ def main() -> int:
                 # list still references -- and hand the snapshot to
                 # find_parent_daily_poi() instead of the filtered engine.
                 d_zones_full = SimpleNamespace(ob_zones=list(engine.ob_zones), rb_zones=list(engine.rb_zones),
-                                                fvg_zones=list(engine.fvg_zones), w=engine.w, events=engine.events)
+                                                fvg_zones=list(engine.fvg_zones), w=engine.w, events=engine.events,
+                                                msses=list(engine.msses))
             # Daily is never --since-FLOOR-scoped here (2026-09-29, user:
             # "I want all... all the POIs, swings, MSS and everything...
             # by using the focus toggle" -- --since scoping makes sense

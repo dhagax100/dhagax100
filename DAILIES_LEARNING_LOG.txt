@@ -295,6 +295,36 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 SESSION LOG (newest first)
 ----------------------------
 
+2026-09-30 — New rule: Daily MSS flips bias on its own -- plus a real discovery it exposed (bias was undefined 15-20 Jan, not continuously SELL)
+- User's rule, stated directly after we confirmed the engine's own MSS
+  detection had registered a real Daily MSS_UP on 20 Jan: "Daily MSS_UP
+  flip bias on its own, the minute the protected swing high is exceeded
+  we have change to uptrend." A Daily MSS is now a bias-setting event
+  in its own right, equal to an in-favor POI impact -- not something a
+  POI has to separately confirm.
+- Implemented in daily_controlling_bias(): every Daily MSS is folded
+  into the same candidate list as in-favor POI impacts, timestamped to
+  its real exact M1 minute (first minute price actually crosses the
+  MSS's own broken level -- MSS doesn't carry that itself the way
+  Event.at does, so it's found the same way). The single latest event
+  of either kind wins. Verified: bias flips to BUY at 11:10 Riyadh, 20
+  Jan, exactly when price broke 1.16981 (12th's high, the level
+  protecting the whole SELL trend).
+- Real discovery made while verifying this: FVG#1 (the original 12 Jan
+  bias-setting Daily FVG) had ALREADY gone spent via the existing
+  swing_spent rule, at 15 Jan 04:34 -- the exact minute 12th's high
+  (1.16981) itself got confirmed as a swing. Means the prior narrative
+  ("bias = SELL continuously through 12-20 Jan") was wrong for that
+  stretch: there was no surviving in-favor Daily POI at all from 15 Jan
+  04:34 until RB#1 impacted 20 Jan 12:06 -- bias was genuinely
+  undefined, not SELL, for 5 days. Checked the practical impact:
+  ZERO trade results change (nothing in that window would have entered
+  regardless of gate), but several BUY candidates on 16/19 Jan were
+  mislabeled NO_DAILY_AUTHORIZATION when there was no defined bias to
+  be unauthorized against -- they now correctly show their own real
+  failure reason (PREMIUM_NOT_REACHED, POI_BREACHED, etc.) instead.
+- Verified no regression: 12 Jan ground truth (RB#66) unchanged.
+
 2026-09-30 — Real bug fixed: daily_controlling_bias() never checked if its own pick was already invalidated
 - Caught on 20 Jan's RB#1: a fresh in-favor Daily SELL POI impacted by
   wick at 12:06 Riyadh (old 6 Jan resistance, price finally rallied
