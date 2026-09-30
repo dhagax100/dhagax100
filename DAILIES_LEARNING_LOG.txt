@@ -21,6 +21,15 @@ BIAS
 - Weekly/Daily structure sets directional control (BUY/SELL/NONE).
 - 4H/1H POIs are only tradeable in the direction Weekly/Daily permits.
 
+CONTROL GATE VOCABULARY (2026-09-30)
+- Day Bias: Daily-set direction, fixed for the day.
+- 4H State: ARMED (in favor) or DEAD -- never opposing, ever.
+- 1H State (three, priority order): OPPOSING-AUTHORIZED (a same-day
+  Daily ARB/ORB impacted -- lasts until that zone dies) > ABANDONED
+  (yesterday's relevant extreme got swept) > IN-FAVOR (default).
+- Control Gate = 4H State + 1H State read together at a given moment
+  (e.g. "4H ARMED-SELL / 1H OPPOSING-BUY").
+
 SESSIONS / TRADING WINDOW
 - THE EXACT SESSION HOURS (user's own words, 2026-09-30, "never forget
   it, never" — Riyadh clock):
