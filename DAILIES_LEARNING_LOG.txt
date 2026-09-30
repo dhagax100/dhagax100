@@ -52,7 +52,22 @@ POI ELIGIBILITY
 - A POI only counts if some real lifecycle event (trigger, eligible,
   impact, or breach) happens inside the window that day.
 - "Old" POIs (OOB/ORB/OFVG) never show or trade on H4/1H, period —
-  even though they're a real tradeable category at Daily/Weekly.
+  even though they're a real tradeable category at Daily/Weekly. An Old
+  POI impacting intraday (e.g. inside a 4H/1H session window) changes
+  NOTHING about the intraday control gate -- it's Daily/Weekly-tier
+  information only.
+- DATA-RANGE LIMITATION: an Old POI whose own origin candle predates the
+  loaded CSV (this dataset starts 2026-01-02) cannot be detected, drawn,
+  or validated by the code at all -- no origin body, no anchor level, no
+  way to check open-inside-zone or anchor-break for it. When one matters
+  (e.g. it impacts inside a live day's window), the user supplies its
+  facts by hand (side, top/bottom price, impact time) and that's treated
+  as ground truth; the code cannot independently confirm or refute it.
+  First real instance: 2026-01-15, an ORB (2025 origin, outside the
+  2026-01-02+ dataset) impacted at 17:40 Riyadh at its top price
+  1.15952 -- since it's an Old POI, per the rule above this had no
+  effect on that day's 4H/1H gate (stayed 4H-SELL-only, unchanged from
+  the 16:02 ARB anchor break).
 - "Aggressive" POIs (AOB/ARB/AFVG) trade OPPOSITE the leg/trend they're
   found in, same family as Old POIs — an uptrend leg's Aggressive POIs
   are SELL, a downtrend leg's are BUY. Not anticipatory continuation;
@@ -230,6 +245,21 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 
 SESSION LOG (newest first)
 ----------------------------
+
+2026-09-30 — 15 Jan: Old-POI (ORB) impact confirmed to not affect the intraday gate; data-range limitation for Old POIs logged
+- After the 16:02 anchor break dropped the gate back to 4H-SELL-only,
+  price went on to impact an Old RB (ORB) at 17:40 Riyadh, top price
+  1.15952. This ORB's origin candle is in 2025 -- entirely outside the
+  loaded dataset (2026-01-02 onward) -- so the code can't see it; the
+  user supplied the fact directly.
+- Confirmed against the already-standing rule (Old POIs never show/trade
+  on H4/1H, period): this impact changes nothing intraday. 4H stayed
+  SELL only, 1H stayed abandoned, for the remainder of the 15th. No new
+  rule needed -- this is straight application of an existing one.
+- Logged the general limitation this exposes: any Old POI whose origin
+  predates the loaded CSV can't be auto-detected/validated by the code
+  (no origin body, no anchor level) -- see POI ELIGIBILITY, CURRENT RULE
+  SET, for the standing note and this instance's exact facts.
 
 2026-09-30 — Three real fixes: trading-window end time, a genuine OB body-corruption bug, and a new session-sweep rule
 - **Trading window end time corrected.** User gave the exact session
