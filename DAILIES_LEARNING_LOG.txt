@@ -286,6 +286,37 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 SESSION LOG (newest first)
 ----------------------------
 
+2026-09-30 — Real bug fixed: 4H display was silently dropping real swings/MSS/POIs outside trading-window hours
+- User caught this two ways in one message: (a) opened the 4H chart
+  and RB#22 -- the exact POI that produced 3 real entries on 16 Jan --
+  had no box and no table row at all; (b) noticed the 4H swing points
+  and MSS looked wrong across 12-16 Jan and asked for a fix before
+  anything else. Both came from the same root cause.
+- Root cause: filter_to_windows()/filter_to_date_range() (the 1H-only
+  rule -- "I do not want to see the 1h information outside the trading
+  windows... unless it affects the info inside trading window hours")
+  was ALSO being applied to 4H. It keeps only lifecycle events landing
+  inside a real trading window (10-19/11-20 Riyadh), one discontinuous
+  window per day. RB#22's own origin (15 Jan 21:00), trigger (16 Jan
+  03:49) and impact (16 Jan 05:34) all fall before that day's window
+  even opens -- so the DISPLAY dropped it entirely, even though
+  compute_5m_trades (which searches the full, unfiltered zone history)
+  still found and traded it. Same mechanism silently deleted 14 Jan's
+  entire swing/MSS structure (both its real swing low 05:00 and swing
+  high 21:00 landed outside window hours) and 16 Jan's real MSS_UP
+  (09:00, 1.16138) -- confirmed by comparing the filtered swing list
+  against the engine's own unfiltered event list directly.
+- Fix: new filter_to_calendar_span() (all_tf_combined_generator.py) --
+  same in-window/carry-in mechanics as filter_to_windows(), but ONE
+  continuous span (--since 00:00 through --show-date 24:00 Riyadh)
+  instead of discontinuous per-day trading windows. 4H now uses this;
+  1H is UNCHANGED, still filter_to_date_range() -- the user's complaint
+  and fix request were both 4H-specific, 1H's existing window
+  restriction was never in question. Verified: 14 Jan's swings/MSS are
+  back, 16 Jan's MSS_UP (09:00, 1.16138) is back, and RB#22 now appears
+  in the 4H POI table (id #22) and as the 5m trades table's parent POI,
+  exactly where it should have been all along.
+
 2026-09-30 — REMOVED: show_candles.py was the wrong tool, reverted same session
 - Added, then removed minutes later. It produced a matplotlib PNG
   chart + a plain-text table -- outside TradingView entirely, not a

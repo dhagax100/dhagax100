@@ -362,6 +362,39 @@ def filter_to_date_range(engine, since_str: str, until_str: str, display_tz: Zon
     filter_to_windows(engine, windows)
 
 
+def filter_to_calendar_span(engine, since_str: str, until_str: str, display_tz: ZoneInfo) -> None:
+    """4H-only fix (2026-09-30). filter_to_windows()/filter_to_date_range()
+    keep only what lands inside the real trading windows, one
+    discontinuous window per day -- correct for 1H (too many POIs to
+    show them all, and the user asked for exactly this restriction on
+    1H by name). Applying the SAME discontinuous filter to 4H silently
+    dropped real, confirmed swings and MSS whenever their confirm time
+    fell outside a window (pre-window Asia hours, or the evening/
+    overnight candles) -- caught by the user two ways in one message:
+    (a) 14 Jan had ZERO swings/MSS shown at all (both its real swing
+    low 05:00 and swing high 21:00 landed outside window hours); (b)
+    16 Jan's real MSS_UP (09:00, 1.16138) was missing entirely, and
+    RB#22 -- the 4H POI that actually produced 3 real entries that day
+    -- never showed as a box or table row at all, because its origin
+    (15 Jan 21:00), trigger (16 Jan 03:49) and impact (16 Jan 05:34)
+    all happen to fall before that day's 11:00 window open. The zone
+    still produced real trades (compute_5m_trades searches the FULL
+    unfiltered snapshot, not the display-filtered one) -- the display
+    just never caught up, which is exactly backwards.
+
+    User's own words: "I simply want the 4H engine to be there
+    correctly from the beginning of day 12 to end of day 16" -- i.e.
+    4H needs the FULL continuous calendar-day span (--since 00:00
+    through --show-date 24:00 Riyadh), same idea as Daily's own
+    unrestricted treatment, not the 1H-style discontinuous window
+    filter. Only 4H switches to this function; 1H keeps
+    filter_to_date_range()/filter_to_windows() exactly as before --
+    the user's complaint and fix request were both 4H-specific."""
+    win_start, _ = calendar_day_bounds(since_str, display_tz)
+    _, win_end = calendar_day_bounds(until_str, display_tz)
+    filter_to_windows(engine, [(win_start, win_end)])
+
+
 def calendar_day_bounds(date_str: str, display_tz: ZoneInfo) -> tuple["datetime", "datetime"]:
     """The same full 00:00-24:00 Riyadh calendar day filter_to_calendar_range()
     uses, factored out so the "react day" checks below (which need
@@ -1561,8 +1594,13 @@ def main() -> int:
             # full-history, no-"today"-cap Daily view instead; this
             # combined script's own Daily body stays capped at --show-
             # date, same as 1H/4H always were.
-            if args.show_date and tag != "d":
+            if args.show_date and tag == "h1":
                 filter_to_date_range(engine, since_date, args.show_date, display_tz)
+            elif args.show_date and tag == "h4":
+                # 4H uses the FULL continuous calendar span, not 1H's
+                # discontinuous trading-window filter -- see
+                # filter_to_calendar_span()'s own docstring.
+                filter_to_calendar_span(engine, since_date, args.show_date, display_tz)
             engines[tag] = engine
             raw_lines[tag] = build_one(base, engine, args, display_tz, tag)
 
