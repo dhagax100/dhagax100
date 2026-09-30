@@ -228,6 +228,43 @@ CROSS-DAY CANDIDATES / "REACT DAY" (2026-09-29)
   M1 data (not asserted), and acts as a ceiling on 1H searches only —
   same treatment as same-leg supersession, so a 1H entry already found
   before the sweep still stands. Ledger column: h1_abandoned_riyadh.
+- CLARIFIED (2026-09-30, user's own teaching): "continuation day" is NOT
+  a separate mechanic from "react day" -- it's the same rule, just
+  further down the same unbroken trend. is_react_day()'s real condition
+  is "no same-side Daily POI impacted TODAY" -- that stays true every
+  single day the trend runs (day 2 after impact, day 5, day 20 --
+  doesn't matter), not just the literal day right after impact. So the
+  low/high-sweep check (find_prev_day_extreme + find_prev_day_sweep_time
+  -> h1_abandon_at) already runs, unchanged, on EVERY continuation day,
+  compared against YESTERDAY's own extreme each time (not the original
+  impact day's extreme) -- no separate code path needed, this was
+  already correct. In plain terms: every day the trend continues with
+  no fresh same-side Daily impact, ask one question -- "has today swept
+  yesterday's relevant extreme yet?" -- checked against the FULL
+  calendar day (a sweep can happen before the trading window even
+  opens, at any minute). Not yet -> both 4H+1H stay armed in the trend
+  direction. The moment it happens (whatever minute that is) -> 1H is
+  abandoned for the rest of that day, 4H only, from that exact minute
+  forward. "React day" and "continuation day" are the same word for the
+  same thing; use either, they mean one mechanic.
+- CLARIFIED (2026-09-30, user's own words: "if we said we are sell on
+  4H, why do we need any 4H BUY POI or story, that is ridiculous?"):
+  4H NEVER trades the side opposite the day's controlling bias. There
+  is no "opposing 4H" concept, period -- 4H has exactly two states each
+  day: armed in the trend direction, or abandoned (NONE) once
+  structurally invalidated. A 4H zone of the opposite side is never a
+  real candidate, never needs "dealing with," and isn't part of any
+  story -- ignore it outright, same as the code's own compute_5m_trades
+  already does when side is pinned to one direction (--default-side
+  SELL/BUY filters out the opposite side's zones at BOTH 4H and 1H
+  before any entry search runs). Only 1H can ever widen to the opposing
+  side -- via a valid Aggressive/Old POI impacting on ITS OWN impact
+  day (control gate BOTH) -- and even then 4H stays exactly where it
+  was. This is why a --default-side ALL run's ledger still shows H4
+  rows on the opposite side (e.g. 16 Jan's H4 BUY OB#20/RB#23/RB#24): the
+  code computes both sides raw so nothing is silently hidden, but those
+  rows are conceptually dead on arrival for 4H, always, don't read them
+  as candidates.
 
 BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 - Visible in BOTH 5m_trades_ledger.csv AND the on-chart 5m trades
