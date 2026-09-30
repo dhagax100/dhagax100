@@ -220,6 +220,29 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 SESSION LOG (newest first)
 ----------------------------
 
+2026-09-30 — Corrected: the open-inside rule checks the IMPACT candle, not the trigger candle
+- User's own correction, right after the first version shipped: "the
+  trigger candle is for the aggressive POIs... since trigger and
+  eligibility for the aggressives are the same... the rule should be
+  restricted [to] the impact candle, period." Trigger and impact only
+  coincide for Aggressive POIs (AOB/ARB) -- that's exactly why the
+  first version looked correct on the AOB/ARB example that prompted
+  it. For other zone types (IRB, IFOB, ...) they're genuinely different
+  bars, and it caught a real, unrelated case: 1H OB#63, whose much
+  earlier, unrelated trigger bar happened to open inside its zone,
+  while its actual impact candle's open never did.
+- Fixed: mark_open_inside_trigger() now locates the real impact bar
+  (bisect against bar starts, same lookup pattern used elsewhere in
+  this file) instead of using z.trigger. Zones with impact_time=None
+  are skipped entirely now too (can't evaluate an impact candle that
+  hasn't happened) -- this also fixed a second false positive from the
+  first version (Daily OB#2 was being rejected before it had even been
+  impacted).
+- Verified against both real cases: 1H OB#63 is valid again (correct),
+  Daily OB#1 (the actual AOB) still correctly rejected (its impact IS
+  its trigger, same bar, still opens inside the zone). 12 Jan's
+  ground-truth trade unchanged.
+
 2026-09-30 — New rule: OB/RB rejected if the trigger candle opens already inside the zone
 - User's own words, taught while walking through 15 Jan's Daily AOB/ARB:
   "if the open of the impact candle is already in the OB, RB (not FVG)
