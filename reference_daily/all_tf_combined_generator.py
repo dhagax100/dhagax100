@@ -1241,71 +1241,42 @@ def zone_is_infavor(z) -> bool:
 
 
 def daily_controlling_bias(d_zones_full, as_of: "datetime", minutes=None, mt: list | None = None):
-    """Whichever side is genuinely in control of the day as of `as_of`.
-    Real bug caught mid-implementation (2026-09-30): the first version
-    took the LATEST-impacting Daily zone of EITHER side, which wrongly
-    picked up Aggressive Daily POIs (e.g. 15 Jan's real ARB, impacted
-    09:43, never superseded) as if they were bias-setting events --
-    they're not; only the "in-favor" kind actually sets/carries bias
-    (an Aggressive/Old Daily POI authorizes a temporary same-day 1H
-    counter-trade, per daily_opposite_impacted_today(), but never flips
-    the day's own bias). Fixed: only considers zone_is_infavor() zones,
-    latest impact among those not yet superseded by a later in-favor
-    zone of either side.
+    """Whichever side is genuinely in control as of `as_of`.
 
-    SECOND bug, same day (2026-09-30): picking the latest in-favor zone
-    never checked whether THAT zone had itself already been
-    structurally invalidated by `as_of` -- caught on 20 Jan's RB#1,
-    a fresh in-favor Daily SELL POI that impacted at 12:06 and had its
-    own anchor broken by wick at 15:23 the SAME day, yet was still
-    being returned as "controlling" for 21 Jan onward. Harmless in this
-    one case only because the real fallback (FVG#1, 12 Jan, still
-    alive) happens to agree on SELL too -- a future case where the
-    invalidated "latest" pick disagreed in side with the real
-    controlling POI would have given a wrong bias. Fixed: skips any
-    candidate already structurally invalidated (via structural_invalid_at,
-    the same four-trigger check used everywhere else) by `as_of`, so it
-    genuinely falls back to the next-most-recent still-alive in-favor
-    zone. `minutes`/`mt` optional only for backward compatibility with
-    any caller that can't supply them -- always pass them when
-    available, skipping the check silently returns the old (buggy)
-    behavior.
+    User's own correction (2026-09-30), overriding two earlier same-day
+    attempts at this function: "there is no a day without a bias. the
+    bias was sell from 12 to 20, at the exact minute swing high was
+    taken. trading setups is a different story. the in favor... POI
+    control creates setup not necessarily bias." Bias is CONTINUOUS --
+    it doesn't go "undefined" just because the specific POI that
+    originally signaled it later goes spent/invalidated. A POI going
+    spent is a SETUP-level fact (is this zone still tradeable), entirely
+    separate from bias (which direction the day/trend is in). The two
+    earlier versions of this function wrongly conflated them: v1 picked
+    the latest in-favor POI impact with no invalidation check at all
+    (right, but for the wrong reason -- it just never thought to check);
+    v2 "fixed" that by requiring the picked POI to still be alive, which
+    was actually a regression -- it made FVG#1 going spent on 15 Jan
+    (a real, correct SETUP-level event) wrongly blank out BIAS for the
+    following 4 days, when the real answer is bias just stayed SELL
+    straight through, unaffected.
 
-    THIRD rule, same day (2026-09-30, user's own words): "Daily MSS_UP
-    flip bias on its own, the minute the protected swing high is
-    exceeded we have change to uptrend" -- a Daily MSS is a bias-setting
-    event in its own right, equal to an in-favor POI impact, not
-    something a POI has to separately confirm. Caught live on 20 Jan:
-    price broke the Daily swing high (1.16981) protecting the SELL
-    trend at 11:10 Riyadh, the engine's own MSS detection registered a
-    real Daily MSS_UP for it, yet bias was still reading SELL because
-    daily_controlling_bias() never looked at MSS at all. Fixed: every
-    Daily MSS is folded into the SAME candidate list as the in-favor POI
-    impacts, timestamped to its real exact M1 minute (not just the bar
-    it falls in -- MSS doesn't carry that itself, so it's found the same
-    way Event.at is: first minute price actually crosses the MSS's own
-    broken level), and the single latest event of either kind (POI
-    impact or MSS) wins. `d_zones_full.msses`, if present, supplies the
-    MSS list -- omit it (or minutes/mt) to keep the old POI-only
-    behavior."""
-    candidates = []
-    for zones in (d_zones_full.ob_zones, d_zones_full.rb_zones, d_zones_full.fvg_zones):
-        for dz in zones:
-            if dz.impact_time is None or dz.impact_time > as_of or not zone_is_infavor(dz):
-                continue
-            sup = getattr(dz, "superseded_at", None)
-            if sup is not None and sup <= as_of:
-                continue
-            if minutes is not None and mt is not None and hasattr(d_zones_full, "w"):
-                bar_starts = [b.start for b in d_zones_full.w]
-                inv_at, _ = structural_invalid_at(dz, dz.impact_time, d_zones_full.w, bar_starts,
-                                                   minutes, mt, getattr(d_zones_full, "events", None))
-                if inv_at is not None and inv_at <= as_of:
-                    continue
-            candidates.append((dz.impact_time, dz.bullish))
-
+    The real, current model: an in-favor Daily POI impact sets bias
+    (this is how it starts) and a Daily MSS is the ONLY thing that ever
+    flips it -- POI invalidation afterward is irrelevant to bias. So:
+    if any Daily MSS has happened at/before `as_of`, bias is that MSS's
+    own direction (the LATEST one, timestamped to its real M1 minute --
+    MSS doesn't carry that itself, found the same way Event.at is:
+    first minute price crosses the MSS's own broken level). If no MSS
+    has happened yet, bias falls back to the LATEST in-favor Daily POI
+    impact at/before `as_of`, full stop -- no invalidation check, no
+    "is it still alive" question, since that question doesn't apply to
+    bias at all. Verified: 15-19 Jan now correctly reads SELL throughout
+    (off FVG#1, despite it going spent 15 Jan) instead of the wrong
+    "undefined" gap; 20 Jan still correctly flips to BUY at 11:10, the
+    real MSS_UP minute."""
+    mss_candidates = []
     if minutes is not None and mt is not None and hasattr(d_zones_full, "msses") and hasattr(d_zones_full, "w"):
-        bar_starts = [b.start for b in d_zones_full.w]
         for x in d_zones_full.msses:
             broken_start = d_zones_full.w[x.broken].start
             idx = bisect_right(mt, broken_start)
@@ -1313,9 +1284,18 @@ def daily_controlling_bias(d_zones_full, as_of: "datetime", minutes=None, mt: li
                 if m.t > as_of:
                     break
                 if (m.h > x.price) if x.up else (m.l < x.price):
-                    candidates.append((m.t, x.up))
+                    mss_candidates.append((m.t, x.up))
                     break
+    if mss_candidates:
+        mss_candidates.sort(key=lambda c: c[0])
+        return mss_candidates[-1][1]
 
+    candidates = []
+    for zones in (d_zones_full.ob_zones, d_zones_full.rb_zones, d_zones_full.fvg_zones):
+        for dz in zones:
+            if dz.impact_time is None or dz.impact_time > as_of or not zone_is_infavor(dz):
+                continue
+            candidates.append((dz.impact_time, dz.bullish))
     if not candidates:
         return None
     candidates.sort(key=lambda c: c[0])

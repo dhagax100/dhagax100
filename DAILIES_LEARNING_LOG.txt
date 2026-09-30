@@ -295,6 +295,32 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 SESSION LOG (newest first)
 ----------------------------
 
+2026-09-30 — CORRECTED: bias is continuous, never "undefined" -- POI going spent is a setup fact, not a bias fact
+- Reverses part of the entry directly above (same day). User's own
+  correction: "there is no a day without a bias. the bias was sell
+  from 12 to 20, at the exact minute swing high was taken. trading
+  setups is a different story. the in favor... POI control creates
+  setup not necessarily bias." The earlier "fix" (requiring the
+  bias-setting POI to still be structurally alive) was itself wrong --
+  it made FVG#1 going spent on 15 Jan wrongly blank bias out for 4
+  days, when the real answer is bias just stayed SELL straight
+  through, unaffected by that POI's own later invalidation.
+- Real model now in daily_controlling_bias(): an in-favor Daily POI
+  impact sets bias; a Daily MSS is the ONLY thing that ever flips it.
+  POI invalidation afterward is irrelevant to bias (it only matters for
+  whether that specific POI is still a tradeable setup). Concretely: if
+  any Daily MSS has happened by `as_of`, bias is that MSS's own
+  direction (latest one, real M1 minute). Otherwise, bias falls back to
+  the latest in-favor Daily POI impact, full stop -- no aliveness
+  check.
+- Verified: 15-19 Jan now correctly reads SELL throughout (off FVG#1,
+  despite it going spent 15 Jan) instead of the wrong "undefined" gap
+  from the immediately-preceding entry. 16/19 Jan's BUY candidates are
+  back to NO_DAILY_AUTHORIZATION (correct -- bias was never actually
+  undefined). 20 Jan still correctly flips to BUY at 11:10 (the real
+  MSS_UP minute). 12 Jan ground truth (RB#66) and 14 Jan's RB#87
+  unchanged.
+
 2026-09-30 — New rule: Daily MSS flips bias on its own -- plus a real discovery it exposed (bias was undefined 15-20 Jan, not continuously SELL)
 - User's rule, stated directly after we confirmed the engine's own MSS
   detection had registered a real Daily MSS_UP on 20 Jan: "Daily MSS_UP
