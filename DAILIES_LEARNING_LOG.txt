@@ -51,11 +51,14 @@ SESSIONS / TRADING WINDOW
 POI ELIGIBILITY
 - A POI only counts if some real lifecycle event (trigger, eligible,
   impact, or breach) happens inside the window that day.
-- "Old" POIs (OOB/ORB/OFVG) never show or trade on H4/1H, period —
-  even though they're a real tradeable category at Daily/Weekly. An Old
-  POI impacting intraday (e.g. inside a 4H/1H session window) changes
-  NOTHING about the intraday control gate -- it's Daily/Weekly-tier
-  information only.
+- CORRECTION (2026-09-30, user's own words: "there is no a single point
+  where I said Old POIs are not to be traded... the old POIs are just
+  the Aggressive POIs, period."): there is no "Old POIs never trade
+  H4/1H" rule -- that was wrong and has been removed. Old and Aggressive
+  are the SAME category/treatment: both trade OPPOSITE the leg/trend
+  they're found in (see the Aggressive rule below), fully tradeable at
+  H4/1H like any other POI, governed by the same impact-day/control-gate
+  rules as everything else.
 - DATA-RANGE LIMITATION: an Old POI whose own origin candle predates the
   loaded CSV (this dataset starts 2026-01-02) cannot be detected, drawn,
   or validated by the code at all -- no origin body, no anchor level, no
@@ -246,20 +249,29 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 SESSION LOG (newest first)
 ----------------------------
 
-2026-09-30 — 15 Jan: Old-POI (ORB) impact confirmed to not affect the intraday gate; data-range limitation for Old POIs logged
-- After the 16:02 anchor break dropped the gate back to 4H-SELL-only,
-  price went on to impact an Old RB (ORB) at 17:40 Riyadh, top price
-  1.15952. This ORB's origin candle is in 2025 -- entirely outside the
-  loaded dataset (2026-01-02 onward) -- so the code can't see it; the
-  user supplied the fact directly.
-- Confirmed against the already-standing rule (Old POIs never show/trade
-  on H4/1H, period): this impact changes nothing intraday. 4H stayed
-  SELL only, 1H stayed abandoned, for the remainder of the 15th. No new
-  rule needed -- this is straight application of an existing one.
-- Logged the general limitation this exposes: any Old POI whose origin
-  predates the loaded CSV can't be auto-detected/validated by the code
-  (no origin body, no anchor level) -- see POI ELIGIBILITY, CURRENT RULE
-  SET, for the standing note and this instance's exact facts.
+2026-09-30 — CORRECTED: Old POIs are the same category as Aggressive, fully tradeable on H4/1H -- 15 Jan's ORB reopens 1H BUY
+- Reverses the entry directly above (same day, same topic). User's own
+  correction: "there is no a single point where I said Old POIs are not
+  to be traded... the old POIs are just the Aggressive POIs, period."
+  The "Old POIs never trade H4/1H" line was never something the user
+  said -- removed from POI ELIGIBILITY in CURRENT RULE SET.
+- Corrected read of 15 Jan: after the 16:02 ARB anchor break dropped the
+  gate to 4H-SELL-only, price went on to impact an Old RB (ORB) at 17:40
+  Riyadh, top price 1.15952 -- its origin candle is in 2025, outside the
+  loaded dataset (2026-01-02 onward), so the code can't see it; the user
+  supplied the fact directly. Since Old = Aggressive treatment (opposite
+  the leg/trend, tradeable H4/1H on its own impact day, same as any
+  other POI), this ORB is a valid opposing BUY trigger: gate reopens to
+  **BOTH** at 17:40 -- 4H SELL (unaffected, still governed by the
+  respect-day Daily bias) + 1H BUY (armed by the ORB) -- mirroring
+  exactly how the earlier ARB (09:43) reopened 1H BUY that same day.
+  1H BUY stays live from 17:40 through window close (19:00 Riyadh,
+  summer) unless invalidated first (anchor break, open-inside-zone,
+  session-sweep gate) the same as any other opposing POI.
+- Data-range limitation still stands and is unaffected by this
+  correction: an Old POI whose origin predates the loaded CSV can't be
+  auto-detected/validated by the code (no origin body, no anchor level)
+  -- see POI ELIGIBILITY, CURRENT RULE SET.
 
 2026-09-30 — Three real fixes: trading-window end time, a genuine OB body-corruption bug, and a new session-sweep rule
 - **Trading window end time corrected.** User gave the exact session
