@@ -98,7 +98,7 @@ def parse_args():
                          "raw CSVs and scripts from also collecting generated files.")
     p.add_argument("--show-date", default=None, metavar="YYYY-MM-DD",
                     help="Only draw swings/MSS/POIs active inside the real trading window "
-                         "that day -- 10:00-20:00 Riyadh in summer, 11:00-21:00 in winter "
+                         "that day -- 10:00-19:00 Riyadh in summer, 11:00-20:00 in winter "
                          "(London open through New York close; DST-detected automatically, "
                          "not hardcoded months) -- plus the single most recent swing high, "
                          "swing low and MSS confirmed before the window opened (the carried-in "
@@ -133,19 +133,26 @@ def parse_args():
 
 
 def trading_window(date_str: str, display_tz: ZoneInfo) -> tuple[datetime, datetime]:
-    """User's real trading window (2026-09-28): 10:00-20:00 Riyadh in
-    summer, 11:00-21:00 in winter -- London open through New York close,
-    Asia excluded (Asia is liquidity-grab-only, never an entry window,
-    per the earlier session rules). Summer/winter is detected from
-    whether New York is actually in DST that day (via zoneinfo's real,
-    year-accurate transition data), not a hardcoded month range -- the
-    whole reason these hours shift on the Riyadh clock in the first
-    place is NY/London's own DST, so that's the correct thing to check,
-    not a guess at "November to March.\""""
+    """User's real trading window (2026-09-30, corrected from an earlier
+    2026-09-28 guess): 10:00-19:00 Riyadh in summer, 11:00-20:00 in
+    winter -- London open through New York's OWN session close, not an
+    hour past it. Fixed after the user gave the exact session hours
+    (Riyadh): Asia 03:00-07:00 summer/04:00-08:00 winter, London
+    10:00-14:00 summer/11:00-15:00 winter, New York 15:00-19:00 summer/
+    16:00-20:00 winter -- the old end times (20:00 summer/21:00 winter)
+    were a full hour past New York's own close (19:00/20:00) and were
+    never actually verified against these real hours. Asia excluded
+    (liquidity-grab-only, never an entry window, per the earlier
+    session rules). Summer/winter is detected from whether New York is
+    actually in DST that day (via zoneinfo's real, year-accurate
+    transition data), not a hardcoded month range -- the whole reason
+    these hours shift on the Riyadh clock in the first place is NY/
+    London's own DST, so that's the correct thing to check, not a guess
+    at "November to March.\""""
     y, m, d = (int(x) for x in date_str.split("-"))
     ny_noon = datetime(y, m, d, 12, tzinfo=ZoneInfo("America/New_York"))
     is_summer = ny_noon.dst() != timedelta(0)
-    start_h, end_h = (10, 20) if is_summer else (11, 21)
+    start_h, end_h = (10, 19) if is_summer else (11, 20)
     start = datetime(y, m, d, start_h, 0, 0, tzinfo=display_tz).astimezone(UTC)
     end = datetime(y, m, d, end_h, 0, 0, tzinfo=display_tz).astimezone(UTC)
     return start, end
@@ -249,7 +256,7 @@ def filter_to_date_range(engine, since_str: str, until_str: str, display_tz: Zon
     day shown in a vacuum is not how this system is actually traded:
     every new day carries forward what's still alive from the ones
     before it, and the chart should too). ONE real trading window
-    (10:00-20:00 / 11:00-21:00 Riyadh, see trading_window()) PER DAY in
+    (10:00-19:00 / 11:00-20:00 Riyadh, see trading_window()) PER DAY in
     the range -- not the whole calendar day, and not one span bridging
     every night in between (see filter_to_windows()). `since_str` is the
     FIRST day, `until_str` (== --show-date) is the LAST -- when they're
@@ -1408,7 +1415,10 @@ def main() -> int:
         d_zones_full = None  # snapshot of Daily's zone lists BEFORE date-filtering truncates them (see below)
         tf_full = {}  # h4/h1 full (pre-date-filter) engine snapshots -- see compute_5m_trades' own docstring
         for tag, tf_period, title in TIMEFRAMES:
-            engine = wc.WeeklyCombinedEngine(minutes, bars_by_tag[tag])
+            # origin_gap_window=None -- see WeeklyCombinedEngine's own
+            # comment; Daily/4H/1H are never real Weekly bars, so the
+            # 5-day weekend-gap search must not apply to them.
+            engine = wc.WeeklyCombinedEngine(minutes, bars_by_tag[tag], origin_gap_window=None)
             engine.run()
             mark_open_inside_trigger(engine)
             mark_superseded_same_leg(engine, minutes, mt_all)
@@ -1463,7 +1473,7 @@ def main() -> int:
         ledger_rows = []
         if args.show_date:
             bars5 = dc.aggregate_minutes(minutes, 5)
-            e5 = wc.WeeklyCombinedEngine(minutes, bars5)
+            e5 = wc.WeeklyCombinedEngine(minutes, bars5, origin_gap_window=None)
             e5.run()
             window_start, _ = trading_window(since_date, display_tz)
             _, window_end = trading_window(args.show_date, display_tz)

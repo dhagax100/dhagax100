@@ -89,7 +89,8 @@ class WeeklyCombinedEngine:
     self.fvg_bull_scan_upto/etc.
     """
 
-    def __init__(self, minutes: List["wob.Minute"], weeks: List["wob.Week"]):
+    def __init__(self, minutes: List["wob.Minute"], weeks: List["wob.Week"],
+                 origin_gap_window: Optional["wob.timedelta"] = wob.timedelta(days=5)):
         self.m, self.w = minutes, weeks
         self.mt = [x.t for x in minutes]
 
@@ -111,7 +112,23 @@ class WeeklyCombinedEngine:
         self.ob_active: List[int] = []
         self.pend_bull_aifob = self.pend_bear_aifob = -1
         self.pend_bull_aob = self.pend_bear_aob = -1
-        self.origin_gap_window = wob.timedelta(days=5)
+        # 2026-09-30, real bug the user's own eye caught (an OB's zone
+        # bottom matching real price from HOURS after the zone's own
+        # origin candle, nowhere near it): this was hardcoded to 5 days
+        # -- the real Friday-close/Monday-open weekend gap, which only
+        # means anything for genuine WEEKLY bars. Every OTHER timeframe
+        # this class gets reused for (Daily/4H/1H/5m, via aggregate_days/
+        # aggregate_hours/aggregate_minutes bars) inherited it anyway, so
+        # ifob_origin_body()'s "last tradable M1 before the gap" search
+        # could run days past the actual candle it was supposed to
+        # describe -- in the case that exposed this, all the way to the
+        # very last minute of the whole loaded dataset, since 5 real
+        # days past a January bar didn't exist in it yet. Now a
+        # constructor parameter instead -- callers building Daily/4H/1H/
+        # 5m bars pass None (a plain intraday candle's own open/close,
+        # no gap search at all); only genuine Weekly usage keeps the
+        # 5-day default.
+        self.origin_gap_window = origin_gap_window
 
         # ---- RB-specific state (mirrors WeeklyRBEngine) ----
         self.rb_zones: List["wrb.RBZone"] = []
