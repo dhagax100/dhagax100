@@ -27,18 +27,16 @@ SESSIONS / TRADING WINDOW
     Asia:      03:00-07:00 summer, 04:00-08:00 winter
     London:    10:00-14:00 summer, 11:00-15:00 winter
     New York:  15:00-19:00 summer, 16:00-20:00 winter
-- Real trading window: 10:00-20:00 Riyadh in summer, 11:00-21:00 in
-  winter (London open through New York close). DST-detected from real
-  New York transition dates, not a hardcoded month range. FLAG (not yet
-  resolved, 2026-09-30): the window's own END time here (20:00 summer /
-  21:00 winter) is ONE HOUR LATER than "New York close" as just given
-  above (19:00 summer / 20:00 winter) -- these two don't currently
-  agree, and the code's trading_window() has not been touched to match
-  the new hours yet. Needs the user's confirmation before anything
-  about the window's boundaries changes, since that could shift every
-  window-scoped result already verified (12 Jan's ground-truth trade
-  included).
+- Real trading window: 10:00-19:00 Riyadh in summer, 11:00-20:00 in
+  winter (London open through New York's own close, corrected
+  2026-09-30 from an earlier, unverified 20:00/21:00 guess -- see
+  SESSION LOG). DST-detected from real New York transition dates, not a
+  hardcoded month range.
 - Asia is liquidity-grab only — never an entry session.
+- London/New York entries require the PRIOR session's own liquidity
+  swept first (2026-09-30, user-directed) -- see session_sweep_
+  satisfied() in the SESSION LOG below for the exact rule and its
+  London-sweep-covers-New-York exception.
 - Nothing before the window opens or after it closes counts: no setup,
   no entry, no display.
 - 4H candles anchor to the same 17:00-NY forex-day rollover as Daily —
@@ -232,6 +230,45 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 
 SESSION LOG (newest first)
 ----------------------------
+
+2026-09-30 — Three real fixes: trading-window end time, a genuine OB body-corruption bug, and a new session-sweep rule
+- **Trading window end time corrected.** User gave the exact session
+  hours (Riyadh, "never forget it, never" -- recorded in CURRENT RULE
+  SET above): Asia 03-07 summer/04-08 winter, London 10-14/11-15, New
+  York 15-19/16-20. trading_window()'s own end time (20:00 summer/21:00
+  winter) was a full hour past New York's real close (19:00/20:00) --
+  an unverified guess from 2026-09-28, never checked against real
+  session hours until now. Fixed to 10:00-19:00 summer / 11:00-20:00
+  winter.
+- **Real bug found and fixed: origin_gap_window leaking a 5-day
+  weekend gap into Daily/4H/1H/5m.** User caught it by comparing a 1H
+  OB's printed Bottom/Top against the real candle it should have come
+  from -- didn't match. Traced it: WeeklyCombinedEngine hardcoded
+  origin_gap_window=5 days (the real Friday-close/Monday-open gap,
+  meaningful only for genuine Weekly bars), but every other timeframe
+  this shared engine gets reused for inherited the same 5-day search
+  window inside ifob_origin_body() -- for a Daily/4H/1H/5m candle, "5
+  days later" often runs past the end of the currently-loaded (--as-of
+  truncated) dataset, so the search silently grabbed whatever candle
+  happened to sit nearest that far-off, nonexistent cutoff -- in the
+  exact case that exposed this, the very LAST minute of the whole
+  loaded file. Fixed: origin_gap_window is now a constructor parameter
+  (default unchanged -- 5 days -- for real Weekly use); Daily/4H/1H/5m
+  now explicitly pass None (a plain candle's own open/close, no gap
+  search). Verified: the exact zone's Bottom/Top now match its real
+  origin candle's body exactly; 12 Jan's ground-truth trade unchanged.
+- **New rule: London/New York entries require the prior session's own
+  liquidity swept first.** User-directed, real ICT concept: to trade
+  in London (SELL example, BUY mirrors with lows), price must trade
+  above the Asian session's own high at least once between Asian close
+  and the entry-candidate hunt time; to trade in New York, same against
+  LONDON's own high -- UNLESS the Asian sweep already happened by
+  London's own close, which then covers both sessions (no separate
+  London sweep demanded). Implemented as session_sweep_satisfied(),
+  gating the same per-minute entry check that already excludes Asia
+  hours. Verified retroactively against the only trade taken so far (12
+  Jan): Asian high (1.16710) was swept at 09:52 Riyadh, well before the
+  14:32 entry -- satisfied, trade unchanged.
 
 2026-09-30 — Corrected: the open-inside rule checks the IMPACT candle, not the trigger candle
 - User's own correction, right after the first version shipped: "the
