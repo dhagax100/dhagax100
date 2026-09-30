@@ -1046,16 +1046,55 @@ class _FVGEngineView:
         return self._c.break_time(k, bull, level)
 
 
-def ob_status(z) -> str:
-    return OB_STATE[z.pre_spent_state if z.state == 3 else z.state]
+def zone_stranded_by_mss(z, msses, w) -> bool:
+    """User's own correction (2026-09-30): a zone created IN-FAVOR (state
+    0) of one trend becomes a real, stranded OLD/opposing POI the moment
+    a LATER same-timeframe MSS confirms the opposite direction, even
+    though the code never updates the zone's own stored state to say so
+    -- it's fixed at creation, permanently. Per SPEC.md's own OOB
+    definition ("a stranded, untouched opposing POI from before the
+    current trend"), that's exactly what this is. Caught live on 20
+    Jan's Daily RB#1: created in favor of the old downtrend (6 Jan), the
+    MSS_UP at 11:10 flipped structure bullish, and RB#1 (still SELL)
+    impacted at 12:06 -- AFTER its own trend had already ended. Only
+    matters for a zone whose stored state is still 0 (in-favor);
+    Aggressive/Old/Spent are untouched -- this only relabels the one
+    case the code gets stale. Bar-level precision (not exact M1 minute)
+    is enough here since this only affects a DISPLAY label, never a
+    trading/gating decision."""
+    origin_idx = getattr(z, "candle", None)
+    if origin_idx is None:
+        origin_idx = z.left
+    origin_time = w[origin_idx].start
+    cutoff = z.impact_time if z.impact_time is not None else w[-1].start
+    for mss in msses:
+        if z.bullish == mss.up:
+            continue  # same direction as this MSS -- doesn't strand it
+        mss_time = w[mss.broken].start
+        if origin_time < mss_time <= cutoff:
+            return True
+    return False
 
 
-def rb_status(z) -> str:
-    return RB_STATE[z.pre_spent_state if z.state == 3 else z.state]
+def ob_status(z, msses=None, w=None) -> str:
+    state = z.pre_spent_state if z.state == 3 else z.state
+    if state == 0 and msses is not None and w is not None and zone_stranded_by_mss(z, msses, w):
+        state = 2
+    return OB_STATE[state]
 
 
-def fvg_status(z) -> str:
-    return FVG_STATE[z.pre_spent_state if z.state == 3 else z.state]
+def rb_status(z, msses=None, w=None) -> str:
+    state = z.pre_spent_state if z.state == 3 else z.state
+    if state == 0 and msses is not None and w is not None and zone_stranded_by_mss(z, msses, w):
+        state = 2
+    return RB_STATE[state]
+
+
+def fvg_status(z, msses=None, w=None) -> str:
+    state = z.pre_spent_state if z.state == 3 else z.state
+    if state == 0 and msses is not None and w is not None and zone_stranded_by_mss(z, msses, w):
+        state = 2
+    return FVG_STATE[state]
 
 
 def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int, ob_cap: int, rb_cap: int,
@@ -1273,14 +1312,15 @@ def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int
             if getattr(z, "rejected", False):
                 continue
             wk = engine.w[left_of(z)]
+            label = status_fn(z, engine.msses, engine.w)
             rows.append((wk.start, dict(
-                poi=poi_label, id=f"#{z.id}", type=status_fn(z), side="BUY" if z.bullish else "SELL",
+                poi=poi_label, id=f"#{z.id}", type=label, side="BUY" if z.bullish else "SELL",
                 bottom=f"{z.zb:.5f}", top=f"{z.zt:.5f}",
                 origin=wob.display_iso(wk.start, display_zone),
                 trigger=wob.display_iso(z.trigger_time, display_zone),
                 eligible=wob.display_iso(z.eligible_time, display_zone),
                 impact=wob.display_iso(z.impact_time, display_zone),
-                status=status_fn(z), bg=COLOUR_CODE[colour_fn(z)],
+                status=label, bg=COLOUR_CODE[colour_fn(z)],
                 rank=total_count - z.id + 1, grank=combined_rank(poi_label, z.id),
             )))
         return rows
@@ -1399,7 +1439,7 @@ def write_report(base: Path, minutes, weeks, e: WeeklyCombinedEngine, args, disp
     ob_counts = {name: 0 for name in ("IFOB", "AOB", "AIFOB", "OOB", "SPENT")}
     for z in e.ob_zones:
         if not z.rejected:
-            ob_counts[ob_status(z)] += 1
+            ob_counts[ob_status(z, e.msses, e.w)] += 1
     ob_reasons = {"IMPACT": 0, "STRAND": 0, "STRUCTURAL_BREACH": 0}
     for z in e.ob_zones:
         if z.stop_reason in ob_reasons:
@@ -1407,7 +1447,7 @@ def write_report(base: Path, minutes, weeks, e: WeeklyCombinedEngine, args, disp
 
     rb_counts = {name: 0 for name in ("IRB", "ARB", "ORB", "SPENT", "AIRB")}
     for z in e.rb_zones:
-        rb_counts[rb_status(z)] += 1
+        rb_counts[rb_status(z, e.msses, e.w)] += 1
     rb_reasons = {"IMPACT": 0, "STRAND": 0, "STRUCTURAL_BREACH": 0}
     for z in e.rb_zones:
         if z.stop_reason in rb_reasons:
@@ -1415,7 +1455,7 @@ def write_report(base: Path, minutes, weeks, e: WeeklyCombinedEngine, args, disp
 
     fvg_counts = {name: 0 for name in ("IFVG", "AFVG", "OFVG", "SPENT")}
     for z in e.fvg_zones:
-        fvg_counts[fvg_status(z)] += 1
+        fvg_counts[fvg_status(z, e.msses, e.w)] += 1
     fvg_reasons = {"IMPACT": 0, "STRAND": 0, "CLOSE_THROUGH": 0, "STRUCTURAL_BREACH": 0}
     for z in e.fvg_zones:
         if z.stop_reason in fvg_reasons:

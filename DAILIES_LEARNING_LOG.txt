@@ -295,6 +295,31 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 SESSION LOG (newest first)
 ----------------------------
 
+2026-09-30 — Display fix: a zone stranded by a later MSS now shows as Old (OOB/ORB/OFVG), not its stale creation-time label
+- User's own correction: "fix the label so it shows Old after MSS."
+  RB#1 (Daily) was created in favor of the old downtrend (6 Jan) and
+  never had its stored state touched again -- so even after the
+  MSS_UP at 11:10 on 20 Jan flipped structure bullish, it kept
+  displaying as IRB (in-favor) when it impacted at 12:06, well after
+  its own trend had already ended. Per SPEC.md's own OOB definition
+  ("a stranded, untouched opposing POI from before the current
+  trend"), that's exactly what it had become.
+- Fixed with a new zone_stranded_by_mss() (weekly_combined_generator.py):
+  a zone whose stored state is still 0 (in-favor) displays as Old
+  (state 2) if a LATER same-timeframe MSS confirmed the opposite
+  direction before the zone's own impact (or before now, if it hasn't
+  impacted yet). Bar-level precision, not exact M1 minute -- this only
+  affects the displayed label, never a trading/gating decision, so it
+  doesn't need Event.at-level precision. Wired into ob_status()/
+  rb_status()/fvg_status() (both call sites: the live table and the
+  report counts), which is what all_tf_combined_generator.py's own
+  status column already reads -- no change needed on that side beyond
+  resending the matched pair.
+- Verified: RB#1 now shows ORB; RB#3 (impacted before the flip, not
+  stranded) correctly still shows IRB. Full ledger diff before/after:
+  ZERO changes -- confirmed purely a display fix, no trading logic
+  touched at all.
+
 2026-09-30 — Real bug fixed: 1H abandonment made per-zone/bias-aware (handles an intraday bias flip); also fixed a dormant bug that silently disabled it under --default-side ALL
 - User's rule, stated directly: "if we are buying today and price take
   previous daily high, 1h is abandoned for buying, the mirror is true
