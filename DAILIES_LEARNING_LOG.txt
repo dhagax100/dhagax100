@@ -220,6 +220,36 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 SESSION LOG (newest first)
 ----------------------------
 
+2026-09-30 — New rule: OB/RB rejected if the trigger candle opens already inside the zone
+- User's own words, taught while walking through 15 Jan's Daily AOB/ARB:
+  "if the open of the impact candle is already in the OB, RB (not FVG)
+  zones we are done, we do not trade from that OB or RB." Checked
+  against five_bso_engine.py and SPEC.md first -- absent from both,
+  same status as premium/discount: a real rule, directed now, not part
+  of the original validated port.
+- Reasoning: an OB/RB's whole premise is a clean break AWAY from the
+  zone; if the candle that fires its trigger already opened inside
+  [zb, zt], that break never really happened, so trading it would put
+  a candle body inside the zone from the very start.
+- Implemented as mark_open_inside_trigger() in all_tf_combined_
+  generator.py, called right after engine.run() for Daily/4H/1H (not
+  5m -- the rule is about OB/RB candidates, not 5m's own structure).
+  RBZone gained a `rejected` field (OB's Zone class already had one) so
+  the SAME existing rejected-check already used everywhere (box
+  drawing, table rows, build_parent_column) picks this up automatically
+  -- no other wiring needed there. Added a new ledger stage
+  (OPEN_INSIDE_ZONE) so the 5m entry search skips these zones with a
+  visible, auditable reason instead of silently dropping them.
+- Verified against the real case that prompted it: 15 Jan's Daily AOB
+  (OB#1, BUY, 1.16326-1.16591) -- trigger candle opened at 1.16436,
+  inside the zone -- correctly rejected. The ARB (RB#2, BUY,
+  1.16177-1.16326) -- trigger candle opened outside it -- correctly
+  stays valid, matching the user's own read of that day exactly. Also
+  found (and confirmed correct, not a bug) that OB#2 gets rejected the
+  same way, on its own real trigger event later that day (16:02) --
+  the rule is general, not limited to a zone's impact day. 12 Jan's
+  ground-truth trade unchanged throughout.
+
 2026-09-29 — Unbounded Daily-in-the-combined-script reverted -- still hit CE10295
 - The side-rank array compaction (below) got the combined script back
   down to 809 lines, but the SAME "main body too long" error persisted
