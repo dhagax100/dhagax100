@@ -865,7 +865,7 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
         # begin with should never reach the opposing-swing/premium
         # checks that assume a real zone.
         if getattr(z, "rejected", False):
-            ledger_rows.append(dict(row_base, stage="OPEN_INSIDE_ZONE"))
+            ledger_rows.append(dict(row_base, stage=getattr(z, "rejected_reason", "OPEN_INSIDE_ZONE")))
             continue
 
         # A zone carried in from a prior day (candidates now come from
@@ -1086,6 +1086,7 @@ def mark_open_inside_trigger(engine) -> None:
             impact_open = engine.w[impact_idx].o
             if z.zb <= impact_open <= z.zt:
                 z.rejected = True
+                z.rejected_reason = "OPEN_INSIDE_ZONE"
 
 
 def exclude_old_intraday_zones(engine) -> None:
@@ -1229,6 +1230,98 @@ def build_trades_pine(trades: list[dict], display_tz: ZoneInfo) -> list[str]:
         '        table.cell(trTable, 7, i + 1, array.get(trNotes, i), text_color=color.black, bgcolor=na)',
     ]
     return lines
+
+
+def zone_is_infavor(z) -> bool:
+    """True only for a zone created as the "in-favor" kind (IFOB/IRB/
+    IFVG -- state 0 in OB_STATE/RB_STATE/FVG_STATE), never Aggressive
+    (1) or Old (2). OB/RB store this in `created_state`, FVG stores it
+    in `origin` -- same numbering, different field name."""
+    return getattr(z, "created_state", getattr(z, "origin", None)) == 0
+
+
+def daily_controlling_bias(d_zones_full, as_of: "datetime"):
+    """Whichever side is genuinely in control of the day as of `as_of`.
+    Real bug caught mid-implementation (2026-09-30): the first version
+    took the LATEST-impacting Daily zone of EITHER side, which wrongly
+    picked up Aggressive Daily POIs (e.g. 15 Jan's real ARB, impacted
+    09:43, never superseded) as if they were bias-setting events --
+    they're not; only the "in-favor" kind actually sets/carries bias
+    (an Aggressive/Old Daily POI authorizes a temporary same-day 1H
+    counter-trade, per daily_opposite_impacted_today(), but never flips
+    the day's own bias). Fixed: only considers zone_is_infavor() zones,
+    latest impact among those not yet superseded by a later in-favor
+    zone of either side. Returns None if none has impacted yet."""
+    candidates = []
+    for zones in (d_zones_full.ob_zones, d_zones_full.rb_zones, d_zones_full.fvg_zones):
+        for dz in zones:
+            if dz.impact_time is None or dz.impact_time > as_of or not zone_is_infavor(dz):
+                continue
+            sup = getattr(dz, "superseded_at", None)
+            if sup is not None and sup <= as_of:
+                continue
+            candidates.append((dz.impact_time, dz.bullish))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda c: c[0])
+    return candidates[-1][1]
+
+
+def daily_opposite_impacted_today(d_zones_full, opposite_bull: bool, date_str: str, display_tz: ZoneInfo) -> bool:
+    """True if a Daily POI of `opposite_bull`'s side itself impacted on
+    THIS SPECIFIC calendar day -- the real ARB/ORB-authorizes-1H
+    mechanism (15 Jan: the ARB impacting that same day is what reopened
+    1H BUY, not a coincidental 1H-level structure)."""
+    win_start, win_end = calendar_day_bounds(date_str, display_tz)
+    for zones in (d_zones_full.ob_zones, d_zones_full.rb_zones, d_zones_full.fvg_zones):
+        for dz in zones:
+            if dz.bullish == opposite_bull and dz.impact_time is not None and win_start <= dz.impact_time < win_end:
+                return True
+    return False
+
+
+def apply_daily_bias_gate(engine, tf_tag: str, d_zones_full, display_tz: ZoneInfo) -> None:
+    """User's own correction (2026-09-30, real bug -- not a display
+    preference): "we never think of Buy in a Sell day... ONLY Daily
+    Timeframe related events decide the bias of that day or moment, and
+    based on that we look for 4h and 1h setups." A 4H/1H zone opposite
+    the day's Daily-controlled bias was previously allowed to show and
+    trade off nothing more than its own coincidental same-timeframe
+    structure (e.g. a 1H MSS_UP) -- caught on 14 Jan's RB#87, a BUY
+    setup with zero Daily-level authorization (zero Daily POIs of
+    either side impacted that day at all) that still showed and traded
+    under --default-side ALL. Fixed the same way mark_open_inside_trigger
+    does: sets the SAME `z.rejected` flag (reused, not a new field), so
+    drawing, table, and ledger all pick this up automatically with no
+    other change needed.
+
+    Rule: a zone in favor of the day's Daily-controlled bias is always
+    fine. A zone OPPOSITE it is:
+      - 4H: NEVER allowed, period -- 4H only ever trades the day's own
+        bias, no exceptions (already an established rule, now actually
+        enforced in code instead of just conceptually true).
+      - 1H: allowed ONLY if a Daily POI of that SAME opposite side
+        itself impacted on the SAME calendar day as this zone's own
+        impact -- the real ARB/ORB mechanism, not a same-timeframe
+        coincidence. Verified: 14 Jan has zero Daily impacts of any
+        kind, so RB#87 is now correctly rejected; 15 Jan's real ARB
+        (Daily, impacted that same day) still correctly authorizes
+        that day's 1H BUY zones."""
+    for zones in (engine.ob_zones, engine.rb_zones, engine.fvg_zones):
+        for z in zones:
+            if getattr(z, "rejected", False) or z.impact_time is None:
+                continue
+            controlling = daily_controlling_bias(d_zones_full, z.impact_time)
+            if controlling is None or z.bullish == controlling:
+                continue  # no Daily bias yet, or already in favor -- fine either way
+            if tf_tag == "h4":
+                z.rejected = True
+                z.rejected_reason = "NO_DAILY_AUTHORIZATION"
+                continue
+            date_str = z.impact_time.astimezone(display_tz).date().isoformat()
+            if not daily_opposite_impacted_today(d_zones_full, z.bullish, date_str, display_tz):
+                z.rejected = True
+                z.rejected_reason = "NO_DAILY_AUTHORIZATION"
 
 
 def find_parent_daily_poi(d_engine, side_bull: bool, child_impact_time: "datetime"):
@@ -1587,6 +1680,12 @@ def main() -> int:
             engine.run()
             mark_open_inside_trigger(engine)
             mark_superseded_same_leg(engine, minutes, mt_all)
+            if tag in ("h4", "h1") and d_zones_full is not None:
+                # Daily-only bias gate (2026-09-30, real bug -- see
+                # apply_daily_bias_gate's own docstring): 4H/1H setups
+                # only exist within whatever bias Daily has already
+                # decided, never on their own separate justification.
+                apply_daily_bias_gate(engine, tag, d_zones_full, display_tz)
             if tag in ("h4", "h1"):
                 exclude_old_intraday_zones(engine)
                 # Full (unfiltered) snapshot for compute_5m_trades' own

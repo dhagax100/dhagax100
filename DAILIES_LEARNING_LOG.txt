@@ -286,6 +286,43 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 SESSION LOG (newest first)
 ----------------------------
 
+2026-09-30 — Real bug fixed: 4H/1H setups need actual Daily-level authorization, not just their own coincidental structure
+- User's own correction, stated flatly: "we never think of Buy in a
+  Sell day leave alone showing on chart or in table or even making up
+  such this thing. AND ONLY Daily Timeframe related events decide the
+  bias of that day or moment, and based on that we look for 4h and 1h
+  setups." Caught directly on 14 Jan's RB#87 (a BUY 1H setup I called
+  legitimate off nothing more than a coincidental 1H-level MSS_UP) --
+  confirmed: zero Daily POIs of either side impacted at all on 14 Jan,
+  so there was no real authorization for it. I made it up.
+- Implemented as a real code gate, not just a reading discipline:
+  apply_daily_bias_gate() (all_tf_combined_generator.py), reusing the
+  existing `rejected` field (same one mark_open_inside_trigger uses),
+  so drawing, table, and ledger all pick it up with zero other change.
+  Rule: a 4H/1H zone in favor of the day's Daily-controlled bias is
+  always fine. Opposite the bias: 4H is NEVER allowed, period (already
+  an established rule, now actually enforced instead of just true on
+  paper). 1H is allowed ONLY if a Daily POI of that SAME opposite side
+  itself impacted on the SAME calendar day as the zone's own impact --
+  the real ARB/ORB mechanism from 15 Jan, not a same-timeframe
+  coincidence.
+- Real bug caught mid-implementation: the first version of
+  daily_controlling_bias() took the latest-impacting Daily zone of
+  EITHER side as "the bias," which wrongly picked up 15 Jan's real ARB
+  (impacted 09:43, never superseded) as if it had flipped the day's
+  bias to BUY -- it hadn't; an Aggressive/Old Daily POI authorizes a
+  same-day 1H counter-trade, it never changes bias itself. Fixed: only
+  "in-favor" Daily zones (created_state/origin == 0, i.e. IFOB/IRB/
+  IFVG -- never Aggressive/Old) can ever set the controlling bias.
+- Verified four ways: 14 Jan's RB#87 now correctly dies with reason
+  NO_DAILY_AUTHORIZATION, zero entries. 16 Jan's RB#22 still correctly
+  dies via swing_spent (unaffected -- it's in favor of the SELL bias,
+  the new gate never touches it). 15 Jan's real Daily-authorized 1H
+  BUY candidates (off the real ARB) are completely unaffected --
+  confirmed still computed normally. 12 Jan's long-standing
+  ground-truth trade (RB#66, entry 1.16847 @ 14:32, SL 1.16892 hit
+  16:08, -1R) is unchanged.
+
 2026-09-30 — New rule + real bug fixed: a POI's own-timeframe swing confirmation after impact makes it "spent" -- a FOURTH invalidation trigger
 - User's own rule, taught directly after walking through RB#22 (16
   Jan) minute by minute: "swing confirmation after impact makes the
