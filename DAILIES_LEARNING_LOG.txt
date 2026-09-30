@@ -286,6 +286,40 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 SESSION LOG (newest first)
 ----------------------------
 
+2026-09-30 — New rule + real bug fixed: a POI's own-timeframe swing confirmation after impact makes it "spent" -- a FOURTH invalidation trigger
+- User's own rule, taught directly after walking through RB#22 (16
+  Jan) minute by minute: "swing confirmation after impact makes the
+  POI spent and not good for more trading... coming hours later after
+  the impact minute is fine, what is not fine is confirming swing
+  point... before we enter." A fourth invalidation trigger, alongside
+  the existing three (h4_close, swing_break/anchor-break, and now this
+  one) -- NOT in five_bso_engine.py/SPEC.md, same new/unvalidated
+  status as premium/discount and open-inside-zone.
+- The rule: a POI's OWN timeframe confirming a same-kind swing (a
+  swing HIGH for a SELL POI, a swing LOW for a BUY POI -- the
+  SL-anchor kind) at/after impact makes it spent, with NO anchor break
+  needed at all. Timing decides what's real: confirms BEFORE an entry
+  -> that entry should never have been taken, the POI was already
+  spent. Confirms AFTER an entry already fired -> that entry stands,
+  no further re-entries.
+- Implemented as a new "swing_spent" branch inside structural_invalid_at()
+  (all_tf_combined_generator.py), using the swing engine's own exact M1
+  confirmation minute (Event.at, already tracked -- no new computation
+  needed). Real bug caught mid-implementation: the first version
+  compared the swing's own bar START against impact time, which wrongly
+  excluded a swing point set by the SAME candle as impact (impact
+  almost always lands mid-bar, e.g. 05:34 inside a 05:00-09:00 4H bar)
+  -- fixed to compare bar INDEX instead (impact's own bar counts).
+- Verified two ways: (1) RB#22 (16 Jan) -- swing high 1.16138 confirmed
+  09:39 Riyadh, over an hour before the first entry attempt (11:03) --
+  now correctly invalidated (POI_BREACHED, reason swing_spent) with
+  ZERO entries, matching what the user found missing on the real
+  TradingView chart. (2) 12 Jan's long-standing ground-truth trade
+  (1H RB#66/67, entry 1.16847 @ 14:32, SL 1.16892 hit 16:08, -1R) is
+  UNCHANGED -- its own swing-spent moment (14:56) comes AFTER entry
+  (14:32), so per the rule's own timing logic the entry correctly
+  stands.
+
 2026-09-30 — Real bug fixed: 4H display was silently dropping real swings/MSS/POIs outside trading-window hours
 - User caught this two ways in one message: (a) opened the 4H chart
   and RB#22 -- the exact POI that produced 3 real entries on 16 Jan --

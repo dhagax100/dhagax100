@@ -478,7 +478,7 @@ def is_react_day(d_zones_full, side: str, date_str: str, display_tz: ZoneInfo) -
 
 
 def structural_invalid_at(z, it: "datetime", bars: list, bar_starts: list,
-                           minutes, mt: list) -> tuple:
+                           minutes, mt: list, events: list | None = None) -> tuple:
     """Ported from five_bso_engine.py's structural_invalid_at() (SPEC.md
     SS17/SS20-24) -- the POI-violation-before-entry check the user asked
     about directly (2026-09-28) and that compute_5m_trades() previously
@@ -497,6 +497,22 @@ def structural_invalid_at(z, it: "datetime", bars: list, bar_starts: list,
           here already carries protect_level uniformly, so it's used
           directly -- this also matches the later FVG-session correction
           that anchor-break must check protect_level, not the box edge.
+      (c) 'swing_spent' (2026-09-30, real ICT concept, NOT in
+          five_bso_engine.py/SPEC.md -- same new/unvalidated status as
+          premium/discount and open-inside-zone): the zone's OWN
+          timeframe confirms a same-kind swing (a swing HIGH for a SELL
+          zone, a swing LOW for a BUY zone -- the SL-anchor kind) at or
+          after impact, with NO anchor break needed at all. User's own
+          words: "swing confirmation after impact makes the POI spent
+          and not good for more trading... coming hours later after the
+          impact minute is fine, what is not fine is confirming swing
+          point... before we enter." Uses the swing engine's own exact
+          M1 confirmation minute (Event.at), not just the bar -- verified
+          against RB#22 (16 Jan): swing high 1.16138 (swing candle =
+          the impact bar itself) confirmed 09:39 Riyadh, over an hour
+          BEFORE the first entry attempt (11:03) -- so all three of that
+          day's entries were already invalid under this rule, even
+          though the anchor (protect_level) didn't break until 13:41.
     Returns (time, reason); (None, None) if never invalidated in the
     available data. A candidate whose resting swing or entry trigger
     lands at/after this time is dead: setup only, no entry."""
@@ -518,11 +534,29 @@ def structural_invalid_at(z, it: "datetime", bars: list, bar_starts: list,
             swing_break_at = m.t
             break
 
-    if h4_close_invalid_at is not None and (swing_break_at is None or h4_close_invalid_at <= swing_break_at):
-        return h4_close_invalid_at, "h4_close"
-    if swing_break_at is not None:
-        return swing_break_at, "swing_break"
-    return None, None
+    swing_spent_at = None
+    if events:
+        # Compare against the IMPACT BAR's index, not its start timestamp
+        # -- impact almost always lands mid-bar (e.g. 05:34 inside a
+        # 05:00-09:00 4H bar), so a plain `bar.start >= it` wrongly
+        # excludes a swing point set by that SAME candle. A swing whose
+        # own point is the impact bar itself (or later) still counts.
+        impact_bar_idx = max(0, bisect_right(bar_starts, it) - 1)
+        sl_anchor_kind = 0 if not bull else 1  # a HIGH (0) protects a SELL zone, a LOW (1) protects a BUY zone
+        spent_candidates = [e.at for e in events
+                             if e.kind == sl_anchor_kind and e.at is not None
+                             and e.swing >= impact_bar_idx]
+        if spent_candidates:
+            swing_spent_at = min(spent_candidates)
+
+    candidates = [(t, r) for t, r in (
+        (h4_close_invalid_at, "h4_close"),
+        (swing_break_at, "swing_break"),
+        (swing_spent_at, "swing_spent"),
+    ) if t is not None]
+    if not candidates:
+        return None, None
+    return min(candidates, key=lambda tr: tr[0])
 
 
 def run_5m_bso(z, it, bar_starts5: list, events5_sorted: list, minutes, mt: list,
@@ -840,7 +874,7 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
         # window opens. Check that FIRST, before spending any more work
         # on it: an ancient, long-invalidated zone should never reach
         # the opposing-swing/premium-discount checks below at all.
-        invalidated_at, reason = structural_invalid_at(z, z.impact_time, eng.w, eng_bar_starts, minutes, mt)
+        invalidated_at, reason = structural_invalid_at(z, z.impact_time, eng.w, eng_bar_starts, minutes, mt, eng.events)
         if invalidated_at is not None and invalidated_at < window_start:
             ledger_rows.append(dict(row_base, stage="DEAD_BEFORE_WINDOW",
                                      invalidated_riyadh=riyadh(invalidated_at), invalidated_reason=reason or ""))
@@ -1104,7 +1138,7 @@ def mark_superseded_same_leg(engine, minutes, mt: list) -> None:
         active = None
         for z in impacted:
             if active is not None:
-                inv_at, _ = structural_invalid_at(active, active.impact_time, engine.w, bar_starts, minutes, mt)
+                inv_at, _ = structural_invalid_at(active, active.impact_time, engine.w, bar_starts, minutes, mt, engine.events)
                 if inv_at is None or inv_at > z.impact_time:
                     active.superseded_at = z.impact_time  # same unbroken leg -> superseded by z, from here on
             active = z
