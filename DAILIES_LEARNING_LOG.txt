@@ -295,6 +295,29 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 SESSION LOG (newest first)
 ----------------------------
 
+2026-09-30 — Real bug fixed: daily_controlling_bias() never checked if its own pick was already invalidated
+- Caught on 20 Jan's RB#1: a fresh in-favor Daily SELL POI impacted by
+  wick at 12:06 Riyadh (old 6 Jan resistance, price finally rallied
+  back into it), then had its own anchor (protect_level 1.17425) broken
+  by wick at 15:23 -- same day, a bare 0.1-pip poke (H 1.17426).
+  daily_controlling_bias() was still returning it as "controlling" for
+  21 Jan onward despite being dead. Harmless here only because the real
+  fallback (FVG#1, 12 Jan, still alive) also happens to be SELL --
+  would have given a wrong bias if a future invalidated "latest" pick
+  ever disagreed in side with the true controlling POI.
+- Fixed: daily_controlling_bias() now skips any candidate already
+  structurally invalidated (via structural_invalid_at(), the same
+  four-trigger check used everywhere else) as of the moment being
+  asked about, genuinely falling back to the next-most-recent
+  still-alive in-favor Daily POI. Needed threading minutes/mt and the
+  Daily engine's own bars/events through d_zones_full and
+  apply_daily_bias_gate() to make the check possible.
+- Verified no regression: 12 Jan ground truth (RB#66) unchanged, 14
+  Jan's RB#87 still correctly NO_DAILY_AUTHORIZATION, 16 Jan's RB#22
+  still correctly dies via swing_spent, 20 Jan's own bias still reads
+  SELL (off FVG#1, correctly falling back past the now-known-dead
+  RB#1).
+
 2026-09-30 — Real bug fixed: 4H/1H setups need actual Daily-level authorization, not just their own coincidental structure
 - User's own correction, stated flatly: "we never think of Buy in a
   Sell day leave alone showing on chart or in table or even making up

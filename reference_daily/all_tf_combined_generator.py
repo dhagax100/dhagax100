@@ -1240,7 +1240,7 @@ def zone_is_infavor(z) -> bool:
     return getattr(z, "created_state", getattr(z, "origin", None)) == 0
 
 
-def daily_controlling_bias(d_zones_full, as_of: "datetime"):
+def daily_controlling_bias(d_zones_full, as_of: "datetime", minutes=None, mt: list | None = None):
     """Whichever side is genuinely in control of the day as of `as_of`.
     Real bug caught mid-implementation (2026-09-30): the first version
     took the LATEST-impacting Daily zone of EITHER side, which wrongly
@@ -1251,7 +1251,25 @@ def daily_controlling_bias(d_zones_full, as_of: "datetime"):
     counter-trade, per daily_opposite_impacted_today(), but never flips
     the day's own bias). Fixed: only considers zone_is_infavor() zones,
     latest impact among those not yet superseded by a later in-favor
-    zone of either side. Returns None if none has impacted yet."""
+    zone of either side.
+
+    SECOND bug, same day (2026-09-30): picking the latest in-favor zone
+    never checked whether THAT zone had itself already been
+    structurally invalidated by `as_of` -- caught on 20 Jan's RB#1,
+    a fresh in-favor Daily SELL POI that impacted at 12:06 and had its
+    own anchor broken by wick at 15:23 the SAME day, yet was still
+    being returned as "controlling" for 21 Jan onward. Harmless in this
+    one case only because the real fallback (FVG#1, 12 Jan, still
+    alive) happens to agree on SELL too -- a future case where the
+    invalidated "latest" pick disagreed in side with the real
+    controlling POI would have given a wrong bias. Fixed: skips any
+    candidate already structurally invalidated (via structural_invalid_at,
+    the same four-trigger check used everywhere else) by `as_of`, so it
+    genuinely falls back to the next-most-recent still-alive in-favor
+    zone. `minutes`/`mt` optional only for backward compatibility with
+    any caller that can't supply them -- always pass them when
+    available, skipping the check silently returns the old (buggy)
+    behavior."""
     candidates = []
     for zones in (d_zones_full.ob_zones, d_zones_full.rb_zones, d_zones_full.fvg_zones):
         for dz in zones:
@@ -1260,6 +1278,12 @@ def daily_controlling_bias(d_zones_full, as_of: "datetime"):
             sup = getattr(dz, "superseded_at", None)
             if sup is not None and sup <= as_of:
                 continue
+            if minutes is not None and mt is not None and hasattr(d_zones_full, "w"):
+                bar_starts = [b.start for b in d_zones_full.w]
+                inv_at, _ = structural_invalid_at(dz, dz.impact_time, d_zones_full.w, bar_starts,
+                                                   minutes, mt, getattr(d_zones_full, "events", None))
+                if inv_at is not None and inv_at <= as_of:
+                    continue
             candidates.append((dz.impact_time, dz.bullish))
     if not candidates:
         return None
@@ -1280,7 +1304,8 @@ def daily_opposite_impacted_today(d_zones_full, opposite_bull: bool, date_str: s
     return False
 
 
-def apply_daily_bias_gate(engine, tf_tag: str, d_zones_full, display_tz: ZoneInfo) -> None:
+def apply_daily_bias_gate(engine, tf_tag: str, d_zones_full, display_tz: ZoneInfo,
+                           minutes=None, mt: list | None = None) -> None:
     """User's own correction (2026-09-30, real bug -- not a display
     preference): "we never think of Buy in a Sell day... ONLY Daily
     Timeframe related events decide the bias of that day or moment, and
@@ -1311,7 +1336,7 @@ def apply_daily_bias_gate(engine, tf_tag: str, d_zones_full, display_tz: ZoneInf
         for z in zones:
             if getattr(z, "rejected", False) or z.impact_time is None:
                 continue
-            controlling = daily_controlling_bias(d_zones_full, z.impact_time)
+            controlling = daily_controlling_bias(d_zones_full, z.impact_time, minutes, mt)
             if controlling is None or z.bullish == controlling:
                 continue  # no Daily bias yet, or already in favor -- fine either way
             if tf_tag == "h4":
@@ -1685,7 +1710,7 @@ def main() -> int:
                 # apply_daily_bias_gate's own docstring): 4H/1H setups
                 # only exist within whatever bias Daily has already
                 # decided, never on their own separate justification.
-                apply_daily_bias_gate(engine, tag, d_zones_full, display_tz)
+                apply_daily_bias_gate(engine, tag, d_zones_full, display_tz, minutes, mt_all)
             if tag in ("h4", "h1"):
                 exclude_old_intraday_zones(engine)
                 # Full (unfiltered) snapshot for compute_5m_trades' own
@@ -1709,7 +1734,7 @@ def main() -> int:
                 # list still references -- and hand the snapshot to
                 # find_parent_daily_poi() instead of the filtered engine.
                 d_zones_full = SimpleNamespace(ob_zones=list(engine.ob_zones), rb_zones=list(engine.rb_zones),
-                                                fvg_zones=list(engine.fvg_zones))
+                                                fvg_zones=list(engine.fvg_zones), w=engine.w, events=engine.events)
             # Daily is never --since-FLOOR-scoped here (2026-09-29, user:
             # "I want all... all the POIs, swings, MSS and everything...
             # by using the focus toggle" -- --since scoping makes sense
