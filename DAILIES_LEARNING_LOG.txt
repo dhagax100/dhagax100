@@ -22,9 +22,22 @@ BIAS
 - 4H/1H POIs are only tradeable in the direction Weekly/Daily permits.
 
 SESSIONS / TRADING WINDOW
+- THE EXACT SESSION HOURS (user's own words, 2026-09-30, "never forget
+  it, never" — Riyadh clock):
+    Asia:      03:00-07:00 summer, 04:00-08:00 winter
+    London:    10:00-14:00 summer, 11:00-15:00 winter
+    New York:  15:00-19:00 summer, 16:00-20:00 winter
 - Real trading window: 10:00-20:00 Riyadh in summer, 11:00-21:00 in
   winter (London open through New York close). DST-detected from real
-  New York transition dates, not a hardcoded month range.
+  New York transition dates, not a hardcoded month range. FLAG (not yet
+  resolved, 2026-09-30): the window's own END time here (20:00 summer /
+  21:00 winter) is ONE HOUR LATER than "New York close" as just given
+  above (19:00 summer / 20:00 winter) -- these two don't currently
+  agree, and the code's trading_window() has not been touched to match
+  the new hours yet. Needs the user's confirmation before anything
+  about the window's boundaries changes, since that could shift every
+  window-scoped result already verified (12 Jan's ground-truth trade
+  included).
 - Asia is liquidity-grab only — never an entry session.
 - Nothing before the window opens or after it closes counts: no setup,
   no entry, no display.
