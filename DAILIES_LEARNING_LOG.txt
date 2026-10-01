@@ -14,12 +14,70 @@ with its stage/reason — that's the file to open first when a day's result
 needs checking, before writing anything new.
 
 
-CURRENT RULE SET (as of 2026-09-28)
+CURRENT RULE SET (as of 2026-10-01)
 ------------------------------------
 
 BIAS
 - Weekly/Daily structure sets directional control (BUY/SELL/NONE).
 - 4H/1H POIs are only tradeable in the direction Weekly/Daily permits.
+- Bias is EXCLUSIVELY Daily-set. Never 4H or 1H.
+- 4H NEVER trades opposite the day's Daily bias -- period, no exception,
+  no authorization path exists for 4H at all.
+- 1H CAN trade opposite bias, but ONLY with same-day Daily authorization
+  (a Daily POI of that exact opposite side impacted the SAME calendar
+  day -- the real ARB/ORB mechanism). Without it: rejected immediately,
+  reason NO_DAILY_AUTHORIZATION. Authorization lasts only until the
+  authorizing Daily zone itself dies.
+
+DAILY CONTROLLING BIAS -- the exact model (daily_controlling_bias(),
+fixed through three iterations 2026-09-30, see SESSION LOG for the two
+wrong versions and why each was wrong)
+- Bias is CONTINUOUS -- there is no "day without a bias," ever, and no
+  "undefined" state once the dataset has any real Daily event in it.
+- Computed as: (1) if any Daily MSS has confirmed by the given moment,
+  the LATEST confirmed MSS's direction wins, full stop -- overrides
+  everything else. (2) Otherwise, the latest-impacting Daily POI that is
+  classified IN-FAVOR (created_state == 0) at its own impact time wins.
+  Aggressive/Old Daily POIs do NOT set or flip bias -- only in-favor
+  POIs and MSS do.
+- CRITICAL -- what does NOT affect bias: a POI later going invalid,
+  spent, or breached does NOT blank or flip the bias it once set. Only
+  a Daily MSS in the opposite direction flips bias. (User's own words:
+  "the in favor... POI control creates setup not necessarily bias.")
+  An earlier version of this function wrongly added a structural-
+  "aliveness" check on POI candidates and was explicitly reverted after
+  it broke bias continuity for 4 real days (15-18 Jan) in testing.
+
+1H ABANDONMENT -- per-zone, bias-aware (fixed 2026-09-30; previously a
+single global value per day off --default-side, which also had a
+dormant bug that silently no-op'd it whenever --default-side ALL was
+used -- meaning every ALL-side diagnostic run all session long had NEVER
+actually applied abandonment before this fix)
+- Rule (user's own words): "if we are buying today and price take
+  previous daily high, 1h is abandoned for buying, the mirror is true
+  for sell. period."
+- Computed per 1H zone, using THAT zone's own bias at ITS OWN impact
+  time (via daily_controlling_bias()) -- not one single value for the
+  whole day. Handles an intraday bias flip correctly: a zone impacting
+  before the flip uses the pre-flip bias/extreme, one impacting after
+  uses the post-flip one.
+- "Yesterday" for this check ALWAYS resolves to the last REAL TRADING
+  DAY, never a literal calendar-day-minus-1 (which lands on Sunday --
+  zero data -- for any Monday). Fixed 2026-09-30 after a real false
+  trade (OB#131, 26 Jan) was reported and then revoked once this was
+  caught; user: "Monday's yesterday is always Friday, period."
+
+ZONE DISPLAY STALENESS (cosmetic only, fixed 2026-09-30, zero effect on
+trading logic/ledger -- verified by full diff)
+- created_state/origin is fixed at the zone's creation and never
+  dynamically updated by default -- but per SPEC.md's own OOB
+  definition ("a stranded, untouched opposing POI from before the
+  current trend"), a zone should DISPLAY as Old once a LATER same-
+  timeframe MSS confirms the opposite direction before the zone's own
+  impact. Implemented as zone_stranded_by_mss() in
+  weekly_combined_generator.py -- display label only, OB_STATE/
+  RB_STATE/FVG_STATE classification used for trading decisions is
+  unaffected.
 
 CONTROL GATE VOCABULARY (2026-09-30)
 - Day Bias: Daily-set direction, fixed for the day.
@@ -107,18 +165,46 @@ STOP LOSS
 TAKE PROFIT
 - Fixed 3R. Always.
 
-POI VIOLATION / INVALIDATION (the gap that got fixed 2026-09-28)
-- A POI dies, in real time, the instant EITHER of these happens —
-  checked on every 1-minute bar, before the entry-break test:
-    (a) a completed 4H/1H candle closes its BODY at or beyond the near
-        edge of the zone (a bare wick doesn't count, but a close INSIDE
-        the zone counts, not just fully through it).
-    (b) the zone's own protect_level (its protecting swing, snapshotted
-        at creation) gets exceeded, wick or not, at the exact minute it
-        happens.
-- Whichever happens first kills the setup. A resting swing or entry
-  candidate that would only form AFTER that moment never gets a trade —
-  it's a dead setup, not a missed one.
+POI VIOLATION / INVALIDATION (updated 2026-09-30 -- now FOUR triggers, not two; see SESSION LOG for each one's own fix history)
+- A POI dies, in real time, the instant ANY of these four happens —
+  checked on every 1-minute bar, before the entry-break test. Applies
+  to every POI type (OB, RB, FVG) on its own timeframe -- never cross-
+  timeframe:
+    (a) h4_close -- a completed candle on the zone's OWN timeframe
+        closes its BODY at or beyond the near edge of the zone (a bare
+        wick doesn't count, but a close INSIDE the zone counts, not
+        just fully through it). Named "h4_close" from its original 4H-
+        only origin; the mechanic itself is timeframe-agnostic.
+    (b) swing_break -- the zone's own protect_level (its protecting
+        swing, snapshotted at creation) gets exceeded, wick or not, at
+        the exact minute it happens.
+    (c) OPEN_INSIDE_ZONE -- the impact candle's own open is already
+        inside the zone -- born dead. OB/RB only, NOT FVG (a gap has no
+        "candle born inside it" concept).
+    (d) swing_spent (added 2026-09-30, real ICT concept, NOT in the
+        original five_bso_engine.py/SPEC.md) -- the zone's OWN
+        timeframe confirms a same-kind swing (a swing HIGH for a SELL
+        zone, a swing LOW for a BUY zone -- the SL-anchor kind) at or
+        after impact, with NO anchor break needed. Timing matters:
+        confirms before entry = entry invalid; confirms after entry =
+        entry stands. Verified against RB#22 (16 Jan): swing high
+        confirmed 09:39 Riyadh, over an hour before the first entry
+        attempt (11:03) -- invalidating all three of that day's entries
+        even though the anchor didn't break until 13:41.
+- Whichever happens first (minimum timestamp across all that apply)
+  kills the setup. A resting swing or entry candidate that would only
+  form AFTER that moment never gets a trade -- it's a dead setup, not a
+  missed one.
+- NOTE (2026-10-01, raised but NOT YET implemented/verified in code):
+  the user distinguished "body close" (OB/RB/VI -- close merely INSIDE
+  the zone, near edge) from "close through" (FVG -- close must pass all
+  the way to the FAR edge, the opposite side from impact) as two
+  DIFFERENT rules, not the same h4_close check applied uniformly. The
+  code as of commit a5b840d still applies the single near-edge check to
+  all three zone types including FVG -- an attempted fix was written,
+  verified via regen, then explicitly REVERTED by the user before
+  commit (see SESSION LOG 2026-10-01). Treat FVG's close-through rule as
+  an OPEN correction, not yet real in the code.
 
 RE-ENTRY (second entry rule)
 - After a plain stop-loss exit (not TP, not still open, not a breach),
