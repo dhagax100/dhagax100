@@ -381,6 +381,53 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 SESSION LOG (newest first)
 ----------------------------
 
+2026-10-02 — New dataset added: EURUSD_m1_BidAndAsk_2025-01-02_to_2026-09-30.csv
+- Real FXCM Historical Data Downloader Basic export (bid+ask, 1 Minute,
+  EUR/USD), fetched in 3 ranges to stay under a real constraint hit
+  along the way (see the next entry) and merged here.
+- Verified continuous: 652,890 rows, zero duplicate timestamps, zero
+  out-of-order rows. Gap profile is genuine market structure, not
+  corruption -- 93 weekend-size gaps (~1/week across the ~91-week
+  range, exactly right), 149 medium gaps (holidays/thin liquidity),
+  2,878 small 2-10min gaps (same normal thin-tick pattern as the
+  original dataset).
+- This file is a strict SUPERSET of the original
+  EURUSD_m1_BidAndAsk.csv (which only covered 2026-01-02 to
+  2026-09-11) -- both are kept in data/, the original is NOT replaced,
+  since the ground-truth verification command in HANDOFF_MANIFEST.txt
+  and every prior session log entry references the original filename
+  specifically.
+- Purpose: out-of-sample / walk-forward validation of the existing,
+  already-committed rule set against market conditions the rules have
+  never been hand-checked against (every rule so far was only verified
+  against the original Jan-Sep 2026 window). Not "training" -- this is
+  a fixed rule-based system, not a statistical model; see the chat
+  exchange where this distinction was corrected directly.
+- Still missing: 2000-2024. A real constraint discovered along the way
+  (next entry) means that gap needs to be pulled in 2-year batches,
+  not one request.
+
+2026-10-02 — Real constraint discovered: FXCM's downloader (and any xlsx-based export) hard-caps at Excel's 1,048,576-row sheet limit
+- First attempt at historical data (a different source, FXCM
+  Historical Data Downloader Basic, requested 2022-01-01 through
+  "now") silently truncated at exactly 1,048,575 data rows -- landing
+  on 2024-10-18, NOT because the source lacked data past that date, but
+  because the exporter's own output format (xlsx) cannot hold more rows
+  per sheet. User's own suspicion ("I feel like it is up to 2024") was
+  correct and was confirmed with a direct openpyxl row-count check
+  before trusting anything, not just taken on faith.
+- Real-world row rate confirmed empirically: 1,048,575 rows covered
+  2022-01-02 to 2024-10-18 (~2.8 years) = ~374,000 rows/year for 1m
+  EURUSD bid+ask.
+- Fix: request date ranges narrow enough to stay under the cap. 2-year
+  windows (~748,000 rows, ~300k margin) are safe. This applies to ANY
+  xlsx-based export from this tool, not just the one that got
+  truncated -- the fix is procedural (how you request data), not a
+  code fix in this project.
+- The 2025-2026 pull (previous entry) was requested as plain CSV
+  through the same FXCM tool and had no row-cap exposure at all -- CSV
+  has no sheet-row limit. xlsx is the risk, not FXCM itself.
+
 2026-09-30 — Real bug fixed: "yesterday" for the continuation-day sweep check now always resolves to the last real trading day
 - User's own correction, flat: "Monday's yesterday is always Friday,
   period." find_prev_day_extreme() was computing a plain
