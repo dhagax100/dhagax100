@@ -489,6 +489,92 @@ def find_side_sweep_time_on_or_after(minutes, mt: list, side: str, start_date_st
     return None
 
 
+def build_pdh_pdl_chain(minutes, mt: list, side: str, display_tz: ZoneInfo,
+                         window_end: "datetime", control_checkpoints: list | None = None):
+    """1H ABANDONMENT, extended (2026-10-02, user-taught): a PDH (BUY) /
+    PDL (SELL) wick that exceeds the relevant level WITHOUT a body
+    closing through it does NOT reset the next day. It carries forward
+    -- 1H is pre-abandoned from the START of every following day, no
+    fresh sweep needed -- with the watched level ratcheting to each
+    day's own high/low as long as that day ALSO only wicks (impulsive-
+    uptrend candles exceeding one another's highs, mirrored for SELL).
+    Clears on EITHER:
+      (a) a real body close past the active level -- confirms the
+          breakout for real, 1H re-armed starting the NEXT day, or
+      (b) a structural reversal ("one day taking the low of the other,
+          confirming swing high, handing control to sell or none") --
+          this is exactly the CONTROL strip/flip mechanism already
+          computed in compute_control_timeline, so it's consulted
+          directly here rather than re-derived.
+
+    Returns {date_str: (pre_abandoned: bool, fresh_trigger_time: datetime|None)}
+    for every calendar day in the dataset up to window_end. pre_abandoned
+    True means 1H is dead from that day's own 00:00 Riyadh; fresh_trigger_time
+    (when pre_abandoned is False) is the exact minute a NEW sweep fires
+    that same day, or None if the day stays fully armed throughout."""
+    chain_days = {}
+    active_level = None
+    cur = minutes[0].t.astimezone(display_tz).date()
+    end_date = window_end.astimezone(display_tz).date()
+    prev_date_str = None
+    while cur <= end_date:
+        date_str = cur.isoformat()
+        win_start, win_end = calendar_day_bounds(date_str, display_tz)
+        i0, i1 = bisect_left(mt, win_start), bisect_left(mt, win_end)
+        day_minutes = minutes[i0:i1]
+        if not day_minutes:
+            chain_days[date_str] = (active_level is not None, None)
+            cur += timedelta(days=1)
+            continue
+
+        if control_checkpoints is not None and active_level is not None:
+            c_state, _ = control_state_at(control_checkpoints, win_start)
+            if c_state not in (side, "BOTH"):
+                active_level = None  # structural reversal already cleared it by today
+
+        pre_abandoned = active_level is not None
+        fresh_trigger_time = None
+        day_high = max(m.h for m in day_minutes)
+        day_low = min(m.l for m in day_minutes)
+        day_close = day_minutes[-1].c
+
+        if active_level is not None:
+            touched = (day_high >= active_level) if side == "BUY" else (day_low <= active_level)
+            if touched:
+                closed_through = (day_close > active_level) if side == "BUY" else (day_close < active_level)
+                if closed_through:
+                    active_level = None  # clears starting TOMORROW
+                else:
+                    active_level = day_high if side == "BUY" else day_low  # ratchet forward
+        elif prev_date_str is not None:
+            prev_extreme = find_prev_day_extreme(minutes, mt, date_str, display_tz, side)
+            t = find_prev_day_sweep_time(minutes, mt, date_str, display_tz, side, prev_extreme)
+            if t is not None:
+                fresh_trigger_time = t
+                closed_through = (day_close > prev_extreme) if side == "BUY" else (day_close < prev_extreme)
+                if not closed_through:
+                    active_level = day_high if side == "BUY" else day_low  # starts chaining from TOMORROW
+
+        chain_days[date_str] = (pre_abandoned, fresh_trigger_time)
+        prev_date_str = date_str
+        cur += timedelta(days=1)
+    return chain_days
+
+
+def chain_abandon_at(chain_days: dict, date_str: str, display_tz: ZoneInfo):
+    """Ceiling time for a given day from build_pdh_pdl_chain's output --
+    the day's own 00:00 Riyadh if pre-abandoned, the fresh trigger
+    minute if newly swept that day, or None if armed all day."""
+    entry = chain_days.get(date_str)
+    if entry is None:
+        return None
+    pre_abandoned, fresh_trigger_time = entry
+    if pre_abandoned:
+        win_start, _ = calendar_day_bounds(date_str, display_tz)
+        return win_start
+    return fresh_trigger_time
+
+
 def structural_hard_death_between(z, start_t: "datetime", end_t: "datetime",
                                    bars: list, bar_starts: list, minutes, mt: list):
     """CONTROL (2026-10-02): checks ONLY the two hard-death triggers
@@ -1089,6 +1175,13 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
     control_checkpoints = (compute_control_timeline(h4_engine, d_zones_full, minutes, mt, display_tz, window_end)
                             if d_zones_full is not None else None)
 
+    # PDH/PDL wick-chain (2026-10-02, user-taught): replaces the plain
+    # single-day sweep check for 1H abandonment -- a wick without a
+    # body close carries the abandonment forward day after day instead
+    # of resetting. Built once per side.
+    pdh_chain = build_pdh_pdl_chain(minutes, mt, "BUY", display_tz, window_end, control_checkpoints)
+    pdl_chain = build_pdh_pdl_chain(minutes, mt, "SELL", display_tz, window_end, control_checkpoints)
+
     def riyadh(t):
         return wob.display_iso(t, display_tz) if t else ""
 
@@ -1179,9 +1272,8 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
         if tf_tag == "1H" and d_zones_full is not None:
             zone_side = "BUY" if z.bullish else "SELL"
             zone_date = z.impact_time.astimezone(display_tz).date().isoformat()
-            prev_extreme = find_prev_day_extreme(minutes, mt, zone_date, display_tz, zone_side)
-            zone_abandon_at = find_prev_day_sweep_time(minutes, mt, zone_date, display_tz,
-                                                        zone_side, prev_extreme)
+            chain = pdh_chain if zone_side == "BUY" else pdl_chain
+            zone_abandon_at = chain_abandon_at(chain, zone_date, display_tz)
             if zone_abandon_at is not None:
                 eff_window_end = min(eff_window_end, zone_abandon_at)
                 row_base["h1_abandoned_riyadh"] = riyadh(zone_abandon_at)

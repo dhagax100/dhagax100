@@ -67,6 +67,24 @@ actually applied abandonment before this fix)
   zero data -- for any Monday). Fixed 2026-09-30 after a real false
   trade (OB#131, 26 Jan) was reported and then revoked once this was
   caught; user: "Monday's yesterday is always Friday, period."
+- LOCKED (2026-10-02, user-taught, now coded): PDH (BUY)/PDL (SELL)
+  being "taken" is NOT a single-day fact. A wick that exceeds the
+  relevant level WITHOUT a body closing through it carries forward --
+  1H is pre-abandoned from the START of every following day, no fresh
+  sweep needed that day, with the watched level ratcheting to each
+  day's own high/low as long as that day ALSO only wicks (mirrors a
+  healthy impulsive trend: candles closing past one another's extremes,
+  not just wicking). Clears on EITHER (a) a real body close past the
+  active level -- confirms the breakout, 1H re-armed from the NEXT day,
+  or (b) a structural reversal (a day takes the OTHER side's extreme,
+  confirming a swing that hands control to the opposite side or NONE)
+  -- this is exactly the CONTROL strip/flip mechanism, consulted
+  directly rather than re-derived. Implemented as build_pdh_pdl_chain()
+  + chain_abandon_at(), replacing the old single-day find_prev_day_
+  extreme/find_prev_day_sweep_time pairing in the per-zone 1H check.
+  Smoke-tested 2025-01-02 to 2025-02-15: 1h_abandoned_riyadh now fires
+  on 179 of 471 candidate rows (up from the old single-day check's
+  count) -- mechanism is live, not yet verified against a real chart.
 
 ZONE DISPLAY STALENESS (cosmetic only, fixed 2026-09-30, zero effect on
 trading logic/ledger -- verified by full diff)
