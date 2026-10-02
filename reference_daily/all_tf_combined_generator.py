@@ -1092,14 +1092,21 @@ def mark_open_inside_trigger(engine) -> None:
     inside the zone the moment it forms, which the zone can't survive.
     Found the impact bar by locating the bar whose own [start, end)
     span contains z.impact_time (same bisect-against-bar-starts pattern
-    used everywhere else in this file for exactly that lookup).  Applies
-    to OB and RB only, at every timeframe (Daily/4H/1H) -- FVG has no
-    equivalent concept and is untouched. Reuses the SAME `rejected`
-    field OB already had and RB now has too, so every existing
-    `getattr(z, "rejected", False)` check (drawing, table, ledger)
-    picks this up with no other change."""
+    used everywhere else in this file for exactly that lookup).
+
+    CORRECTION (2026-10-02, user): the check compares the impact
+    candle's open to the POI's own ZONE (zb/zt) -- the zone itself just
+    differs by type (OB zone = origin candle's body, RB zone = origin
+    candle's wick, FVG zone = the gap), but the check itself is the
+    same for all three. The earlier "FVG has no equivalent concept"
+    exclusion was an unexamined assumption, never actually taught --
+    FVG zones have real zb/zt boundaries exactly like OB/RB, so the
+    same born-dead check applies. Now runs on OB, RB, AND FVG, at every
+    timeframe (Daily/4H/1H). Reuses the SAME `rejected` field, so every
+    existing `getattr(z, "rejected", False)` check (drawing, table,
+    ledger) picks this up with no other change."""
     bar_starts = [b.start for b in engine.w]
-    for zones in (engine.ob_zones, engine.rb_zones):
+    for zones in (engine.ob_zones, engine.rb_zones, engine.fvg_zones):
         for z in zones:
             if z.rejected or z.impact_time is None:
                 continue

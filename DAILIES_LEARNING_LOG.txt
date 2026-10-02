@@ -184,8 +184,13 @@ POI VIOLATION / INVALIDATION (updated 2026-09-30 -- now FOUR triggers, not two; 
         user): the check is against the POI's own zone boundaries, not
         a "candle body range" generically -- the zone itself differs by
         type: OB zone = the origin candle's BODY, RB zone = the origin
-        candle's WICK, FVG zone = the GAP. Applies to OB/RB only, NOT
-        FVG (a gap has no origin-candle concept to be "born inside").
+        candle's WICK, FVG zone = the GAP. LOCKED (2026-10-02, second
+        correction same day): applies to OB, RB, AND FVG alike -- the
+        earlier "FVG has no origin-candle concept" exclusion was an
+        unexamined assumption, never actually taught; FVG zones have
+        real zb/zt boundaries exactly like OB/RB, so the same
+        born-dead check applies. mark_open_inside_trigger() now runs
+        on engine.fvg_zones too.
     (d) swing_spent (added 2026-09-30, real ICT concept, NOT in the
         original five_bso_engine.py/SPEC.md) -- the zone's OWN
         timeframe confirms a same-kind swing (a swing HIGH for a SELL
