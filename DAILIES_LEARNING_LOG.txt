@@ -437,6 +437,32 @@ status the retired FVG close-through item used to have)
   - via anchor-break -> this IS a real Daily MSS flip, structural, not
     tactical -- the whole framework mirrors from here (the new
     direction becomes the new trend side).
+- NONE CONTROL (2026-10-02, same session, user-taught): a fourth state
+  alongside BUY/SELL/BOTH. The PDL/PDH-sweep + matching swing-confirm
+  signal (the same (b)+(c) pair inside "respect") is actually a
+  standalone, POI-independent event -- it fires on its own whenever the
+  market makes that structural statement, and it ALWAYS strips whoever
+  currently holds control, whether or not a live opposing POI exists to
+  inherit it.
+    - If a live, un-breached opposing POI exists at that moment (also
+      cleared of body-close/anchor-break) -> that IS respect, full
+      control transfers to its side, exactly as above.
+    - If no such zone exists (it already died via body-close/
+      open-inside-zone first, or none was ever encountered) -> the
+      controller still loses control, but there's nobody to hand it to
+      -> control goes to NONE.
+  From NONE, the next POI impact just restarts the normal rules fresh
+  -- trend-direction mere impact grants full control instantly (same
+  asymmetric rule as always); opposing mere impact grants shared
+  control (4H + pending 1H) same as always, and still needs to build
+  full respect from scratch -- NONE pre-grants nothing.
+  CAVEAT on tactical reversion (sharpens the BOTH/tactical rule above):
+  reverting to "whoever had control last" after a trend POI's tactical
+  failure (body-close/OPEN_INSIDE_ZONE) only works if that previous
+  side had ACTUALLY EARNED (respected) control, banked. If the trend
+  POI instead claimed control out of NONE (not dethroning an actual
+  live controller), there is nothing to revert to -- it goes back to
+  NONE, not to the opposing side.
 - Open items: still needs actual code design (ledger columns, how
   "control" is tracked/displayed, interaction with same-leg
   supersession) before implementation -- not started.
