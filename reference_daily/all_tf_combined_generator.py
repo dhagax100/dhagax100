@@ -468,29 +468,6 @@ def find_prev_day_sweep_time(minutes, mt: list, date_str: str, display_tz: ZoneI
     return None
 
 
-def is_react_day(d_zones_full, side: str, date_str: str, display_tz: ZoneInfo) -> bool:
-    """The react-day rule only ever applies on a REACT day -- the day
-    AFTER the Daily POI's own impact -- never on the impact day itself
-    (2026-09-29, real bug caught while moving to 14 Jan: applying the
-    prior-day-extreme-sweep check unconditionally, every day, silently
-    would have abandoned 1H on 12 Jan too -- 11 Jan's low got swept at
-    01:08 Riyadh that morning -- even though 12 Jan is the day FVG#1
-    itself impacted (10:26 Riyadh), not a react day at all. A day only
-    counts as "react" if NO same-side Daily POI impacted on it -- i.e.
-    today's whole bias is carried in from an earlier day, not set fresh
-    today."""
-    if side not in ("SELL", "BUY"):
-        return False
-    win_start, win_end = calendar_day_bounds(date_str, display_tz)
-    want_bull = side == "BUY"
-    for zones in (d_zones_full.ob_zones, d_zones_full.rb_zones, d_zones_full.fvg_zones):
-        for z in zones:
-            if z.impact_time is not None and z.bullish == want_bull and win_start <= z.impact_time < win_end:
-                return False
-    return True
-    return None
-
-
 def structural_invalid_at(z, it: "datetime", bars: list, bar_starts: list,
                            minutes, mt: list, events: list | None = None) -> tuple:
     """Ported from five_bso_engine.py's structural_invalid_at() (SPEC.md
@@ -886,18 +863,24 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
         # was already swept at 06:19, well before the 11:10 flip, so 1H
         # BUY was never armed at all that day, even though 4H BUY and
         # the RB#1-authorized 1H SELL both still traded normally.
+        # 2026-10-02, user instruction: the sweep check now applies on
+        # EVERY day, including the impact day itself -- not just
+        # react/continuation days. Previously is_react_day() gated this
+        # off on a zone's own impact day (deliberately, per the 2026-09-29
+        # fix); the user has now confirmed PDL/PDH can be swept at any
+        # minute of the impact day too, and it must not be overlooked --
+        # so the is_react_day() gate is removed, this runs unconditionally.
         if tf_tag == "1H" and d_zones_full is not None:
             controlling = daily_controlling_bias(d_zones_full, z.impact_time, minutes, mt)
             if controlling is not None and z.bullish == controlling:
                 zone_side = "BUY" if z.bullish else "SELL"
                 zone_date = z.impact_time.astimezone(display_tz).date().isoformat()
-                if is_react_day(d_zones_full, zone_side, zone_date, display_tz):
-                    prev_extreme = find_prev_day_extreme(minutes, mt, zone_date, display_tz, zone_side)
-                    zone_abandon_at = find_prev_day_sweep_time(minutes, mt, zone_date, display_tz,
-                                                                zone_side, prev_extreme)
-                    if zone_abandon_at is not None:
-                        eff_window_end = min(eff_window_end, zone_abandon_at)
-                        row_base["h1_abandoned_riyadh"] = riyadh(zone_abandon_at)
+                prev_extreme = find_prev_day_extreme(minutes, mt, zone_date, display_tz, zone_side)
+                zone_abandon_at = find_prev_day_sweep_time(minutes, mt, zone_date, display_tz,
+                                                            zone_side, prev_extreme)
+                if zone_abandon_at is not None:
+                    eff_window_end = min(eff_window_end, zone_abandon_at)
+                    row_base["h1_abandoned_riyadh"] = riyadh(zone_abandon_at)
 
         # Born-violated OB/RB (2026-09-30, see mark_open_inside_trigger's
         # own docstring -- checked before anything else, same reasoning

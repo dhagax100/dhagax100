@@ -21,13 +21,14 @@ BIAS
 - Weekly/Daily structure sets directional control (BUY/SELL/NONE).
 - 4H/1H POIs are only tradeable in the direction Weekly/Daily permits.
 - Bias is EXCLUSIVELY Daily-set. Never 4H or 1H.
-- 4H NEVER trades opposite the day's Daily bias -- period, no exception,
-  no authorization path exists for 4H at all.
-- 1H CAN trade opposite bias, but ONLY with same-day Daily authorization
-  (a Daily POI of that exact opposite side impacted the SAME calendar
-  day -- the real ARB/ORB mechanism). Without it: rejected immediately,
-  reason NO_DAILY_AUTHORIZATION. Authorization lasts only until the
-  authorizing Daily zone itself dies.
+- LOCKED (2026-10-02, user instruction): 4H CAN now trade opposite bias
+  too, same authorization path 1H already had -- a Daily POI of that
+  exact opposite side impacted the SAME calendar day as this zone's own
+  impact (the ARB/ORB mechanism). Previously 4H opposing was rejected
+  unconditionally, no authorization path at all; that restriction is
+  gone. Without same-day authorization: rejected immediately, reason
+  NO_DAILY_AUTHORIZATION, for both 4H and 1H alike. Authorization lasts
+  only until the authorizing Daily zone itself dies.
 
 DAILY CONTROLLING BIAS -- the exact model (daily_controlling_bias(),
 fixed through three iterations 2026-09-30, see SESSION LOG for the two
@@ -323,6 +324,16 @@ CROSS-DAY CANDIDATES / "REACT DAY" (2026-09-29)
   M1 data (not asserted), and acts as a ceiling on 1H searches only —
   same treatment as same-leg supersession, so a 1H entry already found
   before the sweep still stands. Ledger column: h1_abandoned_riyadh.
+- LOCKED (2026-10-02, user instruction): this same PDL/PDH sweep check
+  now applies on the IMPACT DAY itself too, not just react/continuation
+  days -- it can happen at any minute of the impact day (checked over
+  the full calendar day, same as every day), and must not be overlooked.
+  The 2026-09-29 is_react_day() gate that deliberately skipped this
+  check on a zone's own impact day is removed (function deleted, now
+  unused) -- the sweep check runs unconditionally for every in-favor 1H
+  zone, every day, impact day included. If yesterday's relevant extreme
+  is already swept by the time a zone impacts today, 1H is abandoned
+  from that moment forward the same as on any other day.
 - CLARIFIED (2026-09-30, user's own teaching): "continuation day" is NOT
   a separate mechanic from "react day" -- it's the same rule, just
   further down the same unbroken trend. is_react_day()'s real condition
@@ -380,6 +391,25 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 
 SESSION LOG (newest first)
 ----------------------------
+
+2026-10-02 — Two rule changes, locked: 4H opposing authorized same as 1H; PDL/PDH sweep check now also applies on impact day
+- Change 1: 4H opposing was previously rejected unconditionally (no
+  authorization path at all). User instruction: 4H opposing should be
+  authorized the exact same way 1H opposing already was -- a same-side
+  opposing Daily POI impacting on this zone's own impact day. Fixed in
+  apply_daily_bias_gate(): the `if tf_tag == "h4": reject` branch is
+  removed; both 4H and 1H now fall through to the same
+  daily_opposite_impacted_today() check.
+- Change 2: the PDL/PDH sweep check (react-day 1H abandonment) was
+  deliberately gated off on a zone's own impact day since 2026-09-29.
+  User instruction, this session: that gate is wrong -- PDL/PDH can be
+  swept at any minute of the impact day too and must not be overlooked.
+  Fixed: is_react_day() deleted (now unused), the sweep check in
+  compute_5m_trades() runs unconditionally for every in-favor 1H zone,
+  every day including its own impact day.
+- Both changes committed (b7d4ac2, and the PDL/PDH fix) on
+  ict-trading-system. Not yet re-verified against 2025 data with a
+  fresh regen -- next full run should reflect both.
 
 2026-10-02 — Real bug fixed: no Daily bias yet must block BOTH sides on 4H/1H, not pass either through free
 - First real walk-forward find, on the 2025-01-02-start dataset: 1H
