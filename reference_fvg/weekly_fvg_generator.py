@@ -160,6 +160,8 @@ class FVGZone:
                                             # creation -- see STRUCTURAL_BREACH in
                                             # finish_events_and_lifecycle
     stop_reason: str = ""    # "IMPACT" | "CLOSE_THROUGH" | "STRAND" | "STRUCTURAL_BREACH" | ""
+    rejected: bool = False  # 2026-10-02: open-inside-zone now applies to FVG too (mirrors OB/RB)
+    rejected_reason: str = ""
 
 
 class WeeklyFVGEngine:

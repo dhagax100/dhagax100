@@ -468,6 +468,67 @@ def find_prev_day_sweep_time(minutes, mt: list, date_str: str, display_tz: ZoneI
     return None
 
 
+def find_side_sweep_time_on_or_after(minutes, mt: list, side: str, start_date_str: str,
+                                      display_tz: ZoneInfo, max_days: int = 20):
+    """CONTROL (2026-10-02, user-taught): part of "respect" -- a PDL/PDH
+    sweep that can land on the impact day itself, the next day, or
+    several days later ("this might happen in one day, two or three or
+    even more"). Generalizes find_prev_day_extreme/find_prev_day_sweep_time
+    (single-day) across a run of calendar days starting at
+    `start_date_str`, returning the FIRST day's sweep time found, or
+    None if no sweep happens within `max_days` real calendar days."""
+    y, m, d = (int(x) for x in start_date_str.split("-"))
+    cur = datetime(y, m, d).date()
+    for _ in range(max_days):
+        date_str = cur.isoformat()
+        extreme = find_prev_day_extreme(minutes, mt, date_str, display_tz, side)
+        t = find_prev_day_sweep_time(minutes, mt, date_str, display_tz, side, extreme)
+        if t is not None:
+            return t
+        cur += timedelta(days=1)
+    return None
+
+
+def structural_hard_death_between(z, start_t: "datetime", end_t: "datetime",
+                                   bars: list, bar_starts: list, minutes, mt: list):
+    """CONTROL (2026-10-02): checks ONLY the two hard-death triggers
+    (h4_close, swing_break) in (start_t, end_t] -- used to confirm a
+    zone that went swing_spent first never ALSO takes a real structural
+    hit before its PDL/PDH sweep completes "respect" (spec: "what we
+    care is that swing high confirmed and the POI zone is clear from
+    any body no matter how many days poke into it"). swing_spent itself
+    is deliberately excluded -- already known, not a disqualifier here.
+    Returns (time, reason) or (None, None)."""
+    bull = z.bullish
+    near_boundary = z.zt if bull else z.zb
+
+    h4_close_at = None
+    start_idx = max(0, bisect_right(bar_starts, start_t) - 1)
+    for hb in bars[start_idx:]:
+        if hb.end <= start_t:
+            continue
+        if hb.end > end_t:
+            break
+        breach = (hb.c <= near_boundary) if bull else (hb.c >= near_boundary)
+        if breach:
+            h4_close_at = hb.end
+            break
+
+    swing_break_at = None
+    idx = bisect_right(mt, start_t)
+    for m in minutes[idx:]:
+        if m.t > end_t:
+            break
+        if (m.l < z.protect_level) if bull else (m.h > z.protect_level):
+            swing_break_at = m.t
+            break
+
+    candidates = [(t, r) for t, r in ((h4_close_at, "h4_close"), (swing_break_at, "swing_break")) if t is not None]
+    if not candidates:
+        return None, None
+    return min(candidates, key=lambda tr: tr[0])
+
+
 def structural_invalid_at(z, it: "datetime", bars: list, bar_starts: list,
                            minutes, mt: list, events: list | None = None) -> tuple:
     """Ported from five_bso_engine.py's structural_invalid_at() (SPEC.md
@@ -548,6 +609,138 @@ def structural_invalid_at(z, it: "datetime", bars: list, bar_starts: list,
     if not candidates:
         return None, None
     return min(candidates, key=lambda tr: tr[0])
+
+
+def compute_control_timeline(h4_engine, d_zones_full, minutes, mt: list, display_tz: ZoneInfo,
+                              window_end: "datetime"):
+    """CONTROL (2026-10-02, user-taught, RECORDED but not yet verified
+    against real data -- see DAILIES_LEARNING_LOG.txt's CONTROL section
+    for the full taught spec this ports). A layer ABOVE Daily bias:
+    which side is ACTIVELY tradeable right now, distinct from which
+    side the trend structurally favors. Driven entirely by 4H-level POI
+    events (1H just follows via the returned one_h_owner).
+
+    States: "BUY", "SELL", "BOTH" (shared), "NONE".
+
+    Processes the FULL zone history up through `window_end` -- NOT just
+    today's narrow trading-session window (control is a multi-day/
+    multi-leg timeline, not a single-day computation; using the
+    session-hours window here was a real bug caught in smoke-testing --
+    it silently excluded every zone impacted on a prior day, so control
+    never got off NONE at all).
+
+    Returns a sorted list of checkpoints [(time, state, one_h_owner), ...]
+    -- one_h_owner is "BUY"/"SELL"/None, the side currently holding the
+    single 1H slot."""
+    h4_bar_starts = [b.start for b in h4_engine.w]
+
+    # Step 1: classify every 4H zone impacted up to window_end as trend
+    # or opposing (same test apply_daily_bias_gate already uses), and
+    # for opposing zones work out whether/when they die hard or earn
+    # respect.
+    events = []  # (time, kind, side) kind in impact_trend/impact_opp/opp_death/opp_respect
+    for zones in (h4_engine.ob_zones, h4_engine.rb_zones, h4_engine.fvg_zones):
+        for z in zones:
+            if z.impact_time is None or z.impact_time > window_end:
+                continue
+            controlling = daily_controlling_bias(d_zones_full, z.impact_time, minutes, mt)
+            if controlling is None:
+                continue
+            side = "BUY" if z.bullish else "SELL"
+            if z.bullish == controlling:
+                events.append((z.impact_time, "impact_trend", side))
+                continue
+            events.append((z.impact_time, "impact_opp", side))
+            invalidated_at, reason = structural_invalid_at(z, z.impact_time, h4_engine.w, h4_bar_starts,
+                                                             minutes, mt, h4_engine.events)
+            if reason in ("h4_close", "swing_break"):
+                events.append((invalidated_at, "opp_death", side))
+            elif reason == "swing_spent":
+                date_str = z.impact_time.astimezone(display_tz).date().isoformat()
+                sweep_t = find_side_sweep_time_on_or_after(minutes, mt, side, date_str, display_tz)
+                if sweep_t is None:
+                    continue  # never swept in the available data -- stays pending, no resolution
+                respect_t = max(invalidated_at, sweep_t)
+                hard_t, _ = structural_hard_death_between(z, invalidated_at, respect_t,
+                                                           h4_engine.w, h4_bar_starts, minutes, mt)
+                if hard_t is not None:
+                    events.append((hard_t, "opp_death", side))
+                else:
+                    events.append((respect_t, "opp_respect", side))
+            # reason is None: never invalidated in available data -- stays pending, no resolution.
+
+    events.sort(key=lambda e: e[0])
+
+    # Step 2: replay into a state machine. banked_respect persists until
+    # the trend side itself changes (a real Daily MSS flip) -- "the
+    # whole framework mirrors from here" happens for free since trend/
+    # opposing classification above already used the post-flip bias.
+    checkpoints = []
+    state = "NONE"
+    one_h_owner = None
+    banked_respect = {"BUY": False, "SELL": False}
+    last_trend_side = None
+
+    def opposite(s):
+        return "SELL" if s == "BUY" else "BUY"
+
+    def record(t):
+        checkpoints.append((t, state, one_h_owner))
+
+    for t, kind, side in events:
+        controlling = daily_controlling_bias(d_zones_full, t, minutes, mt)
+        trend_side = "BUY" if controlling else "SELL" if controlling is False else None
+        if trend_side is not None and trend_side != last_trend_side:
+            banked_respect = {"BUY": False, "SELL": False}
+            last_trend_side = trend_side
+
+        if kind == "impact_trend":
+            if state != side:
+                state = side
+                one_h_owner = side
+                record(t)
+        elif kind == "impact_opp":
+            if state == opposite(side) or state == "NONE":
+                state = "BOTH"
+                one_h_owner = side
+                record(t)
+        elif kind == "opp_death":
+            pass  # no control change -- trend's dominance just reconfirmed
+        elif kind == "opp_respect":
+            banked_respect[side] = True
+            if state != side:
+                state = side
+                one_h_owner = side
+                record(t)
+
+    return checkpoints
+
+
+def control_state_at(checkpoints: list, t: "datetime"):
+    """Returns (state, one_h_owner) as of time `t` -- the last checkpoint
+    at or before `t`, or ("NONE", None) if `t` is before the first one."""
+    state, one_h_owner = "NONE", None
+    for ct, cs, ch in checkpoints:
+        if ct > t:
+            break
+        state, one_h_owner = cs, ch
+    return state, one_h_owner
+
+
+def control_ceiling(checkpoints: list, t0: "datetime", side: str, resource: str):
+    """First checkpoint AFTER t0 where `side` stops holding `resource`
+    ("4h" or "1h"). None if it never does within the available
+    checkpoints."""
+    for ct, cs, ch in checkpoints:
+        if ct <= t0:
+            continue
+        if resource == "4h":
+            if not (cs == side or cs == "BOTH"):
+                return ct
+        else:
+            if ch != side:
+                return ct
+    return None
 
 
 def run_5m_bso(z, it, bar_starts5: list, events5_sorted: list, minutes, mt: list,
@@ -792,6 +985,14 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
     bar_starts5 = [b.start for b in e5.w]
     events5_sorted = sorted(e5.events, key=lambda e: (e.confirm, e.kind))
 
+    # CONTROL (2026-10-02, user-taught, newly wired in -- not yet
+    # verified against real data, see compute_control_timeline's own
+    # docstring and DAILIES_LEARNING_LOG.txt's CONTROL section). None
+    # when d_zones_full is missing (keeps any caller that doesn't pass
+    # it working exactly as before, un-gated).
+    control_checkpoints = (compute_control_timeline(h4_engine, d_zones_full, minutes, mt, display_tz, window_end)
+                            if d_zones_full is not None else None)
+
     def riyadh(t):
         return wob.display_iso(t, display_tz) if t else ""
 
@@ -831,7 +1032,8 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
                          entry_riyadh="", entry_price="", sl_price="", tp_price="",
                          sl_hit_riyadh="", tp_hit_riyadh="", risk_price="", r_pips="",
                          mfe_pips="", mae_pips="", result="", exit_riyadh="", r_multiple="",
-                         sl_tp_conflict="", structural_notes="", h1_abandoned_riyadh="")
+                         sl_tp_conflict="", structural_notes="", h1_abandoned_riyadh="",
+                         control_state_at_impact="", control_ceiling_riyadh="")
 
         # Same-leg supersession (see mark_superseded_same_leg): a later
         # same-direction, unbroken-leg POI caps how much longer THIS zone
@@ -881,6 +1083,26 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
                 if zone_abandon_at is not None:
                     eff_window_end = min(eff_window_end, zone_abandon_at)
                     row_base["h1_abandoned_riyadh"] = riyadh(zone_abandon_at)
+
+        # CONTROL (2026-10-02, user-taught, newly wired in -- not yet
+        # verified against real data): is this zone's own side actually
+        # holding the resource (4H or 1H) it needs, at its own impact
+        # moment? Daily authorization (apply_daily_bias_gate, already
+        # run before this function) is a SEPARATE, always-required gate
+        # -- control is additional on top of it, not instead of it.
+        if control_checkpoints is not None:
+            zone_side = "BUY" if z.bullish else "SELL"
+            resource = "4h" if tf_tag == "H4" else "1h"
+            c_state, c_owner = control_state_at(control_checkpoints, z.impact_time)
+            row_base["control_state_at_impact"] = f"{c_state}/{c_owner or '-'}"
+            held = (c_state in (zone_side, "BOTH")) if resource == "4h" else (c_owner == zone_side)
+            if not held:
+                ledger_rows.append(dict(row_base, stage="NO_CONTROL"))
+                continue
+            ceiling = control_ceiling(control_checkpoints, z.impact_time, zone_side, resource)
+            if ceiling is not None:
+                eff_window_end = min(eff_window_end, ceiling)
+                row_base["control_ceiling_riyadh"] = riyadh(ceiling)
 
         # Born-violated OB/RB (2026-09-30, see mark_open_inside_trigger's
         # own docstring -- checked before anything else, same reasoning
@@ -957,6 +1179,8 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
                 tp_price=a["tp_price"], risk=a["risk"], result=a["result"], exit_time=a.get("exit_time"),
                 mfe=a.get("mfe"), mae=a.get("mae"), watch_hits=a.get("watch_hits") or {},
                 pre_impact_swing_price=opp.price,
+                control_state_at_impact=row_base.get("control_state_at_impact", ""),
+                control_ceiling=row_base.get("control_ceiling_riyadh", ""),
             ))
 
     # Dedup: identical entry (same price, same trigger minute) -> ONE real
@@ -1036,6 +1260,8 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
             r_multiple="+3.00" if result == "TP" else ("-1.00" if result == "SL" else ""),
             sl_tp_conflict="YES" if sl_tp_conflict else "",
             structural_notes=structural_notes,
+            control_state_at_impact="/".join(dict.fromkeys(m["control_state_at_impact"] for m in members)),
+            control_ceiling_riyadh="/".join(dict.fromkeys(m["control_ceiling"] for m in members if m["control_ceiling"])),
         ))
 
     return sorted(trades, key=lambda t: t["entry_time"]), ledger_rows
@@ -1049,6 +1275,7 @@ LEDGER_FIELDS = [
     "entry_riyadh", "entry_price", "sl_price", "tp_price", "sl_hit_riyadh", "tp_hit_riyadh",
     "risk_price", "r_pips", "mfe_pips", "mae_pips",
     "result", "exit_riyadh", "r_multiple", "sl_tp_conflict", "structural_notes",
+    "control_state_at_impact", "control_ceiling_riyadh",
 ]
 
 
