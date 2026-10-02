@@ -1072,17 +1072,23 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
         # fix); the user has now confirmed PDL/PDH can be swept at any
         # minute of the impact day too, and it must not be overlooked --
         # so the is_react_day() gate is removed, this runs unconditionally.
+        # 2026-10-02, user correction: previously this only ran for
+        # IN-FAVOR zones (z.bullish == controlling) -- an opposing zone
+        # was explicitly exempt, by the original rule's own stated
+        # scope ("lives or dies by its own invalidation only"). CONTROL
+        # changes this: an opposing zone's 1H claim is explicitly
+        # "subject to its own PDL/PDH check" too, same mechanism, just
+        # using ITS OWN side -- so the in-favor restriction is gone, this
+        # now runs for every 1H zone regardless of trend/opposing.
         if tf_tag == "1H" and d_zones_full is not None:
-            controlling = daily_controlling_bias(d_zones_full, z.impact_time, minutes, mt)
-            if controlling is not None and z.bullish == controlling:
-                zone_side = "BUY" if z.bullish else "SELL"
-                zone_date = z.impact_time.astimezone(display_tz).date().isoformat()
-                prev_extreme = find_prev_day_extreme(minutes, mt, zone_date, display_tz, zone_side)
-                zone_abandon_at = find_prev_day_sweep_time(minutes, mt, zone_date, display_tz,
-                                                            zone_side, prev_extreme)
-                if zone_abandon_at is not None:
-                    eff_window_end = min(eff_window_end, zone_abandon_at)
-                    row_base["h1_abandoned_riyadh"] = riyadh(zone_abandon_at)
+            zone_side = "BUY" if z.bullish else "SELL"
+            zone_date = z.impact_time.astimezone(display_tz).date().isoformat()
+            prev_extreme = find_prev_day_extreme(minutes, mt, zone_date, display_tz, zone_side)
+            zone_abandon_at = find_prev_day_sweep_time(minutes, mt, zone_date, display_tz,
+                                                        zone_side, prev_extreme)
+            if zone_abandon_at is not None:
+                eff_window_end = min(eff_window_end, zone_abandon_at)
+                row_base["h1_abandoned_riyadh"] = riyadh(zone_abandon_at)
 
         # CONTROL (2026-10-02, user-taught, newly wired in -- not yet
         # verified against real data): is this zone's own side actually
