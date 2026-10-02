@@ -180,8 +180,12 @@ POI VIOLATION / INVALIDATION (updated 2026-09-30 -- now FOUR triggers, not two; 
         swing, snapshotted at creation) gets exceeded, wick or not, at
         the exact minute it happens.
     (c) OPEN_INSIDE_ZONE -- the impact candle's own open is already
-        inside the zone -- born dead. OB/RB only, NOT FVG (a gap has no
-        "candle born inside it" concept).
+        inside the ZONE (zb/zt) -- born dead. CORRECTION (2026-10-02,
+        user): the check is against the POI's own zone boundaries, not
+        a "candle body range" generically -- the zone itself differs by
+        type: OB zone = the origin candle's BODY, RB zone = the origin
+        candle's WICK, FVG zone = the GAP. Applies to OB/RB only, NOT
+        FVG (a gap has no origin-candle concept to be "born inside").
     (d) swing_spent (added 2026-09-30, real ICT concept, NOT in the
         original five_bso_engine.py/SPEC.md) -- the zone's OWN
         timeframe confirms a same-kind swing (a swing HIGH for a SELL
@@ -196,6 +200,17 @@ POI VIOLATION / INVALIDATION (updated 2026-09-30 -- now FOUR triggers, not two; 
   kills the setup. A resting swing or entry candidate that would only
   form AFTER that moment never gets a trade -- it's a dead setup, not a
   missed one.
+- CLARIFIED (2026-10-02, user): dying/going spent is PER-POI, not a
+  day-level stop. A spent/dead POI simply stops producing entries
+  itself -- it does NOT mean trading stops for the rest of that day.
+  Any other still-alive candidate (another 4H zone armed in the same
+  direction, or a fresh POI that impacts later the same day) is
+  independently evaluated and still tradeable. Example: a SELL POI
+  impacts, price then sweeps PDL (abandoning 1H for the rest of that
+  day per the PDL/PDH rule above) and whips back up, confirming a swing
+  high that spends the original POI -- that POI is done, but 4H stays
+  armed regardless (PDL sweep only ever touches 1H), and any other live
+  SELL candidate that day is unaffected.
 - NOTE (2026-10-01, raised but NOT YET implemented/verified in code):
   the user distinguished "body close" (OB/RB/VI -- close merely INSIDE
   the zone, near edge) from "close through" (FVG -- close must pass all
