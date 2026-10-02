@@ -1388,8 +1388,26 @@ def apply_daily_bias_gate(engine, tf_tag: str, d_zones_full, display_tz: ZoneInf
             if getattr(z, "rejected", False) or z.impact_time is None:
                 continue
             controlling = daily_controlling_bias(d_zones_full, z.impact_time, minutes, mt)
-            if controlling is None or z.bullish == controlling:
-                continue  # no Daily bias yet, or already in favor -- fine either way
+            if controlling is None:
+                # 2026-10-02, user correction: "4H/1H setups only exist
+                # within whatever bias Daily has already decided" means
+                # NO bias yet blocks BOTH sides -- it is not the same as
+                # "already in favor." The old `controlling is None or
+                # z.bullish == controlling: continue` treated a true
+                # cold start (no Daily fact -- no confirmed swing, no
+                # POI impact, no MSS -- has happened yet) as free-pass
+                # approval for either direction. Caught on the first
+                # real walk-forward dataset (2025-01-02 start): 1H
+                # OB#10 traded BUY on 3 Jan 2025, four days before the
+                # Daily even confirmed its first swing, let alone set a
+                # bias (the first real Daily fact, FVG#2's impact, was
+                # 14 Jan). A trend nobody has read yet cannot authorize
+                # a trade in either direction.
+                z.rejected = True
+                z.rejected_reason = "NO_DAILY_BIAS_YET"
+                continue
+            if z.bullish == controlling:
+                continue  # already in favor -- fine
             if tf_tag == "h4":
                 z.rejected = True
                 z.rejected_reason = "NO_DAILY_AUTHORIZATION"

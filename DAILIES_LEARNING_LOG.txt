@@ -381,6 +381,44 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 SESSION LOG (newest first)
 ----------------------------
 
+2026-10-02 — Real bug fixed: no Daily bias yet must block BOTH sides on 4H/1H, not pass either through free
+- First real walk-forward find, on the 2025-01-02-start dataset: 1H
+  OB#10 traded BUY on 3 Jan 2025 -- FOUR DAYS before Daily even
+  confirmed its first swing, nine days before the first real Daily
+  fact of any kind (FVG#2's impact, 14 Jan). User's own words, direct
+  and correct: "how the hell we can have 1h setup on that day and we
+  do not even know if we are uptrend or downtrend?"
+- Root cause: apply_daily_bias_gate()'s `if controlling is None or
+  z.bullish == controlling: continue` treated "no Daily bias yet" the
+  same as "already in favor" -- both fell through to free-pass
+  approval. Wrong per the project's own already-stated rule, word for
+  word: "4H/1H setups only exist within whatever bias Daily has
+  already decided." No bias decided yet means no setup should be
+  tradeable in EITHER direction, not both directions approved by
+  default.
+- Fixed: `controlling is None` now rejects immediately, reason
+  NO_DAILY_BIAS_YET (a new, distinct reason string from
+  NO_DAILY_AUTHORIZATION -- that one means "bias exists, wrong side";
+  this one means "no bias exists at all yet"). Only
+  `z.bullish == controlling` (an actual established bias, matching
+  side) falls through as fine.
+- Verified against the 2025-01-02 start: OB#10 now correctly shows
+  NO_DAILY_BIAS_YET; 93 zones total affected in the Jan-Feb 2025
+  window; the new first real trade is H4 RB#23 SELL, impacting 14 Jan
+  -- the same real day Daily bias first existed at all (FVG#2's
+  impact). Exactly the shape expected: no trades possible before Daily
+  has said anything, trading begins the same day it does.
+- Explicitly NOT re-verified against the original Jan-Sep 2026
+  campaign -- user's direct call: that campaign is LOCKED, treated as
+  closed history, not re-litigated against every later fix. This fix,
+  and every future one, applies forward (2025 onward and whatever
+  comes after) using the same code/logic/approach, carrying the
+  lessons forward without re-running the frozen 2026 result. (The
+  original campaign's own structure made this fix a non-issue there
+  anyway -- it starts mid-stream with Daily-level context already
+  established from day one via old/stranded pre-dataset POIs, never a
+  true cold start the way 2025-01-02 genuinely is.)
+
 2026-10-02 — New dataset added: EURUSD_m1_BidAndAsk_2025-01-02_to_2026-09-30.csv
 - Real FXCM Historical Data Downloader Basic export (bid+ask, 1 Minute,
   EUR/USD), fetched in 3 ranges to stay under a real constraint hit
