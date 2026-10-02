@@ -1408,10 +1408,11 @@ def apply_daily_bias_gate(engine, tf_tag: str, d_zones_full, display_tz: ZoneInf
                 continue
             if z.bullish == controlling:
                 continue  # already in favor -- fine
-            if tf_tag == "h4":
-                z.rejected = True
-                z.rejected_reason = "NO_DAILY_AUTHORIZATION"
-                continue
+            # 2026-10-02, user instruction: 4H opposing is now authorized
+            # the same way 1H opposing already was -- a same-side opposing
+            # Daily POI impacting on this zone's own impact day (the real
+            # ARB/ORB mechanism). Previously 4H opposing was rejected
+            # unconditionally, no authorization path at all.
             date_str = z.impact_time.astimezone(display_tz).date().isoformat()
             if not daily_opposite_impacted_today(d_zones_full, z.bullish, date_str, display_tz):
                 z.rejected = True
