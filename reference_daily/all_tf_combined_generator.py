@@ -644,6 +644,16 @@ def compute_control_timeline(h4_engine, d_zones_full, minutes, mt: list, display
         for z in zones:
             if z.impact_time is None or z.impact_time > window_end:
                 continue
+            # A zone already rejected -- OPEN_INSIDE_ZONE (born dead, spec
+            # item (a) of respect: "cleared of OPEN_INSIDE_ZONE/body-close/
+            # anchor-break"), or NO_DAILY_AUTHORIZATION/NO_DAILY_BIAS_YET
+            # (Daily authorization is ALWAYS required, confirmed 2026-10-02)
+            # -- never counted as a real impact for CONTROL purposes. Real
+            # gap caught on a final pre-flight check: this zone loop never
+            # consulted z.rejected at all, so a born-dead or unauthorized
+            # zone could still flip control.
+            if getattr(z, "rejected", False):
+                continue
             controlling = daily_controlling_bias(d_zones_full, z.impact_time, minutes, mt)
             if controlling is None:
                 continue
