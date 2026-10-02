@@ -216,16 +216,10 @@ POI VIOLATION / INVALIDATION (updated 2026-09-30 -- now FOUR triggers, not two; 
   high that spends the original POI -- that POI is done, but 4H stays
   armed regardless (PDL sweep only ever touches 1H), and any other live
   SELL candidate that day is unaffected.
-- NOTE (2026-10-01, raised but NOT YET implemented/verified in code):
-  the user distinguished "body close" (OB/RB/VI -- close merely INSIDE
-  the zone, near edge) from "close through" (FVG -- close must pass all
-  the way to the FAR edge, the opposite side from impact) as two
-  DIFFERENT rules, not the same h4_close check applied uniformly. The
-  code as of commit a5b840d still applies the single near-edge check to
-  all three zone types including FVG -- an attempted fix was written,
-  verified via regen, then explicitly REVERTED by the user before
-  commit (see SESSION LOG 2026-10-01). Treat FVG's close-through rule as
-  an OPEN correction, not yet real in the code.
+- RETIRED (2026-10-02, user): the FVG "close-through" (far-edge)
+  distinction from OB/RB/VI's "body-close" (near-edge) rule, previously
+  tracked here as an open item, is no longer needed -- dropped. All
+  three zone types use the single near-edge h4_close check.
 
 RE-ENTRY (second entry rule)
 - After a plain stop-loss exit (not TP, not still open, not a breach),
@@ -391,6 +385,61 @@ CROSS-DAY CANDIDATES / "REACT DAY" (2026-09-29)
   code computes both sides raw so nothing is silently hidden, but those
   rows are conceptually dead on arrival for 4H, always, don't read them
   as candidates.
+  SUPERSEDED (2026-10-02): 4H can now also widen to the opposing side
+  via same-day Daily authorization, same as 1H -- see the LOCKED note
+  under BIAS above. The "4H never opposing" framing in this paragraph
+  no longer holds.
+
+CONTROL (2026-10-02, user-taught, RECORDED BUT NOT YET CODED -- same
+status the retired FVG close-through item used to have)
+- A new layer ABOVE Daily bias: which side is ACTIVELY being traded
+  right now (control), distinct from which side the trend structurally
+  favors (bias/MSS). Bias still only ever flips via Daily MSS, exactly
+  as before. Control moves faster and separately.
+- Default: the trend (with-bias) side holds full control (4H + 1H)
+  once its first in-favor/aggressive-in-favor POI is impacted.
+- OPPOSING POI IMPACTED (mere impact, not yet respected): control
+  becomes SHARED -- both sides now have a live 4H (trend's 4H
+  untouched; opposing's 4H activates, subject to the SAME gates every
+  zone already has: Daily authorization -- ALWAYS required, no
+  exception, confirmed 2026-10-02 -- premium/discount, session sweep).
+  The 1H slot is single-owner and HANDS OVER to the opposing side at
+  this moment (subject to its own PDL/PDH check) -- trend's 1H may
+  already have been vacated earlier by the ordinary PDH/PDL-sweep rule
+  (in which case opposing just claims the empty slot); either way the
+  result is the same: trend keeps 4H only, opposing gets 4H + pending
+  1H.
+- OPPOSING POI RESPECTED -> FULL control flip. "Respect" = ALL of:
+  (a) cleared of OPEN_INSIDE_ZONE/body-close/anchor-break (impacted
+  with a wick, closed clear of the zone), (b) PDL/PDH (its own side's
+  relevant extreme) swept, (c) its own swing confirms (swing_spent
+  fires). (b) and (c) are cause-and-effect and can land in either
+  order, same day or spread across multiple days -- pokes from the
+  OTHER side's PDH/PDL in between don't matter, only that the zone
+  itself never takes a body-close/anchor-break hit in the meantime.
+  The moment respect completes: opposing gets FULL control (4H + 1H),
+  trend stops completely (not just 1H).
+- OPPOSING POI DIES (body-close/anchor-break) BEFORE ever reaching
+  respect: no control change -- trend's dominance (which was never
+  actually lost, only its 1H was shared out) is simply reconfirmed.
+- TREND-DIRECTION POI IMPACTED while opposing holds full control:
+  control reverts to trend INSTANTLY, full (4H + 1H) -- mere impact is
+  enough, respect is NOT required to regain control (asymmetric: the
+  with-bias side always has the lower bar). Philosophy: the opposing
+  leg's job is to deliver price back to the trend POI (impulsive leg +
+  pullback), so reaching it ends the pullback's job immediately.
+- THAT REGAINED-CONTROL TREND POI THEN DIES:
+  - via body-close/OPEN_INSIDE_ZONE -> control reverts to opposing,
+    but TACTICAL ONLY -- bias/MSS has NOT flipped, price can still do
+    anything, same rules reapply recursively to the next POI hit.
+    Opposing comes back with FULL control immediately (respect is
+    BANKED from before -- does not need to be rebuilt from scratch).
+  - via anchor-break -> this IS a real Daily MSS flip, structural, not
+    tactical -- the whole framework mirrors from here (the new
+    direction becomes the new trend side).
+- Open items: still needs actual code design (ledger columns, how
+  "control" is tracked/displayed, interaction with same-leg
+  supersession) before implementation -- not started.
 
 BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 - Visible in BOTH 5m_trades_ledger.csv AND the on-chart 5m trades
