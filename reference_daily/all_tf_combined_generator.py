@@ -635,11 +635,12 @@ def compute_control_timeline(h4_engine, d_zones_full, minutes, mt: list, display
     h4_bar_starts = [b.start for b in h4_engine.w]
 
     # Step 1: classify every 4H zone impacted up to window_end as trend
-    # or opposing (same test apply_daily_bias_gate already uses), and
-    # for opposing zones work out whether/when they die hard or earn
-    # respect.
-    events = []  # (time, kind, side) kind in impact_trend/impact_opp/opp_death/opp_respect
-    for zones in (h4_engine.ob_zones, h4_engine.rb_zones, h4_engine.fvg_zones):
+    # or opposing (same test apply_daily_bias_gate already uses).
+    # events: (time, kind, side, zone_id) -- zone_id is (ptype, z.id),
+    # used to correlate a trend zone's own death back to whichever zone
+    # is actually the one currently holding control (see Step 2).
+    events = []
+    for zones, ptype in ((h4_engine.ob_zones, "OB"), (h4_engine.rb_zones, "RB"), (h4_engine.fvg_zones, "FVG")):
         for z in zones:
             if z.impact_time is None or z.impact_time > window_end:
                 continue
@@ -647,14 +648,26 @@ def compute_control_timeline(h4_engine, d_zones_full, minutes, mt: list, display
             if controlling is None:
                 continue
             side = "BUY" if z.bullish else "SELL"
-            if z.bullish == controlling:
-                events.append((z.impact_time, "impact_trend", side))
-                continue
-            events.append((z.impact_time, "impact_opp", side))
+            zone_id = (ptype, z.id)
             invalidated_at, reason = structural_invalid_at(z, z.impact_time, h4_engine.w, h4_bar_starts,
                                                              minutes, mt, h4_engine.events)
+            if z.bullish == controlling:
+                events.append((z.impact_time, "impact_trend", side, zone_id))
+                # CONTROL spec item 6: what happens to the SPECIFIC trend
+                # zone currently holding control if it later dies.
+                # body-close/open-inside-zone -> tactical reversion.
+                # anchor-break -> structural (real MSS, handled for free
+                # by future zones' classification already using the
+                # post-flip bias -- but CONTROL itself must also flip
+                # immediately, not wait for the next zone impact).
+                if reason == "h4_close":
+                    events.append((invalidated_at, "trend_death_tactical", side, zone_id))
+                elif reason == "swing_break":
+                    events.append((invalidated_at, "trend_death_structural", side, zone_id))
+                continue
+            events.append((z.impact_time, "impact_opp", side, zone_id))
             if reason in ("h4_close", "swing_break"):
-                events.append((invalidated_at, "opp_death", side))
+                events.append((invalidated_at, "opp_death", side, zone_id))
             elif reason == "swing_spent":
                 date_str = z.impact_time.astimezone(display_tz).date().isoformat()
                 sweep_t = find_side_sweep_time_on_or_after(minutes, mt, side, date_str, display_tz)
@@ -664,22 +677,50 @@ def compute_control_timeline(h4_engine, d_zones_full, minutes, mt: list, display
                 hard_t, _ = structural_hard_death_between(z, invalidated_at, respect_t,
                                                            h4_engine.w, h4_bar_starts, minutes, mt)
                 if hard_t is not None:
-                    events.append((hard_t, "opp_death", side))
+                    events.append((hard_t, "opp_death", side, zone_id))
                 else:
-                    events.append((respect_t, "opp_respect", side))
+                    events.append((respect_t, "opp_respect", side, zone_id))
             # reason is None: never invalidated in available data -- stays pending, no resolution.
 
-    events.sort(key=lambda e: e[0])
+    # Step 1b: NONE control -- a standalone, POI-independent signal.
+    # Whenever a side's relevant extreme gets swept AND a matching-kind
+    # 4H swing confirms (either order), that side loses control. If
+    # there's a live opposing zone to inherit it, Step 1 already
+    # produced an opp_respect event for that exact pairing -- these
+    # standalone events only matter when there is none (see Step 2's
+    # de-dup: a "strip" is only acted on if the side being stripped is
+    # still the sole/shared controller, i.e. not already mid-transfer).
+    for side, sweep_role, confirm_kind in (("BUY", "BUY", 1), ("SELL", "SELL", 0)):
+        y0, m0, d0 = minutes[0].t.astimezone(display_tz).date().year, \
+            minutes[0].t.astimezone(display_tz).date().month, minutes[0].t.astimezone(display_tz).date().day
+        cur = datetime(y0, m0, d0).date()
+        end_date = window_end.astimezone(display_tz).date()
+        while cur <= end_date:
+            date_str = cur.isoformat()
+            extreme = find_prev_day_extreme(minutes, mt, date_str, display_tz, sweep_role)
+            t = find_prev_day_sweep_time(minutes, mt, date_str, display_tz, sweep_role, extreme)
+            if t is not None and t <= window_end:
+                events.append((t, "sweep", side, None))
+            cur += timedelta(days=1)
+        for e in h4_engine.events:
+            if e.kind == confirm_kind and e.at is not None and e.at <= window_end:
+                events.append((e.at, "swing_confirm", side, None))
 
-    # Step 2: replay into a state machine. banked_respect persists until
-    # the trend side itself changes (a real Daily MSS flip) -- "the
-    # whole framework mirrors from here" happens for free since trend/
-    # opposing classification above already used the post-flip bias.
+    # At equal timestamps, zone-tied events (respect/death/impact) are
+    # processed BEFORE the generic sweep/swing_confirm signals, so a real
+    # respect transfer always wins over a same-instant generic strip
+    # (its own flag-consumption above still handles the ongoing case).
+    events.sort(key=lambda e: (e[0], e[1] in ("sweep", "swing_confirm")))
+
+    # Step 2: replay into a state machine.
     checkpoints = []
     state = "NONE"
     one_h_owner = None
     banked_respect = {"BUY": False, "SELL": False}
+    controlling_trend_zone = None  # (ptype, id) of whichever trend zone currently anchors full control
     last_trend_side = None
+    swept_flag = {"BUY": False, "SELL": False}
+    confirmed_flag = {"BUY": False, "SELL": False}
 
     def opposite(s):
         return "SELL" if s == "BUY" else "BUY"
@@ -687,7 +728,15 @@ def compute_control_timeline(h4_engine, d_zones_full, minutes, mt: list, display
     def record(t):
         checkpoints.append((t, state, one_h_owner))
 
-    for t, kind, side in events:
+    def grant_trend(t, side, zone_id):
+        nonlocal state, one_h_owner, controlling_trend_zone
+        state = side
+        one_h_owner = side
+        controlling_trend_zone = zone_id
+        swept_flag[side] = confirmed_flag[side] = False
+        record(t)
+
+    for t, kind, side, zone_id in events:
         controlling = daily_controlling_bias(d_zones_full, t, minutes, mt)
         trend_side = "BUY" if controlling else "SELL" if controlling is False else None
         if trend_side is not None and trend_side != last_trend_side:
@@ -696,21 +745,58 @@ def compute_control_timeline(h4_engine, d_zones_full, minutes, mt: list, display
 
         if kind == "impact_trend":
             if state != side:
-                state = side
-                one_h_owner = side
-                record(t)
+                grant_trend(t, side, zone_id)
         elif kind == "impact_opp":
             if state == opposite(side) or state == "NONE":
                 state = "BOTH"
                 one_h_owner = side
+                swept_flag[side] = confirmed_flag[side] = False
                 record(t)
         elif kind == "opp_death":
             pass  # no control change -- trend's dominance just reconfirmed
         elif kind == "opp_respect":
             banked_respect[side] = True
+            # Consume the generic sweep/swing-confirm flags for this side
+            # -- this respect IS exactly that pairing, zone-tied; without
+            # this reset the generic standalone check below would
+            # immediately re-fire on the same already-used signal and
+            # strip the control this event just granted.
+            swept_flag[side] = confirmed_flag[side] = False
             if state != side:
                 state = side
                 one_h_owner = side
+                controlling_trend_zone = None
+                record(t)
+        elif kind == "trend_death_tactical":
+            if controlling_trend_zone == zone_id and state == side:
+                if banked_respect[opposite(side)]:
+                    state = opposite(side)
+                    one_h_owner = opposite(side)
+                else:
+                    state = "NONE"
+                    one_h_owner = None
+                controlling_trend_zone = None
+                record(t)
+        elif kind == "trend_death_structural":
+            if controlling_trend_zone == zone_id and state == side:
+                # Real Daily MSS flip -- "the whole framework mirrors
+                # from here": the opposite side takes automatic FULL
+                # control immediately, not just on its next own impact.
+                state = opposite(side)
+                one_h_owner = opposite(side)
+                controlling_trend_zone = None
+                banked_respect = {"BUY": False, "SELL": False}
+                record(t)
+        elif kind in ("sweep", "swing_confirm"):
+            if kind == "sweep":
+                swept_flag[side] = True
+            else:
+                confirmed_flag[side] = True
+            if swept_flag[side] and confirmed_flag[side] and state in (side, "BOTH"):
+                state = "NONE"
+                one_h_owner = None
+                controlling_trend_zone = None
+                swept_flag[side] = confirmed_flag[side] = False
                 record(t)
 
     return checkpoints
