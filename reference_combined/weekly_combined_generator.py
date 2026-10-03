@@ -95,6 +95,21 @@ RB_STATE = {0: "IRB", 1: "ARB", 2: "ORB", 3: "SPENT", 4: "AIRB"}
 FVG_STATE = {0: "IFVG", 1: "AFVG", 2: "OFVG", 3: "SPENT"}
 VI_STATE = {0: "IVI", 1: "AVI", 2: "OVI", 3: "SPENT"}
 
+# VI KILL-SWITCH (2026-10-03, explicit user instruction: "hide it in the
+# code... make sure it never outputs or affects the other code... I will
+# not tolerate you saying later I forgot to hide the VI"). VI needs
+# careful review before it's trusted -- this is the SINGLE chokepoint
+# every VI zone creation path (continuous IVI scan, AVI mid-arm, IVI
+# range-scan on break) funnels through via vi_add(), so flipping this one
+# flag is the only thing that can ever turn VI zones on or off. With it
+# False: vi_add() returns -1 immediately, self.vi_zones/self.vi_active
+# stay permanently empty, and every downstream consumer (CONTROL, the
+# bias gate, compute_5m_trades, the ledger, Pine output) already treats
+# an empty zones list as "nothing to do" -- so VI being disabled here is
+# structurally guaranteed to have zero effect anywhere else, not just a
+# matter of remembering not to call something.
+VI_ENABLED = False
+
 
 class WeeklyCombinedEngine:
     """One shared swing/regime/MSS pass driving OB, RB and FVG together.
@@ -609,6 +624,8 @@ class WeeklyCombinedEngine:
 
     def vi_add(self, left: int, zb: float, zt: float, bull: bool, trigger_k: int,
                origin: int, trigger_time: Optional[datetime], protect_idx: int = -1) -> int:
+        if not VI_ENABLED:
+            return -1
         if self.vi_claimed(left, bull):
             return -1
         eligible = trigger_k if origin == 1 else -1
