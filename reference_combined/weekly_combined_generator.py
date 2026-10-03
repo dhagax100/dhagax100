@@ -1044,6 +1044,16 @@ class WeeklyCombinedEngine:
             elif touch is None and strand_ev is not None:
                 z.state = 2
                 z.stop_reason = "STRAND"
+        # Multi-year history fix (2026-10-03, real bug a full 2021-2026 run
+        # exposed): unlike ob_active (pruned right after its own loop,
+        # above), rb_active was never pruned here -- every RB zone ever
+        # created stayed in it forever, so this loop re-scanned the FULL
+        # cumulative zone count on EVERY candle, for the rest of the run.
+        # With years of history (thousands of zones x tens of thousands of
+        # candles) that's the actual multi-minute cost, not the handful of
+        # zones genuinely still active at any one time. Same prune rule as
+        # OB's own line above.
+        self.rb_active = [i for i in self.rb_active if not self.rb_zones[i].rejected and self.rb_zones[i].state != 3]
 
         # ---- FVG lifecycle: IMPACT + STRAND + CLOSE_THROUGH (IFVG only) + STRUCTURAL_BREACH ----
         for zidx in self.fvg_active:
@@ -1095,6 +1105,9 @@ class WeeklyCombinedEngine:
             elif touch is None and strand_ev is not None:
                 z.state = 2
                 z.stop_reason = "STRAND"
+        # Same multi-year prune fix as rb_active above -- fvg_active was
+        # also never pruned, growing unbounded for the life of the run.
+        self.fvg_active = [i for i in self.fvg_active if not self.fvg_zones[i].rejected and self.fvg_zones[i].state != 3]
 
         # ---- VI lifecycle: IMPACT + STRAND + CLOSE_THROUGH (IVI only) + STRUCTURAL_BREACH ----
         for zidx in self.vi_active:
@@ -1146,6 +1159,11 @@ class WeeklyCombinedEngine:
             elif touch is None and strand_ev is not None:
                 z.state = 2
                 z.stop_reason = "STRAND"
+        # Same multi-year prune fix as rb_active/fvg_active above -- harmless
+        # today since VI_ENABLED gates vi_zones/vi_active to always empty,
+        # but kept consistent so re-enabling VI later doesn't reintroduce
+        # the same unbounded-list cost.
+        self.vi_active = [i for i in self.vi_active if not self.vi_zones[i].rejected and self.vi_zones[i].state != 3]
 
     def process(self, k: int) -> None:
         if k == 0:
