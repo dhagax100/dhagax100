@@ -1729,20 +1729,36 @@ def daily_controlling_bias(d_zones_full, as_of: "datetime", minutes=None, mt: li
     (off FVG#1, despite it going spent 15 Jan) instead of the wrong
     "undefined" gap; 20 Jan still correctly flips to BUY at 11:10, the
     real MSS_UP minute."""
-    mss_candidates = []
-    if minutes is not None and mt is not None and hasattr(d_zones_full, "msses") and hasattr(d_zones_full, "w"):
+    # Multi-year history fix (2026-10-03, real bug a full-2021-2026 run
+    # exposed -- a 6-week window never had enough zones/MSS/minutes for
+    # this to matter): this used to re-walk minute-by-minute, from each
+    # Daily MSS's own break forward, to find that MSS's confirming
+    # minute -- EVERY TIME this function is called, i.e. once per 4H/1H
+    # zone (apply_daily_bias_gate calls this for every zone with an
+    # impact_time). A MSS's confirming minute is a fixed fact, totally
+    # independent of `as_of` -- as_of only decides whether that fixed
+    # minute counts for THIS query. So compute it once per MSS, cached
+    # on d_zones_full itself (same object reused across every zone/every
+    # 4H+1H call in one run), and reuse the cached, already-sorted list
+    # from then on -- O(zones x MSS) instead of O(zones x MSS x minutes).
+    mss_confirms = getattr(d_zones_full, "_mss_confirm_cache", None)
+    if mss_confirms is None and minutes is not None and mt is not None \
+            and hasattr(d_zones_full, "msses") and hasattr(d_zones_full, "w"):
+        mss_confirms = []
         for x in d_zones_full.msses:
             broken_start = d_zones_full.w[x.broken].start
             idx = bisect_right(mt, broken_start)
             for m in minutes[idx:]:
-                if m.t > as_of:
-                    break
                 if (m.h > x.price) if x.up else (m.l < x.price):
-                    mss_candidates.append((m.t, x.up))
+                    mss_confirms.append((m.t, x.up))
                     break
-    if mss_candidates:
-        mss_candidates.sort(key=lambda c: c[0])
-        return mss_candidates[-1][1]
+        mss_confirms.sort(key=lambda c: c[0])
+        d_zones_full._mss_confirm_cache = mss_confirms
+    if mss_confirms:
+        confirm_times = [c[0] for c in mss_confirms]
+        pos = bisect_right(confirm_times, as_of)
+        if pos > 0:
+            return mss_confirms[pos - 1][1]
 
     candidates = []
     for zones in (d_zones_full.ob_zones, d_zones_full.rb_zones, d_zones_full.fvg_zones, d_zones_full.vi_zones):
