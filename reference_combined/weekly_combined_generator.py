@@ -1528,18 +1528,40 @@ def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int
             bull.append(z.bullish)
         return left, top, bottom, fallback_right, impact_stamp, has_impact, col, audit, rank, grank, bull
 
-    ob_shown = engine.ob_zones[-ob_cap:]
+    def _live_capped(zones, status_fn, cap):
+        """Multi-year history fix (2026-10-03, user: propose a plan to keep
+        old-but-still-tradeable POIs from EVER disappearing off the chart
+        just because years of newer zones were born after them).
+        Previously this was a flat `zones[-cap:]` -- most-recent-N by birth
+        date -- which is fine for a short history but silently drops an
+        old, still-live zone once cap newer zones exist, even though the
+        Python ledger (uncapped) would still correctly trade off it. Split
+        instead: every zone still alive (status != SPENT) is ALWAYS kept,
+        no cap -- there are only ever a handful of those at once, so this
+        never risks the Pine compile limit -- and the remaining cap budget
+        is filled with the most-recent already-dead (SPENT) zones, purely
+        for historical/visual context. Order preserved (not re-sorted)."""
+        live = [z for z in zones if not getattr(z, "rejected", False)
+                and status_fn(z, engine.msses, engine.w) != "SPENT"]
+        dead = [z for z in zones if not getattr(z, "rejected", False)
+                and status_fn(z, engine.msses, engine.w) == "SPENT"]
+        remaining = max(cap - len(live), 0)
+        dead_recent = dead[-remaining:] if remaining > 0 else []
+        keep_ids = {z.id for z in live} | {z.id for z in dead_recent}
+        return [z for z in zones if z.id in keep_ids]
+
+    ob_shown = _live_capped(engine.ob_zones, ob_status, ob_cap)
     ob_left, ob_top, ob_bottom, ob_fallback_right, ob_impact_stamp, ob_has_impact, ob_col, ob_audit, ob_rank, ob_grank, ob_bull = _box_arrays(ob_shown, len(engine.ob_zones), lambda z: z.candle, "OB")
     for z in ob_shown:
         if not z.rejected:
             ob_col.append(COLOUR_CODE[wob.pine_colour(z)])
 
-    rb_shown = engine.rb_zones[-rb_cap:]
+    rb_shown = _live_capped(engine.rb_zones, rb_status, rb_cap)
     rb_left, rb_top, rb_bottom, rb_fallback_right, rb_impact_stamp, rb_has_impact, rb_col, rb_audit, rb_rank, rb_grank, rb_bull = _box_arrays(rb_shown, len(engine.rb_zones), lambda z: z.candle, "RB")
     for z in rb_shown:
         rb_col.append(COLOUR_CODE[wrb.rb_colour(z)])
 
-    fvg_shown = engine.fvg_zones[-fvg_cap:]
+    fvg_shown = _live_capped(engine.fvg_zones, fvg_status, fvg_cap)
     fvg_left, fvg_top, fvg_bottom, fvg_fallback_right, fvg_impact_stamp, fvg_has_impact, fvg_col, fvg_audit, fvg_rank, fvg_grank, fvg_bull = _box_arrays(fvg_shown, len(engine.fvg_zones), lambda z: z.left, "FVG")
     for z in fvg_shown:
         fvg_col.append(COLOUR_CODE[wfvg.fvg_colour(z)])
