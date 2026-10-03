@@ -58,3 +58,13 @@ reference_daily/h4_tf_swings.csv
 reference_daily/h4_tf_report.txt
 reference_daily/h1_tf_swings.csv
 reference_daily/h1_tf_report.txt
+reference_daily/5m_tf_swings.csv
+reference_daily/5m_tf_report.txt
+reference_daily/5m_trades_ledger.csv
+reference_daily/TODAY.txt
+reference_daily/dailies_since.txt
+# Convenience concatenation of already-versioned year-range files
+# (2021-2022 + 2023-2024 + 2025-2026) built locally to run the
+# generator against one continuous CSV -- regenerate with cat, don't
+# duplicate ~190MB already tracked individually.
+data/EURUSD_m1_BidAndAsk_2021-01-03_to_2026-09-30.csv
