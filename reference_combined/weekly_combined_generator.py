@@ -28,8 +28,26 @@ had before. here [structural breach], yes, is a must." So:
   - RB: IMPACT + STRAND + STRUCTURAL_BREACH (no close-through -- unchanged).
   - FVG: IMPACT + STRAND + CLOSE_THROUGH (IFVG only) + STRUCTURAL_BREACH
     (unchanged -- FVG already had all four).
-VI is explicitly left out of this pass (put on hold by the user, unresolved
-raw-data weekend-gap defect).
+  - VI: IMPACT + STRAND + CLOSE_THROUGH (IVI only) + STRUCTURAL_BREACH --
+    same shape as FVG.
+
+VI INTEGRATION (2026-10-03): originally left out of this pass, "put on
+hold by the user, unresolved raw-data weekend-gap defect." The likely
+defect was real raw-data Sunday hours leaking into the feed, which
+could have produced a spurious close[k-1]/open[k] gap at the Friday-
+close-to-Monday-open boundary on every intraday timeframe this engine
+is reused for (Daily/4H/1H/5m, via aggregate_days/aggregate_hours) --
+VI's own construction had never been run on anything but true Weekly
+bars, where that boundary is expected, not a false signal. The source
+data is now verified Sunday-clean (confirmed 2026-10-02/03, the
+Sunday-minute-drop fix already in reference_daily/
+all_tf_combined_generator.py), so the user confirmed this is resolved
+and folded VI in the same way FVG was: a single-pass port of
+reference_vi/weekly_vi_generator.py's WeeklyVIEngine, ported verbatim
+(2-candle close[1]/open[2] gap construction, IVI/AVI/OVI/SPENT
+lifecycle, STRUCTURAL_BREACH via protect_level, CLOSE_THROUGH for IVI
+only) sharing this file's ONE swing/regime/MSS clock instead of VI's
+own separate copy.
 
 CORRECTNESS CHECK (this file's own responsibility, not a separate task):
 running this single shared pass must produce EXACTLY the same OB/RB/FVG
@@ -61,17 +79,21 @@ from zoneinfo import ZoneInfo
 # weekly_fvg_generator.py. Both are tried; the flat same-folder case is
 # checked first since that is the actual local workflow.
 _here = Path(__file__).resolve().parent
-for _p in (_here, _here.parent / "reference", _here.parent / "reference_rb", _here.parent / "reference_fvg"):
+for _p in (_here, _here.parent / "reference", _here.parent / "reference_rb", _here.parent / "reference_fvg",
+           _here.parent / "reference_vi"):
     sys.path.insert(0, str(_p))
 import weekly_ob_generator as wob        # noqa: E402 -- Minute/Week/Event/MSS/Zone,
                                           # load_minutes, aggregate_weeks, iso helpers
 import weekly_rb_generator as wrb        # noqa: E402 -- RBZone
 import weekly_fvg_generator as wfvg      # noqa: E402 -- FVGZone
+import weekly_vi_generator as wvi        # noqa: E402 -- VIZone (2026-10-03: folded in,
+                                          # previously held back -- see VI integration note below)
 
 UTC = timezone.utc
 OB_STATE = {0: "IFOB", 1: "AOB", 2: "OOB", 3: "SPENT", 4: "AIFOB"}
 RB_STATE = {0: "IRB", 1: "ARB", 2: "ORB", 3: "SPENT", 4: "AIRB"}
 FVG_STATE = {0: "IFVG", 1: "AFVG", 2: "OFVG", 3: "SPENT"}
+VI_STATE = {0: "IVI", 1: "AVI", 2: "OVI", 3: "SPENT"}
 
 
 class WeeklyCombinedEngine:
@@ -142,6 +164,13 @@ class WeeklyCombinedEngine:
         self._fvg_claimed_pairs: set = set()
         self.fvg_bull_scan_upto = -1
         self.fvg_bear_scan_upto = -1
+
+        # ---- VI-specific state (mirrors WeeklyVIEngine) ----
+        self.vi_zones: List["wvi.VIZone"] = []
+        self.vi_active: List[int] = []
+        self._vi_claimed_pairs: set = set()
+        self.vi_bull_scan_upto = -1
+        self.vi_bear_scan_upto = -1
 
     # =====================================================================
     # SHARED HELPERS -- copied verbatim from weekly_ob_generator.py's
@@ -561,6 +590,113 @@ class WeeklyCombinedEngine:
                 return m.t
         return None
 
+    def week_open_time(self, k: int) -> datetime:
+        """Ported verbatim from WeeklyVIEngine -- the exact M1 minute week
+        k's own OPEN actually printed (the first observed row in that
+        week), the real trigger moment for VI's continuous IVI scan."""
+        wk = self.w[k]
+        return self.m[wk.first].t
+
+    # =====================================================================
+    # VI-SPECIFIC: zone construction (2-candle close/open gap). Ported
+    # verbatim from reference_vi/weekly_vi_generator.py's WeeklyVIEngine --
+    # same structure as the FVG block above, just the gap test itself
+    # differs (close[1]/open[2], not wick-to-wick across 3 candles).
+    # =====================================================================
+
+    def vi_claimed(self, left: int, bull: bool) -> bool:
+        return (left, bull) in self._vi_claimed_pairs
+
+    def vi_add(self, left: int, zb: float, zt: float, bull: bool, trigger_k: int,
+               origin: int, trigger_time: Optional[datetime], protect_idx: int = -1) -> int:
+        if self.vi_claimed(left, bull):
+            return -1
+        eligible = trigger_k if origin == 1 else -1
+        eligible_time = trigger_time if origin == 1 else None
+        protect_level = None
+        if 0 <= protect_idx < len(self.w):
+            protect_level = self.w[protect_idx].l if bull else self.w[protect_idx].h
+        z = wvi.VIZone(len(self.vi_zones) + 1, left, zb, zt, bull, trigger_k, eligible, -1,
+                        origin, origin, origin, trigger_time=trigger_time, eligible_time=eligible_time,
+                        protect_level=protect_level)
+        self.vi_zones.append(z)
+        self.vi_active.append(len(self.vi_zones) - 1)
+        self._vi_claimed_pairs.add((left, bull))
+        return len(self.vi_zones) - 1
+
+    def vi_try_create_ivis(self, lo: int, hi: int, bullish: bool, trigger_k: int,
+                            trigger_time: Optional[datetime], protect_idx: int) -> None:
+        if hi < lo + 1:
+            return
+        for c2 in range(lo + 1, hi + 1):
+            c1 = c2 - 1
+            op1, cl1 = self.w[c1].o, self.w[c1].c
+            op2, cl2 = self.w[c2].o, self.w[c2].c
+            is_bull1 = cl1 >= op1
+            if bullish:
+                if cl1 < op2 and cl2 > cl1 and is_bull1:
+                    self.vi_add(c1, cl1, op2, True, trigger_k, 0, trigger_time, protect_idx)
+            else:
+                if cl1 > op2 and cl2 < cl1 and not is_bull1:
+                    self.vi_add(c1, op2, cl1, False, trigger_k, 0, trigger_time, protect_idx)
+
+    def vi_try_create_avis(self, lo: int, hi: int, bullish: bool, trigger_k: int,
+                            guard_price: float, trigger_time: Optional[datetime], protect_idx: int) -> None:
+        """`bullish` selects which retracement-leg CASE this is (True = a
+        down-retracement inside a bullish regime, False = an up-retracement
+        inside a bearish regime) -- it is NOT the resulting zone's own side.
+        CORRECTED 2026-10-03 while porting: reference_vi/weekly_vi_generator.py's
+        own try_create_avis has the EXACT bug found and fixed in FVG on
+        2026-09-29 (fvg_try_create_afvgs) -- "Aggressives... are traded the
+        opposite direction of the trend... period." The standalone VI file
+        passes the case-selector straight through as the zone's own side
+        (bullish case -> BUY zone); fixed here the same way FVG was: a
+        down-retracement inside an uptrend is tagged SELL, an up-retracement
+        inside a downtrend is tagged BUY."""
+        if hi < lo + 1:
+            return
+        for c2 in range(lo + 1, hi + 1):
+            c1 = c2 - 1
+            op1, cl1 = self.w[c1].o, self.w[c1].c
+            op2, cl2 = self.w[c2].o, self.w[c2].c
+            is_bull1 = cl1 >= op1
+            if bullish:
+                if cl1 > op2 and cl2 < cl1 and not is_bull1:
+                    l1, l2 = self.w[c1].l, self.w[c2].l
+                    if l1 > guard_price and l2 > guard_price:
+                        self.vi_add(c1, op2, cl1, False, trigger_k, 1, trigger_time, protect_idx)
+            else:
+                if cl1 < op2 and cl2 > cl1 and is_bull1:
+                    h1, h2 = self.w[c1].h, self.w[c2].h
+                    if h1 < guard_price and h2 < guard_price:
+                        self.vi_add(c1, cl1, op2, True, trigger_k, 1, trigger_time, protect_idx)
+
+    def vi_try_bull_avi(self, preg: int, armed_swh: int, new_swl_i: int, new_swl_p: float, k: int, at: Optional[datetime]) -> None:
+        if preg != 1 or armed_swh < 0:
+            return
+        if any(self.w[v].h >= self.w[armed_swh].h for v in range(armed_swh + 1, new_swl_i + 1)):
+            return
+        swl_ext = new_swl_i + 1 if new_swl_i + 1 <= k - 1 else new_swl_i
+        lo = max(0, min(armed_swh - 1, swl_ext))
+        hi = max(armed_swh - 1, swl_ext)
+        # protect_idx must match the zone's FINAL tag (SELL, after the
+        # flip above), not the "bullish" case-selector -- same fix as
+        # fvg_try_bull_afvg's own comment explains.
+        self.vi_try_create_avis(lo, hi, True, k, new_swl_p, at, self.last_h)
+
+    def vi_try_bear_avi(self, preg: int, armed_swl: int, new_swh_i: int, new_swh_p: float, k: int, at: Optional[datetime]) -> None:
+        if preg != 2 or armed_swl < 0:
+            return
+        if any(self.w[v].l <= self.w[armed_swl].l for v in range(armed_swl + 1, new_swh_i + 1)):
+            return
+        swh_ext = new_swh_i + 1 if new_swh_i + 1 <= k - 1 else new_swh_i
+        lo = max(0, min(armed_swl - 1, swh_ext))
+        hi = max(armed_swl - 1, swh_ext)
+        # See vi_try_bull_avi's own comment -- same fix, mirrored: this
+        # zone's final tag is BUY, so protect_idx must be a swing LOW
+        # (self.last_l), not self.last_h.
+        self.vi_try_create_avis(lo, hi, False, k, new_swh_p, at, self.last_l)
+
     # =====================================================================
     # SHARED consume_break / mid_arm / finish_events_and_lifecycle -- calls
     # each POI type's own creation methods off the SAME break/mid-arm event,
@@ -605,6 +741,8 @@ class WeeklyCombinedEngine:
                 bt = self.break_time(k, True, self.h_price)
                 self.fvg_try_create_ifvgs(lo, hi, True, k, bt, self.last_l)
                 self.fvg_bull_scan_upto = hi
+                self.vi_try_create_ivis(lo, hi, True, k, bt, self.last_l)
+                self.vi_bull_scan_upto = hi
 
             # RB: promote pending-alive AIRB, or fresh IRB anchored on the
             # opposite reference swing (self.last_l) -- no range scan needed,
@@ -655,6 +793,8 @@ class WeeklyCombinedEngine:
             bt = self.break_time(k, False, self.l_price)
             self.fvg_try_create_ifvgs(lo, hi, False, k, bt, self.last_h)
             self.fvg_bear_scan_upto = hi
+            self.vi_try_create_ivis(lo, hi, False, k, bt, self.last_h)
+            self.vi_bear_scan_upto = hi
 
         rb_promoted = False
         if 0 <= self.pend_bear_airb < len(self.rb_zones) and self.rb_zones[self.pend_bear_airb].state == 4:
@@ -684,6 +824,7 @@ class WeeklyCombinedEngine:
                 self.pend_bull_airb = -1
                 self.ob_try_bear_aob(preg, armed_l, ev.swing, ev.price, k)
                 self.fvg_try_bear_afvg(preg, armed_l, ev.swing, ev.price, k, ev.at)
+                self.vi_try_bear_avi(preg, armed_l, ev.swing, ev.price, k, ev.at)
                 self.rb_try_bear_arb(preg, armed_l, ev.swing, k, ev.at)
                 if self.pend_bear_aifob < 0:
                     self.pend_bear_aifob = self.ob_try_bear_aifob(preg, self.have_l, armed_l, self.last_h, ev.swing, k)
@@ -697,6 +838,7 @@ class WeeklyCombinedEngine:
                 self.pend_bear_airb = -1
                 self.ob_try_bull_aob(preg, armed_h, ev.swing, ev.price, k)
                 self.fvg_try_bull_afvg(preg, armed_h, ev.swing, ev.price, k, ev.at)
+                self.vi_try_bull_avi(preg, armed_h, ev.swing, ev.price, k, ev.at)
                 self.rb_try_bull_arb(preg, armed_h, ev.swing, k, ev.at)
                 if self.pend_bull_aifob < 0:
                     self.pend_bull_aifob = self.ob_try_bull_aifob(preg, self.have_h, armed_h, self.last_l, ev.swing, k)
@@ -757,6 +899,11 @@ class WeeklyCombinedEngine:
                     if z.bullish and z.state == 0 and z.eligible < 0 and k > z.trigger:
                         z.eligible = k
                         z.eligible_time = ev.at
+                for zidx in self.vi_active:
+                    z = self.vi_zones[zidx]
+                    if z.bullish and z.state == 0 and z.eligible < 0 and k > z.trigger:
+                        z.eligible = k
+                        z.eligible_time = ev.at
                 for zidx in self.rb_active:
                     z = self.rb_zones[zidx]
                     if z.bullish and z.state in (0, 4) and z.eligible < 0 and k > z.trigger:
@@ -782,6 +929,11 @@ class WeeklyCombinedEngine:
                             z.eligible_swing_price = ev.price
                 for zidx in self.fvg_active:
                     z = self.fvg_zones[zidx]
+                    if not z.bullish and z.state == 0 and z.eligible < 0 and k > z.trigger:
+                        z.eligible = k
+                        z.eligible_time = ev.at
+                for zidx in self.vi_active:
+                    z = self.vi_zones[zidx]
                     if not z.bullish and z.state == 0 and z.eligible < 0 and k > z.trigger:
                         z.eligible = k
                         z.eligible_time = ev.at
@@ -927,6 +1079,57 @@ class WeeklyCombinedEngine:
                 z.state = 2
                 z.stop_reason = "STRAND"
 
+        # ---- VI lifecycle: IMPACT + STRAND + CLOSE_THROUGH (IVI only) + STRUCTURAL_BREACH ----
+        for zidx in self.vi_active:
+            z = self.vi_zones[zidx]
+            if z.state == 3:
+                continue
+            touch = None
+            if z.eligible >= 0 and k >= z.eligible:
+                touch = self.first_touch(z.eligible_time or self.w[k].start, k, z.bullish, z.zb, z.zt)
+            strand_ev = None
+            if z.state in (0, 1) and z.eligible != -1:
+                for ev in self.events[before:total]:
+                    if ev.confirm != k:
+                        continue
+                    stranded = (z.bullish and ev.kind == 1 and ev.price > z.zt) or (not z.bullish and ev.kind == 0 and ev.price < z.zb)
+                    if stranded:
+                        strand_ev = ev
+                        break
+            close_through_at = None
+            if z.origin == 0 and z.state == 0 and z.eligible != -1 and k >= z.eligible:
+                c = self.w[k].c
+                closed_through = (c < z.zb) if z.bullish else (c > z.zt)
+                if closed_through:
+                    close_through_at = self.w[k].end
+            breach_at = None
+            if z.state in (0, 1) and z.protect_level is not None:
+                breach_at = self.break_time(k, not z.bullish, z.protect_level)
+            candidates = []
+            if touch is not None:
+                candidates.append(("IMPACT", touch))
+            if strand_ev is not None and strand_ev.at is not None:
+                candidates.append(("STRAND", strand_ev.at))
+            if close_through_at is not None:
+                candidates.append(("CLOSE_THROUGH", close_through_at))
+            if breach_at is not None:
+                candidates.append(("STRUCTURAL_BREACH", breach_at))
+            if candidates:
+                candidates.sort(key=lambda pair: pair[1])
+                reason, at = candidates[0]
+                if reason in ("STRAND", "STRUCTURAL_BREACH"):
+                    z.state = 2
+                    z.stop_reason = reason
+                else:
+                    z.pre_spent_state = z.state
+                    z.state = 3
+                    z.stop = k
+                    z.impact_time = at
+                    z.stop_reason = reason
+            elif touch is None and strand_ev is not None:
+                z.state = 2
+                z.stop_reason = "STRAND"
+
     def process(self, k: int) -> None:
         if k == 0:
             return
@@ -984,6 +1187,23 @@ class WeeklyCombinedEngine:
                 trig_at = self.week_extreme_time(k, False) or self.w[k].start
                 self.fvg_add(k - 2, h3c, l1c, False, k, 0, trig_at, self.last_h)
             self.fvg_bear_scan_upto = k
+
+        # STEP 1b: continuous IVI scan -- 2-candle version of FVG's own
+        # STEP 1b (close[k-1] vs open[k], not high[k-2] vs low[k]).
+        if self.regime == 1 and k >= 1 and k > self.vi_bull_scan_upto:
+            op1, cl1 = self.w[k - 1].o, self.w[k - 1].c
+            op2, cl2 = self.w[k].o, self.w[k].c
+            is_bull1 = cl1 >= op1
+            if cl1 < op2 and cl2 > cl1 and is_bull1:
+                self.vi_add(k - 1, cl1, op2, True, k, 0, self.week_open_time(k), self.last_l)
+            self.vi_bull_scan_upto = k
+        if self.regime == 2 and k >= 1 and k > self.vi_bear_scan_upto:
+            op1, cl1 = self.w[k - 1].o, self.w[k - 1].c
+            op2, cl2 = self.w[k].o, self.w[k].c
+            is_bull1 = cl1 >= op1
+            if cl1 > op2 and cl2 < cl1 and not is_bull1:
+                self.vi_add(k - 1, op2, cl1, False, k, 0, self.week_open_time(k), self.last_h)
+            self.vi_bear_scan_upto = k
 
         self.finish_events_and_lifecycle(k, before, total, c_h, c_l)
 

@@ -237,6 +237,13 @@ class WeeklyVIEngine:
 
     def try_create_avis(self, lo: int, hi: int, bullish: bool, trigger_k: int,
                         guard_price: float, trigger_time: Optional[datetime], protect_idx: int) -> None:
+        """`bullish` selects which retracement-leg CASE this is, NOT the
+        resulting zone's own side. CORRECTED 2026-10-03 (found while
+        porting this file into the combined engine): this had the exact
+        bug found and fixed in FVG's own try_create_afvgs on 2026-09-29 --
+        "Aggressives... are traded the opposite direction of the trend...
+        period." Was passing the case-selector straight through as the
+        zone's side; fixed to flip it, same as FVG/OB/RB already do."""
         if hi < lo + 1:
             return
         for c2 in range(lo + 1, hi + 1):
@@ -248,12 +255,12 @@ class WeeklyVIEngine:
                 if cl1 > op2 and cl2 < cl1 and not is_bull1:
                     l1, l2 = self.w[c1].l, self.w[c2].l
                     if l1 > guard_price and l2 > guard_price:
-                        self.add_vi(c1, op2, cl1, True, trigger_k, 1, trigger_time, protect_idx)
+                        self.add_vi(c1, op2, cl1, False, trigger_k, 1, trigger_time, protect_idx)
             else:
                 if cl1 < op2 and cl2 > cl1 and is_bull1:
                     h1, h2 = self.w[c1].h, self.w[c2].h
                     if h1 < guard_price and h2 < guard_price:
-                        self.add_vi(c1, cl1, op2, False, trigger_k, 1, trigger_time, protect_idx)
+                        self.add_vi(c1, cl1, op2, True, trigger_k, 1, trigger_time, protect_idx)
 
     def try_bull_avi(self, preg: int, armed_swh: int, new_swl_i: int, new_swl_p: float, k: int, at: Optional[datetime]) -> None:
         if preg != 1 or armed_swh < 0:
@@ -263,7 +270,9 @@ class WeeklyVIEngine:
         swl_ext = new_swl_i + 1 if new_swl_i + 1 <= k - 1 else new_swl_i
         lo = max(0, min(armed_swh - 1, swl_ext))
         hi = max(armed_swh - 1, swl_ext)
-        self.try_create_avis(lo, hi, True, k, new_swl_p, at, self.last_l)
+        # protect_idx must match the zone's FINAL tag (SELL, after the
+        # flip above), not the "bullish" case-selector.
+        self.try_create_avis(lo, hi, True, k, new_swl_p, at, self.last_h)
 
     def try_bear_avi(self, preg: int, armed_swl: int, new_swh_i: int, new_swh_p: float, k: int, at: Optional[datetime]) -> None:
         if preg != 2 or armed_swl < 0:
@@ -273,7 +282,9 @@ class WeeklyVIEngine:
         swh_ext = new_swh_i + 1 if new_swh_i + 1 <= k - 1 else new_swh_i
         lo = max(0, min(armed_swl - 1, swh_ext))
         hi = max(armed_swl - 1, swh_ext)
-        self.try_create_avis(lo, hi, False, k, new_swh_p, at, self.last_h)
+        # See try_bull_avi's own comment -- mirrored: this zone's final
+        # tag is BUY, so protect_idx must be a swing LOW (self.last_l).
+        self.try_create_avis(lo, hi, False, k, new_swh_p, at, self.last_l)
 
     def consume_break(self, bull: bool, k: int) -> bool:
         if bull:
