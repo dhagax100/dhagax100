@@ -316,6 +316,23 @@ class WeeklyCombinedEngine:
             insort(self._aifob_idx_bull if bull else self._aifob_idx_bear, candle)
         return len(self.ob_zones) - 1
 
+    def _ob_unmark_aifob(self, bull: bool, candle: int) -> None:
+        """Real bug (2026-10-03, caught by a live cross-machine result
+        mismatch -- 344 vs 343 Daily OB zones on the SAME data, traced
+        back to this): ob_aifob_in_range's sorted index was only ever
+        ADDED to at zone creation, never removed from when a zone later
+        gets PROMOTED away from AIFOB (orig_state 4 -> 0, both call sites
+        below) -- so the index kept claiming "an AIFOB lives here"
+        forever, even after that zone was no longer one. The old O(n)
+        scan always re-checked the zone's CURRENT orig_state live, so it
+        never had this problem; this index has to be kept in sync by
+        hand instead. Candle values are unique per side (ob_claimed
+        enforces one zone per (candle, bull)), so plain value removal is
+        safe here."""
+        arr = self._aifob_idx_bull if bull else self._aifob_idx_bear
+        if candle in arr:
+            arr.remove(candle)
+
     def ob_promote_aob(self, idx: int, bull: bool, k: int, armed_level: float, armed_swing: int) -> bool:
         if not (0 <= idx < len(self.ob_zones)):
             return False
@@ -761,6 +778,7 @@ class WeeklyCombinedEngine:
             if ob_alive:
                 z = self.ob_zones[self.pend_bull_aifob]
                 z.promotion_from_state = z.state
+                self._ob_unmark_aifob(True, z.candle)
                 z.state = z.orig_state = 0
                 z.eligible = -1
                 z.eligible_time = None
@@ -817,6 +835,7 @@ class WeeklyCombinedEngine:
         if ob_alive:
             z = self.ob_zones[self.pend_bear_aifob]
             z.promotion_from_state = z.state
+            self._ob_unmark_aifob(False, z.candle)
             z.state = z.orig_state = 0
             z.eligible = -1
             z.eligible_time = None
