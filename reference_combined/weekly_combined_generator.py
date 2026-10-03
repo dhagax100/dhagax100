@@ -64,7 +64,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from bisect import bisect_left
+from bisect import bisect_left, insort
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -147,6 +147,9 @@ class WeeklyCombinedEngine:
         # ---- OB-specific state (mirrors WeeklyOBEngine) ----
         self.ob_zones: List["wob.Zone"] = []
         self.ob_active: List[int] = []
+        self._ob_claimed_pairs: set = set()
+        self._aifob_idx_bull: List[int] = []
+        self._aifob_idx_bear: List[int] = []
         self.pend_bull_aifob = self.pend_bear_aifob = -1
         self.pend_bull_aob = self.pend_bear_aob = -1
         # 2026-09-30, real bug the user's own eye caught (an OB's zone
@@ -260,10 +263,27 @@ class WeeklyCombinedEngine:
     # =====================================================================
 
     def ob_claimed(self, candle: int, bull: bool) -> bool:
-        return any(z.candle == candle and z.bullish == bull for z in self.ob_zones)
+        # Multi-year history fix (2026-10-03): the lone straggler still
+        # doing an O(total OB zones) linear scan per call, where
+        # rb_claimed/fvg_claimed/vi_claimed were already upgraded to an
+        # O(1) set lookup. Called from mid_arm/consume_break on EVERY
+        # candle, so with 5m-level history spanning years (420k+ candles,
+        # thousands of OB zones) this was real, profiler-confirmed cost,
+        # not a hypothetical one. Same _claimed_pairs set pattern as the
+        # other three.
+        return (candle, bull) in self._ob_claimed_pairs
 
     def ob_aifob_in_range(self, lo: int, hi: int, bull: bool) -> bool:
-        return any(z.orig_state == 4 and z.bullish == bull and lo <= z.candle <= hi for z in self.ob_zones)
+        # Multi-year history fix (2026-10-03, confirmed via profiler --
+        # this was the dominant cost on a full 2021-2026 run): was an
+        # O(total OB zones) scan per call, called from ob_add_ifob on
+        # every candle. Kept as a side-specific SORTED index of AIFOB
+        # candle indices instead (insort on add, so it's correct
+        # regardless of creation order -- not assumed monotonic), letting
+        # this be an O(log n) bisect range-check instead.
+        arr = self._aifob_idx_bull if bull else self._aifob_idx_bear
+        i = bisect_left(arr, lo)
+        return i < len(arr) and arr[i] <= hi
 
     def ob_add_zone(self, candle: int, bull: bool, trigger: int, state: int, protect_idx: int = -1) -> int:
         wk = self.w[candle]
@@ -291,6 +311,9 @@ class WeeklyCombinedEngine:
         z.created_state = state
         self.ob_zones.append(z)
         self.ob_active.append(len(self.ob_zones) - 1)
+        self._ob_claimed_pairs.add((candle, bull))
+        if state == 4:
+            insort(self._aifob_idx_bull if bull else self._aifob_idx_bear, candle)
         return len(self.ob_zones) - 1
 
     def ob_promote_aob(self, idx: int, bull: bool, k: int, armed_level: float, armed_swing: int) -> bool:
