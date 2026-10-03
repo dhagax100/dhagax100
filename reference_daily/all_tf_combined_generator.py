@@ -780,35 +780,30 @@ def compute_control_timeline(h4_engine, d_zones_full, minutes, mt: list, display
                     events.append((respect_t, "opp_respect", side, zone_id))
             # reason is None: never invalidated in available data -- stays pending, no resolution.
 
-    # Step 1b: NONE control -- a standalone, POI-independent signal.
-    # Whenever a side's relevant extreme gets swept AND a matching-kind
-    # 4H swing confirms (either order), that side loses control. If
-    # there's a live opposing zone to inherit it, Step 1 already
-    # produced an opp_respect event for that exact pairing -- these
-    # standalone events only matter when there is none (see Step 2's
-    # de-dup: a "strip" is only acted on if the side being stripped is
-    # still the sole/shared controller, i.e. not already mid-transfer).
-    for side, sweep_role, confirm_kind in (("BUY", "BUY", 1), ("SELL", "SELL", 0)):
-        y0, m0, d0 = minutes[0].t.astimezone(display_tz).date().year, \
-            minutes[0].t.astimezone(display_tz).date().month, minutes[0].t.astimezone(display_tz).date().day
-        cur = datetime(y0, m0, d0).date()
-        end_date = window_end.astimezone(display_tz).date()
-        while cur <= end_date:
-            date_str = cur.isoformat()
-            extreme = find_prev_day_extreme(minutes, mt, date_str, display_tz, sweep_role)
-            t = find_prev_day_sweep_time(minutes, mt, date_str, display_tz, sweep_role, extreme)
-            if t is not None and t <= window_end:
-                events.append((t, "sweep", side, None))
-            cur += timedelta(days=1)
-        for e in h4_engine.events:
-            if e.kind == confirm_kind and e.at is not None and e.at <= window_end:
-                events.append((e.at, "swing_confirm", side, None))
+    # Step 1b: NONE control -- a standalone, POI-independent signal, off
+    # a single Daily swing confirming (2026-10-03, user correction: a
+    # swing high confirms BY breaking the connecting low -- that break
+    # IS the PDL taken. Not two conditions to sweep-scan and AND
+    # together; one single Daily swing-confirm event, full stop. 4H was
+    # never part of this either -- NONE is Daily-only, same as PDL/PDH
+    # always has been). Daily swing HIGH confirming strips BUY's control
+    # (direction confirmed by the user's own worked example: trading BUY
+    # off an in-favor POI in an uptrend, price makes a swing high with no
+    # live opposing zone to inherit -> NONE); Daily swing LOW confirming
+    # strips SELL's the same way. Only strips a side that's ACTUALLY
+    # currently held (alone, or as part of BOTH) -- see Step 2's own
+    # handling for what happens in each case (alone -> NONE, part of
+    # BOTH -> drops to the remaining side, never NONE).
+    for e in d_zones_full.events:
+        if e.at is None or e.at > window_end:
+            continue
+        side = "BUY" if e.kind == 0 else "SELL"
+        events.append((e.at, "daily_swing_strip", side, None))
 
     # At equal timestamps, zone-tied events (respect/death/impact) are
-    # processed BEFORE the generic sweep/swing_confirm signals, so a real
-    # respect transfer always wins over a same-instant generic strip
-    # (its own flag-consumption above still handles the ongoing case).
-    events.sort(key=lambda e: (e[0], e[1] in ("sweep", "swing_confirm")))
+    # processed BEFORE the generic daily-swing strip signal, so a real
+    # respect transfer always wins over a same-instant generic strip.
+    events.sort(key=lambda e: (e[0], e[1] == "daily_swing_strip"))
 
     # Step 2: replay into a state machine.
     checkpoints = []
@@ -817,22 +812,22 @@ def compute_control_timeline(h4_engine, d_zones_full, minutes, mt: list, display
     banked_respect = {"BUY": False, "SELL": False}
     controlling_trend_zone = None  # (ptype, id) of whichever trend zone currently anchors full control
     last_trend_side = None
-    swept_flag = {"BUY": False, "SELL": False}
-    confirmed_flag = {"BUY": False, "SELL": False}
 
     def opposite(s):
         return "SELL" if s == "BUY" else "BUY"
 
-    def record(t):
-        checkpoints.append((t, state, one_h_owner))
+    def record(t, reason):
+        checkpoints.append((t, state, one_h_owner, reason))
+
+    def zone_label(zone_id):
+        return f"{zone_id[0]} #{zone_id[1]}" if zone_id is not None else ""
 
     def grant_trend(t, side, zone_id):
         nonlocal state, one_h_owner, controlling_trend_zone
         state = side
         one_h_owner = side
         controlling_trend_zone = zone_id
-        swept_flag[side] = confirmed_flag[side] = False
-        record(t)
+        record(t, f"trend POI impacted ({zone_label(zone_id)}, {side}) -> full {side}")
 
     for t, kind, side, zone_id in events:
         controlling = daily_controlling_bias(d_zones_full, t, minutes, mt)
@@ -848,33 +843,29 @@ def compute_control_timeline(h4_engine, d_zones_full, minutes, mt: list, display
             if state == opposite(side) or state == "NONE":
                 state = "BOTH"
                 one_h_owner = side
-                swept_flag[side] = confirmed_flag[side] = False
-                record(t)
+                record(t, f"opposing POI impacted ({zone_label(zone_id)}, {side}) -> shared BOTH, 1H to {side}")
         elif kind == "opp_death":
             pass  # no control change -- trend's dominance just reconfirmed
         elif kind == "opp_respect":
             banked_respect[side] = True
-            # Consume the generic sweep/swing-confirm flags for this side
-            # -- this respect IS exactly that pairing, zone-tied; without
-            # this reset the generic standalone check below would
-            # immediately re-fire on the same already-used signal and
-            # strip the control this event just granted.
-            swept_flag[side] = confirmed_flag[side] = False
             if state != side:
                 state = side
                 one_h_owner = side
                 controlling_trend_zone = None
-                record(t)
+                record(t, f"opposing POI respected ({zone_label(zone_id)}, {side}) -> full {side}")
         elif kind == "trend_death_tactical":
             if controlling_trend_zone == zone_id and state == side:
                 if banked_respect[opposite(side)]:
                     state = opposite(side)
                     one_h_owner = opposite(side)
+                    reason = (f"trend zone tactical death ({zone_label(zone_id)}) -> "
+                              f"{opposite(side)} had banked respect, control to {opposite(side)}")
                 else:
                     state = "NONE"
                     one_h_owner = None
+                    reason = f"trend zone tactical death ({zone_label(zone_id)}) -> no banked respect, control to NONE"
                 controlling_trend_zone = None
-                record(t)
+                record(t, reason)
         elif kind == "trend_death_structural":
             if controlling_trend_zone == zone_id and state == side:
                 # Real Daily MSS flip -- "the whole framework mirrors
@@ -884,18 +875,26 @@ def compute_control_timeline(h4_engine, d_zones_full, minutes, mt: list, display
                 one_h_owner = opposite(side)
                 controlling_trend_zone = None
                 banked_respect = {"BUY": False, "SELL": False}
-                record(t)
-        elif kind in ("sweep", "swing_confirm"):
-            if kind == "sweep":
-                swept_flag[side] = True
-            else:
-                confirmed_flag[side] = True
-            if swept_flag[side] and confirmed_flag[side] and state in (side, "BOTH"):
+                record(t, f"trend zone structural death / Daily MSS flip ({zone_label(zone_id)}) -> control to {opposite(side)}")
+        elif kind == "daily_swing_strip":
+            swing_word = "high" if side == "BUY" else "low"
+            if state == side:
+                # side was alone -- nothing left standing.
                 state = "NONE"
                 one_h_owner = None
                 controlling_trend_zone = None
-                swept_flag[side] = confirmed_flag[side] = False
-                record(t)
+                record(t, f"Daily swing {swing_word} confirmed -> strips {side} (was alone), control to NONE")
+            elif state == "BOTH":
+                # side was part of a shared BOTH -- the other side was
+                # already standing on its own, so it just keeps control
+                # (user correction, 2026-10-03: "if we are on both and we
+                # lose sell, we go to buy" -- NOT NONE).
+                state = opposite(side)
+                one_h_owner = opposite(side)
+                controlling_trend_zone = None
+                record(t, f"Daily swing {swing_word} confirmed -> strips {side} from BOTH, control to {opposite(side)}")
+            # else: side isn't currently held at all (state is opposite(side)
+            # or already NONE) -- nothing to strip, no-op.
 
     return checkpoints
 
@@ -904,7 +903,7 @@ def control_state_at(checkpoints: list, t: "datetime"):
     """Returns (state, one_h_owner) as of time `t` -- the last checkpoint
     at or before `t`, or ("NONE", None) if `t` is before the first one."""
     state, one_h_owner = "NONE", None
-    for ct, cs, ch in checkpoints:
+    for ct, cs, ch, _reason in checkpoints:
         if ct > t:
             break
         state, one_h_owner = cs, ch
@@ -915,7 +914,7 @@ def control_ceiling(checkpoints: list, t0: "datetime", side: str, resource: str)
     """First checkpoint AFTER t0 where `side` stops holding `resource`
     ("4h" or "1h"). None if it never does within the available
     checkpoints."""
-    for ct, cs, ch in checkpoints:
+    for ct, cs, ch, _reason in checkpoints:
         if ct <= t0:
             continue
         if resource == "4h":
