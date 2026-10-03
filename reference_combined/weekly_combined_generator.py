@@ -1317,6 +1317,13 @@ def fvg_status(z, msses=None, w=None) -> str:
     return FVG_STATE[state]
 
 
+def vi_status(z, msses=None, w=None) -> str:
+    state = z.pre_spent_state if z.state == 3 else z.state
+    if state == 0 and msses is not None and w is not None and zone_stranded_by_mss(z, msses, w):
+        state = 2
+    return VI_STATE[state]
+
+
 def write_combined_pine(base: Path, engine: WeeklyCombinedEngine, label_cap: int, ob_cap: int, rb_cap: int,
                          fvg_cap: int, table_cap: int, display_zone: ZoneInfo, out_name: str = "weekly_combined_viewer.pine",
                          extra_lines: Optional[List[str]] = None) -> None:

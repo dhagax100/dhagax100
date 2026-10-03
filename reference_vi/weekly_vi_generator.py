@@ -105,6 +105,8 @@ class VIZone:
     trigger_time: Optional[datetime] = None
     protect_level: Optional[float] = None  # supporting swing's own price, see STRUCTURAL_BREACH
     stop_reason: str = ""    # "IMPACT" | "CLOSE_THROUGH" | "STRAND" | "STRUCTURAL_BREACH" | ""
+    rejected: bool = False  # 2026-10-03: open-inside-zone check, same as OB/RB/FVG
+    rejected_reason: str = ""
 
 
 class WeeklyVIEngine:

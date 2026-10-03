@@ -344,6 +344,7 @@ def filter_to_windows(engine, windows: list[tuple["datetime", "datetime"]]) -> N
     engine.ob_zones = [z for z in engine.ob_zones if happened_in_window(engine.w[z.candle].start, z)]
     engine.rb_zones = [z for z in engine.rb_zones if happened_in_window(engine.w[z.candle].start, z)]
     engine.fvg_zones = [z for z in engine.fvg_zones if happened_in_window(engine.w[z.left].start, z)]
+    engine.vi_zones = [z for z in engine.vi_zones if happened_in_window(engine.w[z.left].start, z)]
 
 
 def filter_to_date_range(engine, since_str: str, until_str: str, display_tz: ZoneInfo) -> None:
@@ -726,7 +727,8 @@ def compute_control_timeline(h4_engine, d_zones_full, minutes, mt: list, display
     # used to correlate a trend zone's own death back to whichever zone
     # is actually the one currently holding control (see Step 2).
     events = []
-    for zones, ptype in ((h4_engine.ob_zones, "OB"), (h4_engine.rb_zones, "RB"), (h4_engine.fvg_zones, "FVG")):
+    for zones, ptype in ((h4_engine.ob_zones, "OB"), (h4_engine.rb_zones, "RB"), (h4_engine.fvg_zones, "FVG"),
+                         (h4_engine.vi_zones, "VI")):
         for z in zones:
             if z.impact_time is None or z.impact_time > window_end:
                 continue
@@ -1188,7 +1190,7 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
     candidates = []
     for eng, tf_tag in ((h4_engine, "H4"), (h1_engine, "1H")):
         eng_bar_starts = [b.start for b in eng.w]
-        for zones, ptype in ((eng.ob_zones, "OB"), (eng.rb_zones, "RB"), (eng.fvg_zones, "FVG")):
+        for zones, ptype in ((eng.ob_zones, "OB"), (eng.rb_zones, "RB"), (eng.fvg_zones, "FVG"), (eng.vi_zones, "VI")):
             for z in zones:
                 if z.impact_time is None or z.protect_level is None:
                     continue
@@ -1527,7 +1529,7 @@ def mark_open_inside_trigger(engine) -> None:
     existing `getattr(z, "rejected", False)` check (drawing, table,
     ledger) picks this up with no other change."""
     bar_starts = [b.start for b in engine.w]
-    for zones in (engine.ob_zones, engine.rb_zones, engine.fvg_zones):
+    for zones in (engine.ob_zones, engine.rb_zones, engine.fvg_zones, engine.vi_zones):
         for z in zones:
             if z.rejected or z.impact_time is None:
                 continue
@@ -1550,6 +1552,7 @@ def exclude_old_intraday_zones(engine) -> None:
     engine.ob_zones = [z for z in engine.ob_zones if wc.ob_status(z) != "OOB"]
     engine.rb_zones = [z for z in engine.rb_zones if wc.rb_status(z) != "ORB"]
     engine.fvg_zones = [z for z in engine.fvg_zones if wc.fvg_status(z) != "OFVG"]
+    engine.vi_zones = [z for z in engine.vi_zones if wc.vi_status(z) != "OVI"]
 
 
 def mark_superseded_same_leg(engine, minutes, mt: list) -> None:
@@ -1576,11 +1579,11 @@ def mark_superseded_same_leg(engine, minutes, mt: list) -> None:
     "Let them be there" (the user's own words) -- this does NOT remove
     anything from engine.ob_zones/rb_zones/fvg_zones, so the pine boxes
     and table are untouched."""
-    for zones in (engine.ob_zones, engine.rb_zones, engine.fvg_zones):
+    for zones in (engine.ob_zones, engine.rb_zones, engine.fvg_zones, engine.vi_zones):
         for z in zones:
             z.superseded_at = None
 
-    all_zones = list(engine.ob_zones) + list(engine.rb_zones) + list(engine.fvg_zones)
+    all_zones = list(engine.ob_zones) + list(engine.rb_zones) + list(engine.fvg_zones) + list(engine.vi_zones)
     bar_starts = [b.start for b in engine.w]
 
     for bull in (True, False):
@@ -1742,7 +1745,7 @@ def daily_controlling_bias(d_zones_full, as_of: "datetime", minutes=None, mt: li
         return mss_candidates[-1][1]
 
     candidates = []
-    for zones in (d_zones_full.ob_zones, d_zones_full.rb_zones, d_zones_full.fvg_zones):
+    for zones in (d_zones_full.ob_zones, d_zones_full.rb_zones, d_zones_full.fvg_zones, d_zones_full.vi_zones):
         for dz in zones:
             if dz.impact_time is None or dz.impact_time > as_of or not zone_is_infavor(dz):
                 continue
@@ -1759,7 +1762,7 @@ def daily_opposite_impacted_today(d_zones_full, opposite_bull: bool, date_str: s
     mechanism (15 Jan: the ARB impacting that same day is what reopened
     1H BUY, not a coincidental 1H-level structure)."""
     win_start, win_end = calendar_day_bounds(date_str, display_tz)
-    for zones in (d_zones_full.ob_zones, d_zones_full.rb_zones, d_zones_full.fvg_zones):
+    for zones in (d_zones_full.ob_zones, d_zones_full.rb_zones, d_zones_full.fvg_zones, d_zones_full.vi_zones):
         for dz in zones:
             if dz.bullish == opposite_bull and dz.impact_time is not None and win_start <= dz.impact_time < win_end:
                 return True
@@ -1794,7 +1797,7 @@ def apply_daily_bias_gate(engine, tf_tag: str, d_zones_full, display_tz: ZoneInf
         kind, so RB#87 is now correctly rejected; 15 Jan's real ARB
         (Daily, impacted that same day) still correctly authorizes
         that day's 1H BUY zones."""
-    for zones in (engine.ob_zones, engine.rb_zones, engine.fvg_zones):
+    for zones in (engine.ob_zones, engine.rb_zones, engine.fvg_zones, engine.vi_zones):
         for z in zones:
             if getattr(z, "rejected", False) or z.impact_time is None:
                 continue
@@ -1838,7 +1841,8 @@ def find_parent_daily_poi(d_engine, side_bull: bool, child_impact_time: "datetim
     POI exists (e.g. the child's own leg has no Daily-level driver
     impacted yet)."""
     candidates = []
-    for zones, ptype in ((d_engine.ob_zones, "OB"), (d_engine.rb_zones, "RB"), (d_engine.fvg_zones, "FVG")):
+    for zones, ptype in ((d_engine.ob_zones, "OB"), (d_engine.rb_zones, "RB"), (d_engine.fvg_zones, "FVG"),
+                         (d_engine.vi_zones, "VI")):
         for dz in zones:
             if dz.bullish != side_bull or dz.impact_time is None or dz.impact_time > child_impact_time:
                 continue
@@ -2200,7 +2204,8 @@ def main() -> int:
                 # considered, which filter_to_date_range() below would
                 # otherwise silently drop entirely (2026-09-29).
                 tf_full[tag] = SimpleNamespace(ob_zones=list(engine.ob_zones), rb_zones=list(engine.rb_zones),
-                                                fvg_zones=list(engine.fvg_zones), events=engine.events, w=engine.w)
+                                                fvg_zones=list(engine.fvg_zones), vi_zones=list(engine.vi_zones),
+                                                events=engine.events, w=engine.w)
             if tag == "d":
                 # A Daily POI from a PRIOR day can still be the active
                 # parent today (2026-09-29 -- "react day" case: FVG#1
@@ -2215,7 +2220,8 @@ def main() -> int:
                 # list still references -- and hand the snapshot to
                 # find_parent_daily_poi() instead of the filtered engine.
                 d_zones_full = SimpleNamespace(ob_zones=list(engine.ob_zones), rb_zones=list(engine.rb_zones),
-                                                fvg_zones=list(engine.fvg_zones), w=engine.w, events=engine.events,
+                                                fvg_zones=list(engine.fvg_zones), vi_zones=list(engine.vi_zones),
+                                                w=engine.w, events=engine.events,
                                                 msses=list(engine.msses))
             # Daily is never --since-FLOOR-scoped here (2026-09-29, user:
             # "I want all... all the POIs, swings, MSS and everything...
@@ -2445,7 +2451,7 @@ def main() -> int:
             dc.write_report(base, minutes, bars_by_tag[tag], e, display_tz, report_name,
                              label=title, bar_word=bar_word[tag])
             print(f"  {swings_name} / {report_name}   ({title}: OB={len(e.ob_zones)} "
-                  f"RB={len(e.rb_zones)} FVG={len(e.fvg_zones)})")
+                  f"RB={len(e.rb_zones)} FVG={len(e.fvg_zones)} VI={len(e.vi_zones)})")
 
         if args.show_date and e5 is not None:
             ledger_name = "5m_trades_ledger.csv"
