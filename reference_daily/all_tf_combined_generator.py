@@ -820,25 +820,43 @@ def compute_control_timeline(d_zones_full, minutes, mt: list, display_tz: ZoneIn
         side = "BUY" if e.kind == 0 else "SELL"
         events.append((e.at, "daily_swing_strip", side, None))
 
-    # At equal timestamps, "impact_trend" is processed LAST -- real bug
-    # fixed 2026-10-04, caught by the user directly on 2025-01-06 04:15:
-    # one single minute's price action can BOTH confirm a Daily swing
-    # (stripping whoever currently holds a side) AND tag the trend zone
-    # (its own instant, always-wins regain) at the same time -- e.g. one
-    # wick that breaks a new high (confirming a swing low, stripping
-    # SELL off a shared BOTH down to BUY) while ALSO reaching up into a
-    # SELL FVG's own zone. The user's own account: "in one minute we
-    # first lose control of sell, then control of buy, back to sell" --
-    # the strip must resolve FIRST (BOTH -> BUY), and the trend's
-    # always-wins instant regain must get the LAST word (BUY -> full
-    # SELL), not the other way around. The previous ordering sorted
-    # impact_trend BEFORE daily_swing_strip, so it granted SELL first
-    # and then let the very same swing immediately strip it back to
-    # NONE -- wrong net result, confirmed wrong by the user directly.
-    # opp_respect/opp_death/impact_opp still resolve in their original
-    # per-zone order relative to each other and to daily_swing_strip;
-    # only impact_trend is pulled to the very end.
-    events.sort(key=lambda e: (e[0], e[1] == "impact_trend"))
+    # At equal timestamps, every GRANT event (impact_trend, impact_opp,
+    # opp_respect) is processed LAST, after daily_swing_strip and opp_death.
+    # General rule (2026-10-04, user-taught, generalized from the original
+    # impact_trend-only fix after the user caught a second instance on
+    # 2025-01-08): a swing-high/low strip can only remove a side that was
+    # ALREADY held BEFORE this minute's events -- never a side some OTHER
+    # event in the same minute is about to grant. So every strip/death must
+    # see the pre-minute state, and every grant must apply AFTER that, so
+    # it always sticks.
+    #   Case A (2025-01-06 04:15, the original fix): BOTH held, swing low
+    #   strips SELL -> BUY, then the trend's own FVG impact (impact_trend)
+    #   regrants full SELL -- the trend's always-wins regain gets the final
+    #   word. User: "in one minute we first lose control of sell, then
+    #   control of buy, back to sell."
+    #   Case B (2025-01-08 01:00, caught next): only SELL held, nothing to
+    #   strip for BUY -- the swing-high strip is a pure no-op regardless of
+    #   anything else happening that minute. The SAME minute's opposing FVG
+    #   impact (impact_opp) then grants shared BOTH, and nothing strips it
+    #   back out, because the strip already resolved (as a no-op) before the
+    #   grant applied. User: "you strip buy when you have one or both, but
+    #   we only had sell... the strip should come when one is active, not
+    #   when it is not there in the first place."
+    #   Case C (forward-looking, user-stated, not yet seen in real data):
+    #   BUY held alone, swing high strips it to NONE, but the SAME minute a
+    #   fresh BUY POI impacts (trend or opposing) -- the strip still
+    #   resolves first (BUY -> NONE off the pre-minute state), but the
+    #   grant immediately following it restores BUY in the same minute,
+    #   never actually sitting in NONE. User: "what is the point of
+    #   stopping at swing high? it is to wait until price impacts another
+    #   POI we can buy from -- so if it happens at the same minute, we do
+    #   it." This falls out of the same ordering rule for free -- no special
+    #   case needed.
+    # opp_death stays in its original per-zone position (a LOSS event, not
+    # a grant) -- only impact_trend/impact_opp/opp_respect are pulled to the
+    # very end.
+    _GRANT_KINDS = ("impact_trend", "impact_opp", "opp_respect")
+    events.sort(key=lambda e: (e[0], e[1] in _GRANT_KINDS))
 
     # Step 2: replay into a state machine.
     checkpoints = []

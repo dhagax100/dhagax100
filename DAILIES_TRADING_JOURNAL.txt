@@ -9,6 +9,41 @@ Entry format, every day: Bias / Session / Daily driver / 1H+4H context /
 Trade taken / Result / Notes. Short, plain, no fluff.
 
 
+2025-01-09 (Thursday) — SELL day, full control all day, one trade, carries into 10th
+---------------------------------
+BIAS/CONTROL: SELL all day (full 4H+1H) — the Day 8 BUY share (FVG#208)
+had already died at 01:00, before the window opened.
+
+TRADE TAKEN: H4 RB#124 SELL, impact 16:31, entry 16:53 @ 1.03098,
+SL 1.03188, TP 1.02828.
+RESULT: still open at window close (19.1 pips in favor unrealized).
+Carried into the next day — see 2025-01-10 entry below for the outcome.
+
+
+2025-01-10 (Friday) — SELL day, 1H abandoned before window opened, prior day's trade hits TP
+---------------------------------
+BIAS/CONTROL: SELL most of the day (full 4H); a 3-minute opposing BOTH
+blip at 16:30-16:33 (RB#430 impacted then died immediately) changed
+nothing. 1H SELL was abandoned at 09:14 Riyadh — Jan 9's calendar-day
+low (1.02832) got swept again, before the 11:00 window even opened — so
+only 4H sell was live all day; no 1H sell setup was ever possible.
+
+PRIOR-DAY TRADE RESULT: 2025-01-09's RB#124 SELL (entry 1.03098, SL
+1.03188, TP 1.02828) hit **TP at 09:14 Riyadh** (candle low 1.02821) —
+the exact same minute/level that swept Jan 9's low and abandoned 1H for
+the day. +9.0R pips, +1R.
+
+TRADE TAKEN (new, 2025-01-10 itself): none — every 1H SELL candidate
+that impacted after 09:14 (OB#372, RB#456, RB#458, FVG#193) had zero
+valid window (1H already abandoned); 4H SELL (RB#128) breached
+immediately after impact, no entry.
+RESULT: no new trade. Flat day aside from the carried-over TP.
+
+NOTE: first confirmed real-data case of a trade's own TP level
+coinciding with the same PDL sweep that abandons 1H for the next day —
+not a coincidence worth chasing, just worth recording since it's the
+first time seen.
+
 2026-01-15 (Thursday) — SELL day, "react day," no trade, third flat day running
 ---------------------------------
 BIAS: SELL (unchanged). FVG#1 (Daily) still the controlling parent —

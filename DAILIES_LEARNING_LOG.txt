@@ -631,6 +631,55 @@ above for exactly how those combine and how to report it.
   Needs the abandonment ceiling surfaced alongside state/reason, not a
   new mechanism -- the correct answer already exists, it just isn't
   joined with CONTROL's own reporting yet.
+- GRANT-VS-STRIP ORDERING, GENERALIZED (2026-10-04, user-taught, Day 8):
+  the impact_trend-sorts-last fix above was a SPECIAL CASE of a general
+  rule, confirmed on a second real instance (2025-01-08 01:00): a Daily
+  swing strip can only ever remove a side that was ALREADY held BEFORE
+  that minute's events -- never a side some OTHER event in the exact
+  same minute is about to grant. User's own correction, verbatim: "you
+  strip buy when you have one or you have both, but we only had sell,
+  then swing high confirmed, nothing to strip but buy POI impacted...
+  the strip should come when one is active, not when it is not there in
+  the first place." So EVERY grant-type event (impact_trend, impact_opp,
+  opp_respect) sorts LAST at a tied timestamp, after daily_swing_strip
+  and opp_death -- not just impact_trend. This one ordering rule handles
+  both directions the user described:
+    * Day 8 (nothing held -> grant survives untouched): only SELL held;
+      a Daily swing high confirms (strips BUY -- a no-op, nothing to
+      strip) at the SAME minute an aggressive/opposing BUY FVG (#208)
+      impacts. Strip resolves first against the pre-minute state (SELL
+      only, no-op); the opposing grant applies after and SURVIVES --
+      shared BOTH, 1H owner BUY. Before this fix, the code processed the
+      opposing impact FIRST (granting BOTH), then let the same-minute
+      strip immediately wipe the BUY share right back out -- so BUY
+      never actually opened, even though there was nothing genuine
+      invalidating it.
+    * The forward-looking case the user also described (not yet seen in
+      real data, but must hold when it occurs): BUY held ALONE, a swing
+      high confirms (strips it to NONE off the pre-minute state), but a
+      FRESH buy POI impacts the SAME minute -- the strip still happens
+      (BUY was genuinely held, so it's not a no-op this time), but the
+      grant right after it restores BUY immediately, same minute, never
+      actually sitting in NONE even for an instant. User's own words on
+      WHY: "what is the point of stopping at swing high? it is to wait
+      until price impacts another POI we can buy from -- so if it
+      happens at the same minute, we do it." No special-casing needed --
+      this falls out of the exact same ordering rule as Day 8's case.
+  Fixed in compute_control_timeline()'s final event sort: the key is now
+  `(time, kind in ("impact_trend","impact_opp","opp_respect"))` instead
+  of singling out only impact_trend. opp_death stays in its original
+  position (a LOSS event, not a grant -- nothing to defer).
+  Verified: re-ran the full fast-hybrid check on 2025-01-02, 01-03,
+  01-06, 01-07 after this change -- all four produce byte-identical
+  checkpoints/ledger rows to before the fix (the tied-timestamp
+  grant-vs-strip collision genuinely never occurred on those days, so
+  this generalization is additive, not a regression risk for anything
+  already verified). 2025-01-08 now correctly shows BOTH/BUY control all
+  day (4H: SELL continues + BUY newly live; 1H owner: BUY) instead of the
+  old SELL-only result, and every 1H SELL candidate that day now
+  correctly reads NO_CONTROL for the 1H slot (owner is BUY, not SELL) --
+  previously they wrongly looked "live" on a stale SELL owner that
+  should never have survived past 01:00.
 
 BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 - Visible in BOTH 5m_trades_ledger.csv AND the on-chart 5m trades
@@ -647,10 +696,74 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
   trigger ("aim for the immediate swing formed before the 4H/1H
   impact"). More notes get added here over time as they're identified —
   this is the room for them, nothing more needs building to add one.
+- SL NEAR-MISS DISTANCE (new note, 2026-10-04, user-requested): for every
+  SL-hit trade, also record how far price's actual extreme (after SL hit,
+  before it reverses back in the trade's intended direction) overshot the
+  SL price — in pips. Purpose: "this will help us in the optimization
+  later on so that we can add one or two pips to our SL to avoid losing
+  this kind of trade." Not yet automated in the generator/ledger — for
+  now, check manually with raw M1 data whenever a day's walkthrough hits
+  an SL, and note it here (or directly on that trade's structural_notes)
+  whenever the overshoot is small enough to be worth flagging (a few pips
+  or less). First instance found: 2025-01-07, RB#117 SELL, attempt 2
+  (entry 12:55 @ 1.04251, SL 1.04340). The 13:19 Riyadh candle's high was
+  1.04341 — SL missed surviving by only 0.1 pip — then price reversed and
+  fell the rest of the session (down to ~1.03863 by 16:49), the exact
+  direction the trade was aiming for. Flag any future near-miss like this
+  the same way, with the exact SL price, the exact extreme reached, and
+  the pip difference.
 
 
 SESSION LOG (newest first)
 ----------------------------
+
+2026-10-04 (part 7) — Day 9 trade hits TP on Day 10; REPORTING lesson on 1H abandonment (not an engine bug)
+- Day 9's H4 RB#124 SELL (entry 16:53 @ 1.03098, SL 1.03188, TP 1.02828)
+  hit TP 2025-01-10 09:14 Riyadh -- confirmed against raw M1 data, logged
+  in DAILIES_TRADING_JOURNAL.txt.
+- Day 10 REPORTING BUG (mine, not the engine's): my first Day 10 report
+  said "Setups allowed: 4H sell, 1H sell" for the whole SELL control
+  window. Wrong -- Jan 9's calendar-day low (1.02832) got swept again at
+  09:14 Riyadh, BEFORE the 11:00 window opened, abandoning 1H sell for
+  the entire rest of the day (same mechanism as Day 8's 1H abandonment).
+  Checked the actual engine behavior directly: compute_5m_trades already
+  applies this correctly under the hood (every 1H SELL candidate that
+  impacted after 09:14 got `eff_window_end` clamped below its own impact
+  time via chain_abandon_at/zone_abandon_at, so zero valid entries were
+  ever possible for 1H that day) -- NOT a code bug. The gap was that the
+  resulting stage label (NO_ENTRY_IN_WINDOW) doesn't distinguish "ran out
+  of time because the window closed" from "was abandoned before it ever
+  had a window" -- so it never surfaced in my day-report's "Setups
+  allowed" column, and I reported 1H sell as live when it was already
+  dead. User's own words: "no 1h should be there as well because it was
+  not there and got lost or abandoned early in the morning in the first
+  place."
+- STANDING RULE, going forward: before writing "Setups allowed" for any
+  day/side, always check that side's 1H abandonment ceiling
+  (chain_abandon_at against the PDH/PDL chain, or the ledger row's own
+  `h1_abandoned_riyadh` field) FIRST. If the ceiling falls before the
+  trading window opens (or before a specific POI's own impact time), 1H
+  for that side is dropped from "Setups allowed" entirely for that
+  stretch of the day -- only 4H continues. This is a reporting
+  discipline fix, not a code change.
+
+2026-10-04 (part 6) — Day 7 SL near-miss logged; grant-vs-strip ordering bug generalized beyond impact_trend, caught on Day 8
+- Day 7 SL near-miss: RB#117 SELL attempt 2 missed surviving its SL by
+  0.1 pip before reversing hard in the intended direction. Full detail
+  in the BE-RULE RESEARCH DATA section's new "SL NEAR-MISS DISTANCE"
+  bullet above.
+- Day 8: user's walkthrough (PDL taken -> 1H sell abandoned; Daily swing
+  high confirms at the same minute an aggressive/opposing BUY FVG (#208)
+  impacts; swing high strips nothing since only SELL was held; the
+  opposing impact grants shared BOTH and it should survive) didn't match
+  what the code actually produced -- the opposing grant was being wiped
+  by the same-minute strip, so BUY never opened. Root cause and fix: see
+  the new "GRANT-VS-STRIP ORDERING, GENERALIZED" bullet in the CONTROL
+  section above -- the impact_trend-sorts-last fix from part 5 was a
+  special case of a general rule (every grant sorts after a same-minute
+  strip, not just trend regains). Re-verified Days 2/3/6/7 byte-identical
+  after the generalization (no regression); Day 8 now correctly shows
+  BOTH/BUY control from 01:00 onward.
 
 2026-10-04 (part 5) — Two more real bugs caught live on 2025-01-06/07: impact_trend's own sort priority was backwards; trend control only ever tracked ONE zone instead of the whole same-side group
 - EVENT-ORDERING BUG (compute_control_timeline's own sort): one single
