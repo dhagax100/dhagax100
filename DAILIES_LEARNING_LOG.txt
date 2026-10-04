@@ -14,6 +14,69 @@ with its stage/reason — that's the file to open first when a day's result
 needs checking, before writing anything new.
 
 
+DAY REPORTING FORMAT — LOCKED 2026-10-04 (this is now the ONLY way to
+report the result of any day the user asks about; built and refined
+live against 2025-01-02, see SESSION LOG for the full derivation)
+------------------------------------------------------------------
+Always a table with exactly these four columns:
+  1. Control window -- the exact FROM-TO time range that control held
+     one state, and what that state was.
+  2. Setups allowed -- 4H/1H availability during that window, stated
+     plainly (e.g. "4H sell, 1H sell" or "4H sell only").
+  3. POI of interest -- ONLY the POIs that actually matter (see the
+     filtering rules below). Each one named exactly: timeframe (4H/1H)
+     + type (OB/RB/FVG/VI) + side (buy/sell) + origin time.
+  4. Entry info -- if no entry, the EXACT reason, from this vocabulary:
+     no impact / impact but body close / impact but anchor break /
+     impact but swing confirmed (before trading hours, or before entry)
+     / impact but trading hours finished / impact but no premium
+     (discount) reached / impact but side not in control -- whichever
+     applies, with the relevant time.
+
+STRICT FILTERING RULES (user's own corrections, verbatim intent):
+  - NEVER report info about a side that isn't currently allowed. If
+    control is SELL, do not mention ANY buy-side POI, impact, or
+    rejection at all -- not even to say it was rejected. Same mirrored
+    for BUY.
+  - Do not state a condition that doesn't apply. "1H not abandoned" is
+    never written -- only write something when 1H actually abandons.
+    Silence means normal/default; only report deviations.
+  - Do not list every POI that exists or gets touched. Only list one
+    if BOTH (a) its own side is currently allowed, AND (b) the specific
+    resource it needs (4H or 1H) is actually held by that side at that
+    exact moment -- a POI needing 1H when the other side currently owns
+    the 1H slot gets dropped from the report entirely, not listed as
+    "rejected."
+  - NEVER report anything outside the real trading window (11:00-19:00
+    Riyadh summer / 11:00-20:00 winter, from trading_window()). A POI
+    that impacted and died (body close, etc.) entirely before the
+    window opened is simply already breached -- it does not get a row,
+    a mention, or an explanation. Control itself is still continuous
+    and Daily-driven even outside the window (bias/control never
+    pauses), but the per-POI setup/entry story only ever gets reported
+    for what happens inside it.
+  - When naming a POI's impact, always say exactly which one: "4H
+    sell", "1H buy", etc. -- never just "a POI" or "the POI".
+
+WORKED EXAMPLE -- 2025-01-02 (Daily bias SELL throughout; trading
+window that day was 11:00-20:00 Riyadh, winter hours):
+
+  Control window                              | Setups allowed              | POI of interest                          | Entry info
+  11:00 (window opens): SELL                   | 4H sell, 1H sell            | none                                      | --
+  13:32-13:48: SELL, 4H only (1H sell          | 4H sell only                | none                                      | --
+    abandoned, PDL taken)                      |                              |                                           |
+  13:48-18:27: BOTH (1H -> buy)                | 4H sell, 4H buy, 1H buy     | none                                      | --
+  18:27-19:03: SELL, 4H only (anchor broke,    | 4H sell only                | none                                      | --
+    buy ditched)                               |                              |                                           |
+  19:03-20:00 (window closes): BOTH (1H->buy)  | 4H sell, 4H buy, 1H buy     | none                                      | --
+
+  Result: zero entries. Every candidate that ever showed up that day
+  either belonged to the side not currently allowed, or needed a
+  resource (1H) the other side currently owned -- both cases dropped
+  from the report entirely per the filtering rules above, not listed
+  as rejections.
+
+
 CURRENT RULE SET (as of 2026-10-01)
 ------------------------------------
 
@@ -412,12 +475,54 @@ CONTROL (2026-10-02, user-taught; CODED AND VERIFIED as of 2026-10-04 --
 see SESSION LOG entry below for the real bugs found and fixed getting
 here, including a near-total loss of this spec's own nuance after a
 2026-10-04 /compact and how it was recovered from the raw transcript)
+
+*** CRITICAL CORRECTION, 2026-10-04, user's own words: "control was
+never for 4h or 1h. it is ONLY for daily. everything I said about
+control was for daily. 4h and 1h are the setups that come with those
+controls plus other conditions. you need to sink this in now." ***
+CONTROL is computed ENTIRELY from DAILY-level POI events -- impact,
+death, respect, the NONE swing-strip -- never from 4H or 1H zones.
+compute_control_timeline() originally read h4_engine (4H zones), which
+was a real, confirmed bug, not a refinement -- fixed 2026-10-04 to read
+d_zones_full (Daily zones) instead. Below, wherever this section says
+a POI "impacts" or "dies" for control purposes, read that as a DAILY
+POI, always -- the OB/RB/FVG/VI zones on the Daily chart itself, not
+the 4H or 1H ones. 4H and 1H zones NEVER drive control; they only
+CONSUME whatever control currently says, combined with their own
+separate conditions (same-day Daily authorization, 1H's own PDL/PDH
+abandonment chain, premium/discount) -- see "DAY REPORTING FORMAT"
+above for exactly how those combine and how to report it.
 - A new layer ABOVE Daily bias: which side is ACTIVELY being traded
   right now (control), distinct from which side the trend structurally
   favors (bias/MSS). Bias still only ever flips via Daily MSS, exactly
   as before. Control moves faster and separately.
 - Default: the trend (with-bias) side holds full control (4H + 1H)
   once its first in-favor/aggressive-in-favor POI is impacted.
+- MULTIPLE TREND POIs = ONE COMBINED GROUP (locked 2026-10-04, user's
+  own words): "let us set a rule that we trade like we have one POI
+  affected on that day... some might breach and some might survive...
+  which changes your conclusion earlier that the in favor POI breached
+  (because you thought we only had one), hence control directly goes
+  to last opposing one." Every trend-direction in-favor OR aggressive-
+  in-favor Daily zone that impacts while the trend already holds full
+  control (same flip, or a later same-day/later zone that doesn't
+  itself cause a new flip) JOINS the same group backing that control --
+  it is NOT a separate, independently-tracked thing. The group only
+  actually dies -- triggering tactical/structural reversion -- once
+  EVERY member has died. One member dying while others are still alive
+  and un-breached changes NOTHING; control stays exactly as it was.
+  Real bug this fixes: the code only ever tracked the single zone that
+  caused the LAST flip -- any further same-side trend zone impacting
+  afterward (even the same day) was silently dropped from tracking
+  entirely, so its own siblings dying could never correctly keep
+  control alive the way a still-living group member should. Verified
+  on 2025-01-07: three bearish in-favor Daily zones impacted 6 Jan
+  (FVG#207 04:15, OB#344 14:30, RB#429 14:31) -- FVG#207 alone died
+  tactically 7 Jan 01:00; before the fix this wrongly flipped control
+  to BUY (banked respect) since it was the only one ever tracked; after
+  the fix, OB#344 and RB#429 are still alive and un-breached, so
+  control correctly stays full SELL straight through -- no flip at all
+  that day.
 - OPPOSING POI IMPACTED (mere impact, not yet respected): control
   becomes SHARED -- both sides now have a live 4H (trend's 4H
   untouched; opposing's 4H activates, subject to the SAME gates every
@@ -546,6 +651,171 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 
 SESSION LOG (newest first)
 ----------------------------
+
+2026-10-04 (part 5) — Two more real bugs caught live on 2025-01-06/07: impact_trend's own sort priority was backwards; trend control only ever tracked ONE zone instead of the whole same-side group
+- EVENT-ORDERING BUG (compute_control_timeline's own sort): one single
+  minute's price action (2025-01-06 04:15) both confirmed a Daily swing
+  (stripping SELL off a shared BOTH down to BUY) AND tagged a trend
+  SELL FVG's own zone (its instant, always-wins regain) at the exact
+  same minute -- the user caught this directly: "in one minute we first
+  lose control of sell, then control of buy, back to sell." The
+  previous sort put impact_trend events BEFORE the generic daily-swing-
+  strip at equal timestamps, so it granted SELL full control first and
+  then let the very same swing immediately strip it back to NONE in the
+  same breath -- wrong net result. Fixed: impact_trend now sorts LAST
+  among same-timestamp events, so any same-instant strip/BOTH-drop
+  resolves first and the trend's always-wins regain gets the final say,
+  exactly matching the user's own account (BOTH -> BUY -> full SELL,
+  never touching NONE).
+- MULTI-POI GROUPING BUG -- see the CONTROL section above for the full
+  concept, now locked there (multiple trend-direction in-favor/
+  aggressive-in-favor Daily zones impacting while trend already holds
+  control must be tracked as ONE combined group; the group only dies
+  once EVERY member has died, not on the first one). Verified on
+  2025-01-07: before the fix, FVG#207 (one of three 6-Jan trend
+  impacts) dying tactically wrongly flipped control to BUY; after,
+  OB#344 and RB#429 (still alive, never breached) correctly keep
+  control at full SELL the entire day -- zero BUY candidates get
+  through CONTROL anymore that day, and a real SELL entry (H4 RB#117,
+  impact 10:39, two attempts, both SL) is now visible instead.
+- ZONE_IS_INFAVOR BUG (separate, but caught in the same exchange): this
+  checked `created_state` (OB/RB) / `origin` (FVG) -- fields frozen at
+  BIRTH and never updated -- so a zone born Aggressive-In-Favor (state
+  4) and later PROMOTED to real in-favor (state 0) before it ever
+  impacted was permanently misclassified as not-in-favor. User's own
+  correction, demanded evidence, and was right: "even if they were
+  still aggressive-in favor... it would be the same because these two
+  types of POIs trade with the trend." Verified directly on real data:
+  OB#344 and RB#429 (both 2025-01-06) were each born state 4 and
+  promoted to state 0 before impacting (RB#429: pre_spent_state=0,
+  promotion_from_state=4) -- the old check still read their frozen
+  birth tag and wrongly excluded both from a "bearish in-favor POIs
+  impacted" count (1 instead of the real 3). Fixed to use the same
+  current-effective-state pattern already used by ob_status/rb_status/
+  fvg_status/vi_status: pre_spent_state once SPENT, else current state
+  -- correct for OB/RB/FVG/VI alike, no per-type special-casing. Only
+  caller is daily_controlling_bias's own in-favor-impact fallback.
+- All three verified against the 6-week smoke test baseline (unaffected
+  -- short window never has multiple same-day trend impacts or a
+  promoted-before-impact zone) before and after each individual fix.
+
+2026-10-04 (part 3) — Two more real bugs caught live against 2025-01-03: authorization must persist via CONTROL not re-derive same-day; 1H's single-slot transfer is a ONE-DAY-ONLY effect
+- AUTHORIZATION BUG (apply_daily_bias_gate): the opposing-side
+  authorization check (daily_opposite_impacted_today) only ever asked
+  "did a Daily POI of this side impact TODAY" -- a same-day-only rule
+  that predates CONTROL. User's own correction, verbatim: "we had the
+  second RB impacted yesterday, it was not breached, it still
+  authorizes to buy so, authorization is only lost with breach or
+  encountering in favor POI while opposing with in control." Fixed:
+  apply_daily_bias_gate now takes an optional control_checkpoints param
+  (computed once, right after d_zones_full is built in main(), as
+  gate_control_checkpoints) and authorizes an opposing 4H/1H zone
+  directly off CONTROL's own current state (c_state in (side, "BOTH"))
+  instead of re-deriving "today" from scratch -- CONTROL already
+  persists correctly across days via opp_death/opp_respect, so this is
+  just reading the existing correct answer instead of a redundant,
+  narrower re-check. Falls back to the old same-day check only when no
+  control_checkpoints are available (keeps any caller that doesn't pass
+  it working unchanged).
+- 1H ONE-DAY-ONLY TRANSFER BUG (compute_5m_trades' CONTROL gate): the
+  single-owner 1H slot (one_h_owner) was being checked for exact-match
+  on EVERY day control stayed BOTH, not just the day it was granted.
+  User's own correction, verbatim: "why did we lose yesterday['s 1h
+  sell]? first, PDL. secondly, transfer to opposing POI (this is only
+  for the impact day, for the next day 1h follows the PDL/H and wick
+  chain rule only)." So a side losing the 1H slot to a transfer is only
+  true ON THAT SPECIFIC DAY -- the next day, both sides' 1H availability
+  reverts to being governed purely by the (already separately coded)
+  PDL/PDH abandonment chain, independent of who the slot was
+  historically handed to. Fixed with a new helper,
+  control_checkpoint_time_at() (returns the checkpoint's own timestamp
+  currently in effect), compared calendar-day-to-calendar-day against
+  the zone's own impact time: SAME day as the grant -> still requires
+  exact one_h_owner match; a LATER day -> falls back to the same test
+  4H already uses (does CONTROL include this side at all), letting the
+  separate abandonment chain be the one actually restricting it further
+  from there.
+- Both verified live on 2025-01-03 (Daily bias SELL, CONTROL still BOTH
+  carried over from 2 Jan, 1H owner BUY from that day's own grant):
+  before these fixes, every BUY candidate was blocked
+  NO_DAILY_AUTHORIZATION and every SELL 1H candidate was blocked
+  NO_CONTROL, all day, with zero trades. After: BUY candidates now
+  correctly reach real evaluation (premium/discount, structural death,
+  etc.) instead of being blocked outright, SELL 1H candidates do too,
+  and a REAL entry appeared that the bugs had been hiding entirely: 1H
+  buy OB (origin 3 Jan 13:00) impacted 17:02, entered 17:40, stopped
+  out. Baseline smoke test unaffected (6-week window never exercises
+  either multi-day scenario).
+- Also corrected two reporting-language mistakes caught the same way:
+  BUY's own check is "discount", never "premium" (premium is SELL's);
+  and the "Setups allowed" column must list EVERY side/resource CONTROL
+  and the fixes above actually permit, not just the one that happens to
+  be convenient to mention -- both sides' 1H can be independently live
+  at once on a later day, not just the historical owner's.
+- Full 2025-01-03 day, locked format, is the second worked example for
+  the DAY REPORTING FORMAT section above (see there for the exact
+  table) -- Daily bias SELL, control BOTH all day (carried from Day 2),
+  setups 4H sell/4H buy/1H buy/1H sell, one real entry (1H buy OB,
+  17:02 impact -> 17:40 entry -> SL), five other candidates each
+  dropped or rejected with their exact reason.
+
+2026-10-04 (part 2) — CONTROL was reading the wrong timeframe entirely (4H instead of Daily); PDL/PDH holiday-rollback bug; day-reporting format locked against a real worked example (2025-01-02)
+- THE BIG ONE: compute_control_timeline() had been reading 4H zones
+  (h4_engine) this whole session, including through the NONE-direction
+  and opp_death fixes earlier today -- user's own correction, verbatim:
+  "control was never for 4h or 1h. it is ONLY for daily. everything I
+  said about control was for daily. 4h and 1h are the setups that come
+  with those controls plus other conditions." This was caught because
+  the "first POI impacted in 2025" (a DAILY zone, asked about earlier)
+  and the "4H zone impacted" list were silently two different sets of
+  facts that didn't line up with the user's own hand-walked 2025-01-02
+  story -- specifically, a SECOND old POI the user described (bringing
+  BOTH back a second time) was nowhere in the 4H-zone list, but matched
+  a Daily-zone impact exactly. Fixed: compute_control_timeline() now
+  takes d_zones_full only (dropped the h4_engine parameter entirely)
+  and classifies/tracks DAILY OB/RB/FVG/VI zones throughout -- every
+  "impact_trend"/"impact_opp"/"opp_death"/"opp_respect" event is a
+  Daily POI event, full stop. Re-verified against the user's full
+  2025-01-02 walkthrough end to end and it now matches exactly: SELL
+  open -> (PDL taken, 1H abandoned, NOT a control change) -> old Daily
+  RB (BUY) impacts 13:48 -> BOTH -> its anchor breaks 18:27 -> SELL ->
+  second old Daily RB (BUY) impacts 19:03 -> BOTH -> closes BOTH.
+- PDL/PDH HOLIDAY-ROLLBACK BUG (find_prev_day_extreme, user caught
+  directly): "yesterday" for PDL/PDH purposes was only rolled back past
+  Saturday/Sunday by weekday number, never checked whether the
+  candidate day actually had any real trading data. 1 Jan (a Wednesday,
+  New Year's Day, zero candles) silently returned None instead of
+  rolling back to the real previous trading day (31 Dec) -- meaning
+  2 Jan 2025's whole PDL abandonment check was silently skipped before
+  the fix. Fixed: now rolls back past ANY day with zero minutes of
+  data, holiday or weekend alike, capped at 10 days. Confirmed fix:
+  before, "SELL (PDL): not abandoned (armed all day)" on 2 Jan 2025;
+  after, "SELL (PDL): 1H abandoned from 2025-01-02 13:32:00 onward" --
+  matching the user's own account exactly.
+- A fast, correct way to re-check a single day WITHOUT the full ~18-
+  minute whole-history run: build the Daily engine from the FULL
+  2021-2026 file (needed -- old POIs genuinely span back to 2021), but
+  build the 4H/1H/5m engines from only a short lead-in window (~2
+  months back) -- 4H/1H don't need multi-year history themselves, only
+  Daily does for control. Total runtime ~45-50 seconds instead of ~18
+  minutes. The one subtlety: daily_controlling_bias()'s MSS-confirm
+  cache (see the earlier performance-fix entry) must be "prewarmed" by
+  one call using the FULL minutes array before switching to the short
+  one, since the cache check only looks at d_zones_full, not whatever
+  minutes happens to be passed on later calls.
+- DAY REPORTING FORMAT, now LOCKED (see the new section near the top of
+  this file) -- a strict 4-column table (control window / setups
+  allowed / POI of interest / entry info) with firm filtering rules the
+  user set one at a time against this exact 2025-01-02 example: never
+  mention the side not currently allowed at all (not even to say it was
+  rejected); never state a non-event ("1H not abandoned"); only list a
+  POI if its own side AND its own needed resource (4H/1H) are both
+  actually live at that moment, otherwise drop it entirely rather than
+  explain the rejection; never report anything outside the real
+  11:00-20:00(/19:00 summer) trading window -- a pre-window death is
+  just already-breached, no mention at all; always name a POI's exact
+  timeframe+side ("1H sell"), never "a POI". This is now the only
+  acceptable way to report a day's result going forward.
 
 2026-10-04 — Full 2021-2026 multi-year history: four real performance bugs found and fixed, CONTROL's NONE mechanism rebuilt after a /compact nearly lost it, opp_death revert bug fixed
 - Context: merged the 2021-2022 and 2023-2024 EURUSD datasets with the

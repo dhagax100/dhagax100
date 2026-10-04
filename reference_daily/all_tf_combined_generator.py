@@ -441,15 +441,28 @@ def find_prev_day_extreme(minutes, mt: list, date_str: str, display_tz: ZoneInfo
     # by coincidence (some early-Monday-session minutes land on the
     # Sunday calendar date in Riyadh time), which masked the same bug --
     # inconsistent, not reliable, fixed the same way for every Monday.
-    while prev_date.weekday() >= 5:  # 5=Saturday, 6=Sunday
+    # Real bug fixed 2026-10-04 (user caught it directly: "yesterday
+    # could be sunday... or 1st of january where there is no candle at
+    # all"): skipping ONLY Saturday/Sunday isn't enough -- a weekday
+    # holiday with zero real trading data (New Year's Day, 1 Jan, a
+    # Wednesday) has the same "no prior day" problem but was never
+    # rolled past, silently landing on an empty day and returning None
+    # (which then read as "never abandoned" even when the real previous
+    # trading day's extreme absolutely should have been checked). Now
+    # rolls back past ANY day with zero minutes in the data, holiday or
+    # weekend alike, not just by weekday number -- capped at 10 days so
+    # a genuine start-of-data edge case still returns None instead of
+    # looping forever.
+    for _ in range(10):
+        while prev_date.weekday() >= 5:  # 5=Saturday, 6=Sunday
+            prev_date -= timedelta(days=1)
+        win_start, win_end = calendar_day_bounds(prev_date.isoformat(), display_tz)
+        i0, i1 = bisect_left(mt, win_start), bisect_left(mt, win_end)
+        if i0 < i1:
+            day_minutes = minutes[i0:i1]
+            return min(x.l for x in day_minutes) if side == "SELL" else max(x.h for x in day_minutes)
         prev_date -= timedelta(days=1)
-    prev_date = prev_date.isoformat()
-    win_start, win_end = calendar_day_bounds(prev_date, display_tz)
-    i0, i1 = bisect_left(mt, win_start), bisect_left(mt, win_end)
-    if i0 >= i1:
-        return None
-    day_minutes = minutes[i0:i1]
-    return min(x.l for x in day_minutes) if side == "SELL" else max(x.h for x in day_minutes)
+    return None
 
 def find_prev_day_sweep_time(minutes, mt: list, date_str: str, display_tz: ZoneInfo, side: str, extreme):
     """First minute, anywhere in today's own full calendar day (same
@@ -698,14 +711,22 @@ def structural_invalid_at(z, it: "datetime", bars: list, bar_starts: list,
     return min(candidates, key=lambda tr: tr[0])
 
 
-def compute_control_timeline(h4_engine, d_zones_full, minutes, mt: list, display_tz: ZoneInfo,
+def compute_control_timeline(d_zones_full, minutes, mt: list, display_tz: ZoneInfo,
                               window_end: "datetime"):
-    """CONTROL (2026-10-02, user-taught, RECORDED but not yet verified
-    against real data -- see DAILIES_LEARNING_LOG.txt's CONTROL section
-    for the full taught spec this ports). A layer ABOVE Daily bias:
-    which side is ACTIVELY tradeable right now, distinct from which
-    side the trend structurally favors. Driven entirely by 4H-level POI
-    events (1H just follows via the returned one_h_owner).
+    """CONTROL (2026-10-02, user-taught; CORRECTED 2026-10-04 -- see
+    DAILIES_LEARNING_LOG.txt's CONTROL section for the full taught spec
+    this ports). A layer ABOVE Daily bias: which side is ACTIVELY
+    tradeable right now, distinct from which side the trend structurally
+    favors. Driven ENTIRELY by DAILY-level POI events -- the user's own
+    correction, verbatim: "control was never for 4h or 1h. it is ONLY
+    for daily. everything I said about control was for daily. 4h and 1h
+    are the setups that come with those controls plus other conditions."
+    This used to read 4H zones (h4_engine), which was wrong from the
+    start -- a real, confirmed bug, not a refinement. 4H/1H never drive
+    control; they only CONSUME whatever control currently says, plus
+    their own separate per-timeframe conditions (same-day Daily
+    authorization, 1H's own PDL/PDH abandonment chain, premium/discount)
+    -- none of which live in this function.
 
     States: "BUY", "SELL", "BOTH" (shared), "NONE".
 
@@ -716,29 +737,28 @@ def compute_control_timeline(h4_engine, d_zones_full, minutes, mt: list, display
     it silently excluded every zone impacted on a prior day, so control
     never got off NONE at all).
 
-    Returns a sorted list of checkpoints [(time, state, one_h_owner), ...]
+    Returns a sorted list of checkpoints [(time, state, one_h_owner, reason), ...]
     -- one_h_owner is "BUY"/"SELL"/None, the side currently holding the
-    single 1H slot."""
-    h4_bar_starts = [b.start for b in h4_engine.w]
+    single 1H slot; reason is a plain-English string naming the zone/
+    mechanism behind that transition."""
+    d_bar_starts = [b.start for b in d_zones_full.w]
 
-    # Step 1: classify every 4H zone impacted up to window_end as trend
-    # or opposing (same test apply_daily_bias_gate already uses).
+    # Step 1: classify every DAILY zone impacted up to window_end as
+    # trend or opposing (same test apply_daily_bias_gate already uses).
     # events: (time, kind, side, zone_id) -- zone_id is (ptype, z.id),
     # used to correlate a trend zone's own death back to whichever zone
     # is actually the one currently holding control (see Step 2).
     events = []
-    for zones, ptype in ((h4_engine.ob_zones, "OB"), (h4_engine.rb_zones, "RB"), (h4_engine.fvg_zones, "FVG"),
-                         (h4_engine.vi_zones, "VI")):
+    for zones, ptype in ((d_zones_full.ob_zones, "OB"), (d_zones_full.rb_zones, "RB"),
+                         (d_zones_full.fvg_zones, "FVG"), (d_zones_full.vi_zones, "VI")):
         for z in zones:
             if z.impact_time is None or z.impact_time > window_end:
                 continue
             # A zone already rejected -- OPEN_INSIDE_ZONE (born dead, spec
             # item (a) of respect: "cleared of OPEN_INSIDE_ZONE/body-close/
-            # anchor-break"), or NO_DAILY_AUTHORIZATION/NO_DAILY_BIAS_YET
-            # (Daily authorization is ALWAYS required, confirmed 2026-10-02)
-            # -- never counted as a real impact for CONTROL purposes. Real
-            # gap caught on a final pre-flight check: this zone loop never
-            # consulted z.rejected at all, so a born-dead or unauthorized
+            # anchor-break") -- never counted as a real impact for CONTROL
+            # purposes. Real gap caught on a final pre-flight check: this
+            # zone loop never consulted z.rejected at all, so a born-dead
             # zone could still flip control.
             if getattr(z, "rejected", False):
                 continue
@@ -747,8 +767,8 @@ def compute_control_timeline(h4_engine, d_zones_full, minutes, mt: list, display
                 continue
             side = "BUY" if z.bullish else "SELL"
             zone_id = (ptype, z.id)
-            invalidated_at, reason = structural_invalid_at(z, z.impact_time, h4_engine.w, h4_bar_starts,
-                                                             minutes, mt, h4_engine.events)
+            invalidated_at, reason = structural_invalid_at(z, z.impact_time, d_zones_full.w, d_bar_starts,
+                                                             minutes, mt, d_zones_full.events)
             if z.bullish == controlling:
                 events.append((z.impact_time, "impact_trend", side, zone_id))
                 # CONTROL spec item 6: what happens to the SPECIFIC trend
@@ -773,7 +793,7 @@ def compute_control_timeline(h4_engine, d_zones_full, minutes, mt: list, display
                     continue  # never swept in the available data -- stays pending, no resolution
                 respect_t = max(invalidated_at, sweep_t)
                 hard_t, _ = structural_hard_death_between(z, invalidated_at, respect_t,
-                                                           h4_engine.w, h4_bar_starts, minutes, mt)
+                                                           d_zones_full.w, d_bar_starts, minutes, mt)
                 if hard_t is not None:
                     events.append((hard_t, "opp_death", side, zone_id))
                 else:
@@ -800,17 +820,44 @@ def compute_control_timeline(h4_engine, d_zones_full, minutes, mt: list, display
         side = "BUY" if e.kind == 0 else "SELL"
         events.append((e.at, "daily_swing_strip", side, None))
 
-    # At equal timestamps, zone-tied events (respect/death/impact) are
-    # processed BEFORE the generic daily-swing strip signal, so a real
-    # respect transfer always wins over a same-instant generic strip.
-    events.sort(key=lambda e: (e[0], e[1] == "daily_swing_strip"))
+    # At equal timestamps, "impact_trend" is processed LAST -- real bug
+    # fixed 2026-10-04, caught by the user directly on 2025-01-06 04:15:
+    # one single minute's price action can BOTH confirm a Daily swing
+    # (stripping whoever currently holds a side) AND tag the trend zone
+    # (its own instant, always-wins regain) at the same time -- e.g. one
+    # wick that breaks a new high (confirming a swing low, stripping
+    # SELL off a shared BOTH down to BUY) while ALSO reaching up into a
+    # SELL FVG's own zone. The user's own account: "in one minute we
+    # first lose control of sell, then control of buy, back to sell" --
+    # the strip must resolve FIRST (BOTH -> BUY), and the trend's
+    # always-wins instant regain must get the LAST word (BUY -> full
+    # SELL), not the other way around. The previous ordering sorted
+    # impact_trend BEFORE daily_swing_strip, so it granted SELL first
+    # and then let the very same swing immediately strip it back to
+    # NONE -- wrong net result, confirmed wrong by the user directly.
+    # opp_respect/opp_death/impact_opp still resolve in their original
+    # per-zone order relative to each other and to daily_swing_strip;
+    # only impact_trend is pulled to the very end.
+    events.sort(key=lambda e: (e[0], e[1] == "impact_trend"))
 
     # Step 2: replay into a state machine.
     checkpoints = []
     state = "NONE"
     one_h_owner = None
     banked_respect = {"BUY": False, "SELL": False}
-    controlling_trend_zone = None  # (ptype, id) of whichever trend zone currently anchors full control
+    # SET of (ptype, id) -- every trend-direction zone (in-favor or
+    # aggressive-in-favor alike, both "trade with the trend" per the
+    # user) currently anchoring full control. Real bug fixed 2026-10-04,
+    # user's own correction: multiple same-side trend zones impacting
+    # the same day (or while already in full control) were being
+    # silently dropped -- only the single zone that caused the last
+    # FLIP ever got tracked, so one of them dying was wrongly treated
+    # as the WHOLE trend's death even while its siblings were still
+    # alive and un-breached. "We trade like we have one POI affected
+    # that day" -- the group only actually dies, triggering reversion,
+    # once EVERY member has died (tactical or structural), not on the
+    # first one.
+    controlling_trend_group = set()
     # (ptype, id) of whichever opposing zone currently anchors THAT side's
     # hold on control -- either the shared 1H slot in BOTH, or a full grant
     # via respect (2026-10-03, user correction: when this specific zone
@@ -828,10 +875,10 @@ def compute_control_timeline(h4_engine, d_zones_full, minutes, mt: list, display
         return f"{zone_id[0]} #{zone_id[1]}" if zone_id is not None else ""
 
     def grant_trend(t, side, zone_id):
-        nonlocal state, one_h_owner, controlling_trend_zone
+        nonlocal state, one_h_owner, controlling_trend_group
         state = side
         one_h_owner = side
-        controlling_trend_zone = zone_id
+        controlling_trend_group = {zone_id}
         controlling_opp_zone["BUY"] = controlling_opp_zone["SELL"] = None
         record(t, f"trend POI impacted ({zone_label(zone_id)}, {side}) -> full {side}")
 
@@ -845,6 +892,14 @@ def compute_control_timeline(h4_engine, d_zones_full, minutes, mt: list, display
         if kind == "impact_trend":
             if state != side:
                 grant_trend(t, side, zone_id)
+            else:
+                # Already fully in control of this side -- this zone
+                # doesn't cause a new flip/checkpoint, but it DOES join
+                # the group backing that control, same as if it had
+                # caused the flip itself. No checkpoint recorded (state
+                # doesn't change), it just means the group won't be
+                # considered dead until THIS zone dies too.
+                controlling_trend_group.add(zone_id)
         elif kind == "impact_opp":
             if state == opposite(side) or state == "NONE":
                 state = "BOTH"
@@ -876,40 +931,44 @@ def compute_control_timeline(h4_engine, d_zones_full, minutes, mt: list, display
             if state != side:
                 state = side
                 one_h_owner = side
-                controlling_trend_zone = None
+                controlling_trend_group = set()
                 controlling_opp_zone[side] = zone_id
                 record(t, f"opposing POI respected ({zone_label(zone_id)}, {side}) -> full {side}")
         elif kind == "trend_death_tactical":
-            if controlling_trend_zone == zone_id and state == side:
+            if zone_id in controlling_trend_group and state == side:
+                controlling_trend_group.discard(zone_id)
+                if controlling_trend_group:
+                    continue  # other trend zones from the same group are still alive -- no change
                 if banked_respect[opposite(side)]:
                     state = opposite(side)
                     one_h_owner = opposite(side)
-                    reason = (f"trend zone tactical death ({zone_label(zone_id)}) -> "
+                    reason = (f"trend zone tactical death ({zone_label(zone_id)}, last of its group) -> "
                               f"{opposite(side)} had banked respect, control to {opposite(side)}")
                 else:
                     state = "NONE"
                     one_h_owner = None
                     controlling_opp_zone["BUY"] = controlling_opp_zone["SELL"] = None
-                    reason = f"trend zone tactical death ({zone_label(zone_id)}) -> no banked respect, control to NONE"
-                controlling_trend_zone = None
+                    reason = f"trend zone tactical death ({zone_label(zone_id)}, last of its group) -> no banked respect, control to NONE"
                 record(t, reason)
         elif kind == "trend_death_structural":
-            if controlling_trend_zone == zone_id and state == side:
+            if zone_id in controlling_trend_group and state == side:
+                controlling_trend_group.discard(zone_id)
+                if controlling_trend_group:
+                    continue  # other trend zones from the same group are still alive -- no change
                 # Real Daily MSS flip -- "the whole framework mirrors
                 # from here": the opposite side takes automatic FULL
                 # control immediately, not just on its next own impact.
                 state = opposite(side)
                 one_h_owner = opposite(side)
-                controlling_trend_zone = None
                 banked_respect = {"BUY": False, "SELL": False}
-                record(t, f"trend zone structural death / Daily MSS flip ({zone_label(zone_id)}) -> control to {opposite(side)}")
+                record(t, f"trend zone structural death / Daily MSS flip ({zone_label(zone_id)}, last of its group) -> control to {opposite(side)}")
         elif kind == "daily_swing_strip":
             swing_word = "high" if side == "BUY" else "low"
             if state == side:
                 # side was alone -- nothing left standing.
                 state = "NONE"
                 one_h_owner = None
-                controlling_trend_zone = None
+                controlling_trend_group = set()
                 controlling_opp_zone["BUY"] = controlling_opp_zone["SELL"] = None
                 record(t, f"Daily swing {swing_word} confirmed -> strips {side} (was alone), control to NONE")
             elif state == "BOTH":
@@ -919,7 +978,7 @@ def compute_control_timeline(h4_engine, d_zones_full, minutes, mt: list, display
                 # lose sell, we go to buy" -- NOT NONE).
                 state = opposite(side)
                 one_h_owner = opposite(side)
-                controlling_trend_zone = None
+                controlling_trend_group = set()
                 controlling_opp_zone[side] = None
                 record(t, f"Daily swing {swing_word} confirmed -> strips {side} from BOTH, control to {opposite(side)}")
             # else: side isn't currently held at all (state is opposite(side)
@@ -937,6 +996,20 @@ def control_state_at(checkpoints: list, t: "datetime"):
             break
         state, one_h_owner = cs, ch
     return state, one_h_owner
+
+
+def control_checkpoint_time_at(checkpoints: list, t: "datetime"):
+    """Returns the OWN timestamp of the checkpoint currently in effect at
+    `t` (the last one at or before `t`), or None if `t` is before the
+    first one. Used only to tell whether `t` falls on the SAME calendar
+    day that checkpoint was recorded on -- see its one call site's own
+    comment (the 1H same-day-only transfer rule, 2026-10-04)."""
+    result = None
+    for ct, _cs, _ch, _reason in checkpoints:
+        if ct > t:
+            break
+        result = ct
+    return result
 
 
 def control_ceiling(checkpoints: list, t0: "datetime", side: str, resource: str):
@@ -1197,12 +1270,12 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
     bar_starts5 = [b.start for b in e5.w]
     events5_sorted = sorted(e5.events, key=lambda e: (e.confirm, e.kind))
 
-    # CONTROL (2026-10-02, user-taught, newly wired in -- not yet
-    # verified against real data, see compute_control_timeline's own
-    # docstring and DAILIES_LEARNING_LOG.txt's CONTROL section). None
-    # when d_zones_full is missing (keeps any caller that doesn't pass
-    # it working exactly as before, un-gated).
-    control_checkpoints = (compute_control_timeline(h4_engine, d_zones_full, minutes, mt, display_tz, window_end)
+    # CONTROL (2026-10-02, user-taught; Daily-only, corrected 2026-10-04
+    # -- see compute_control_timeline's own docstring and
+    # DAILIES_LEARNING_LOG.txt's CONTROL section). None when d_zones_full
+    # is missing (keeps any caller that doesn't pass it working exactly
+    # as before, un-gated).
+    control_checkpoints = (compute_control_timeline(d_zones_full, minutes, mt, display_tz, window_end)
                             if d_zones_full is not None else None)
 
     # PDH/PDL wick-chain (2026-10-02, user-taught): replaces the plain
@@ -1319,7 +1392,26 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
             resource = "4h" if tf_tag == "H4" else "1h"
             c_state, c_owner = control_state_at(control_checkpoints, z.impact_time)
             row_base["control_state_at_impact"] = f"{c_state}/{c_owner or '-'}"
-            held = (c_state in (zone_side, "BOTH")) if resource == "4h" else (c_owner == zone_side)
+            if resource == "4h":
+                held = c_state in (zone_side, "BOTH")
+            else:
+                # Real bug fixed 2026-10-04 -- user's own correction,
+                # verbatim: "transfer to opposing POI... this is only for
+                # the impact day, for the next day 1h follows the PDL/H
+                # and wick chain rule only." one_h_owner's single-slot
+                # transfer is a fact about the SPECIFIC day it happened --
+                # it must not keep gating 1H on every later day just
+                # because nothing has re-granted it since. Same calendar
+                # day as the grant -> still requires the exact owner
+                # match. A LATER day -> 1H for this side falls back to
+                # the same test 4H uses (does CONTROL include this side
+                # at all); the separate PDL/PDH abandonment chain above
+                # (zone_abandon_at) is what actually restricts it further
+                # from there, independent of who originally got the slot.
+                grant_t = control_checkpoint_time_at(control_checkpoints, z.impact_time)
+                same_day = (grant_t is not None and
+                            grant_t.astimezone(display_tz).date() == z.impact_time.astimezone(display_tz).date())
+                held = (c_owner == zone_side) if same_day else (c_state in (zone_side, "BOTH"))
             if not held:
                 ledger_rows.append(dict(row_base, stage="NO_CONTROL"))
                 continue
@@ -1715,11 +1807,25 @@ def build_trades_pine(trades: list[dict], display_tz: ZoneInfo) -> list[str]:
 
 
 def zone_is_infavor(z) -> bool:
-    """True only for a zone created as the "in-favor" kind (IFOB/IRB/
-    IFVG -- state 0 in OB_STATE/RB_STATE/FVG_STATE), never Aggressive
-    (1) or Old (2). OB/RB store this in `created_state`, FVG stores it
-    in `origin` -- same numbering, different field name."""
-    return getattr(z, "created_state", getattr(z, "origin", None)) == 0
+    """True if a zone is CURRENTLY classified in-favor (state 0) -- its
+    present effective state, not its frozen birth tag. Real bug fixed
+    2026-10-04 (user caught it directly, demanded evidence, and was
+    right): this used to check `created_state` (OB/RB) / `origin` (FVG)
+    -- fields set ONCE at creation and never updated -- so a zone born
+    Aggressive/AIFOB/AIRB and later PROMOTED to real in-favor before it
+    ever impacted was permanently misclassified as not-in-favor forever.
+    Verified on real data: OB#344 and RB#429 (both 2025-01-06) were each
+    born state 4 (Aggressive-In-Favor) and promoted to state 0 before
+    impacting (RB#429: pre_spent_state=0, promotion_from_state=4) -- the
+    old check still read their birth tag (4) and wrongly excluded both
+    from a downtrend's "bearish in-favor POIs impacted" count. Fixed to
+    use the same current-effective-state pattern already used by
+    ob_status/rb_status/fvg_status/vi_status: pre_spent_state once the
+    zone has gone SPENT (state 3), else its current state -- correct for
+    OB, RB, FVG and VI alike, no per-type field-name special-casing
+    needed."""
+    state = z.pre_spent_state if z.state == 3 else z.state
+    return state == 0
 
 
 def daily_controlling_bias(d_zones_full, as_of: "datetime", minutes=None, mt: list | None = None):
@@ -1814,7 +1920,7 @@ def daily_opposite_impacted_today(d_zones_full, opposite_bull: bool, date_str: s
 
 
 def apply_daily_bias_gate(engine, tf_tag: str, d_zones_full, display_tz: ZoneInfo,
-                           minutes=None, mt: list | None = None) -> None:
+                           minutes=None, mt: list | None = None, control_checkpoints: list | None = None) -> None:
     """User's own correction (2026-09-30, real bug -- not a display
     preference): "we never think of Buy in a Sell day... ONLY Daily
     Timeframe related events decide the bias of that day or moment, and
@@ -1866,15 +1972,30 @@ def apply_daily_bias_gate(engine, tf_tag: str, d_zones_full, display_tz: ZoneInf
                 continue
             if z.bullish == controlling:
                 continue  # already in favor -- fine
-            # 2026-10-02, user instruction: 4H opposing is now authorized
-            # the same way 1H opposing already was -- a same-side opposing
-            # Daily POI impacting on this zone's own impact day (the real
-            # ARB/ORB mechanism). Previously 4H opposing was rejected
-            # unconditionally, no authorization path at all.
-            date_str = z.impact_time.astimezone(display_tz).date().isoformat()
-            if not daily_opposite_impacted_today(d_zones_full, z.bullish, date_str, display_tz):
-                z.rejected = True
-                z.rejected_reason = "NO_DAILY_AUTHORIZATION"
+            # Real bug fixed 2026-10-04 -- user's own correction, verbatim:
+            # "we had the second RB impacted yesterday, it was not
+            # breached, it still authorizes to buy... authorization is
+            # only lost with breach or encountering in favor POI while
+            # opposing with in control." The same-day-only check below
+            # (daily_opposite_impacted_today) predates CONTROL and only
+            # ever asked "did a Daily POI of this side impact TODAY" --
+            # it had no idea an opposing zone from days ago was still
+            # alive and un-breached, so it wrongly re-demanded a fresh
+            # same-day impact every single day. CONTROL already tracks
+            # exactly this (persists until opp_death or trend reclaiming
+            # it), so authorization is now read directly from CONTROL's
+            # own state instead of re-derived from "today" alone.
+            if control_checkpoints is not None:
+                c_state, _ = control_state_at(control_checkpoints, z.impact_time)
+                side = "BUY" if z.bullish else "SELL"
+                if c_state not in (side, "BOTH"):
+                    z.rejected = True
+                    z.rejected_reason = "NO_DAILY_AUTHORIZATION"
+            else:
+                date_str = z.impact_time.astimezone(display_tz).date().isoformat()
+                if not daily_opposite_impacted_today(d_zones_full, z.bullish, date_str, display_tz):
+                    z.rejected = True
+                    z.rejected_reason = "NO_DAILY_AUTHORIZATION"
 
 
 def find_parent_daily_poi(d_engine, side_bull: bool, child_impact_time: "datetime"):
@@ -2239,7 +2360,12 @@ def main() -> int:
                 # apply_daily_bias_gate's own docstring): 4H/1H setups
                 # only exist within whatever bias Daily has already
                 # decided, never on their own separate justification.
-                apply_daily_bias_gate(engine, tag, d_zones_full, display_tz, minutes, mt_all)
+                # gate_control_checkpoints computed once, right after
+                # d_zones_full is ready (2026-10-04, see
+                # apply_daily_bias_gate's own docstring for why this
+                # replaces the old same-day-only authorization check).
+                apply_daily_bias_gate(engine, tag, d_zones_full, display_tz, minutes, mt_all,
+                                       control_checkpoints=gate_control_checkpoints)
             if tag in ("h4", "h1"):
                 exclude_old_intraday_zones(engine)
                 # Full (unfiltered) snapshot for compute_5m_trades' own
@@ -2267,6 +2393,11 @@ def main() -> int:
                                                 fvg_zones=list(engine.fvg_zones), vi_zones=list(engine.vi_zones),
                                                 w=engine.w, events=engine.events,
                                                 msses=list(engine.msses))
+                # Computed once, right here, so apply_daily_bias_gate (for
+                # both h4 and h1 below) can authorize off CONTROL's own
+                # persistent state instead of a same-day-only re-check --
+                # see apply_daily_bias_gate's own docstring (2026-10-04 fix).
+                gate_control_checkpoints = compute_control_timeline(d_zones_full, minutes, mt_all, display_tz, cutoff_utc)
             # Daily is never --since-FLOOR-scoped here (2026-09-29, user:
             # "I want all... all the POIs, swings, MSS and everything...
             # by using the focus toggle" -- --since scoping makes sense
