@@ -408,8 +408,10 @@ CROSS-DAY CANDIDATES / "REACT DAY" (2026-09-29)
   under BIAS above. The "4H never opposing" framing in this paragraph
   no longer holds.
 
-CONTROL (2026-10-02, user-taught, RECORDED BUT NOT YET CODED -- same
-status the retired FVG close-through item used to have)
+CONTROL (2026-10-02, user-taught; CODED AND VERIFIED as of 2026-10-04 --
+see SESSION LOG entry below for the real bugs found and fixed getting
+here, including a near-total loss of this spec's own nuance after a
+2026-10-04 /compact and how it was recovered from the raw transcript)
 - A new layer ABOVE Daily bias: which side is ACTIVELY being traded
   right now (control), distinct from which side the trend structurally
   favors (bias/MSS). Bias still only ever flips via Daily MSS, exactly
@@ -455,20 +457,32 @@ status the retired FVG close-through item used to have)
   - via anchor-break -> this IS a real Daily MSS flip, structural, not
     tactical -- the whole framework mirrors from here (the new
     direction becomes the new trend side).
-- NONE CONTROL (2026-10-02, same session, user-taught): a fourth state
-  alongside BUY/SELL/BOTH. The PDL/PDH-sweep + matching swing-confirm
-  signal (the same (b)+(c) pair inside "respect") is actually a
-  standalone, POI-independent event -- it fires on its own whenever the
-  market makes that structural statement, and it ALWAYS strips whoever
-  currently holds control, whether or not a live opposing POI exists to
-  inherit it.
-    - If a live, un-breached opposing POI exists at that moment (also
-      cleared of body-close/anchor-break) -> that IS respect, full
-      control transfers to its side, exactly as above.
-    - If no such zone exists (it already died via body-close/
-      open-inside-zone first, or none was ever encountered) -> the
-      controller still loses control, but there's nobody to hand it to
-      -> control goes to NONE.
+- NONE CONTROL -- CORRECTED 2026-10-04 (the version above/before was
+  wrong in three real ways; user caught all three directly against the
+  chart after a /compact had degraded this to "sweep AND swing-confirm,
+  either order, 4H" -- NONE of that framing is right, see SESSION LOG):
+    - It is a single Daily-level event, not two conditions to detect
+      separately and AND together. A Daily swing confirming IS the
+      PDL/PDH being taken -- a swing high confirms BY breaking the
+      connecting low (that break is the low being taken), a swing low
+      confirms BY breaking the connecting high. One event, full stop.
+    - It is Daily-only. 4H is never part of NONE at all.
+    - Direction (confirmed by the user's own worked example -- trading
+      BUY off an in-favor POI in an uptrend, price makes a swing high
+      with nothing live to inherit it -> NONE): a Daily swing HIGH
+      confirming strips BUY's control. A Daily swing LOW confirming
+      strips SELL's. (Mnemonic: the swing that just got confirmed is
+      the one whose breakout move killed the opposite side.)
+    - It only strips a side that is ACTUALLY currently held, alone or
+      as part of BOTH:
+        - Held ALONE (full BUY or full SELL, nothing shared) -> strips
+          to NONE.
+        - Held as part of BOTH -> does NOT go to NONE. The other side
+          of BOTH was already standing on its own, so it just keeps
+          control (user's own correction, verbatim: "if we are on both
+          and we lose sell, we go to buy").
+        - Not currently held at all (opposite side has it, or already
+          NONE) -> no-op, nothing to strip.
   From NONE, the next POI impact just restarts the normal rules fresh
   -- trend-direction mere impact grants full control instantly (same
   asymmetric rule as always); opposing mere impact grants shared
@@ -481,9 +495,37 @@ status the retired FVG close-through item used to have)
   POI instead claimed control out of NONE (not dethroning an actual
   live controller), there is nothing to revert to -- it goes back to
   NONE, not to the opposing side.
-- Open items: still needs actual code design (ledger columns, how
-  "control" is tracked/displayed, interaction with same-leg
-  supersession) before implementation -- not started.
+- OPPOSING ZONE DEATH WHILE HOLDING A GRANT -- real bug fixed 2026-10-04:
+  an opposing zone that currently holds control (either the shared BOTH
+  1H slot, or full control via an earlier respect) dying -- ANY death
+  reason, body-close or anchor-break, no special-casing by reason -- must
+  hand that grant back, reverting to whatever the trend side's own
+  baseline would be without it. This was coded as an unconditional no-op
+  ("trend's dominance just reconfirmed") which is only correct for the
+  ORDINARY case of an opposing zone dying before ever taking control at
+  all -- it was silently wrong for the case the user's own Jan-2
+  walkthrough hinged on (an old RB holding shared BOTH, its protecting
+  swing anchor breaks, control must revert to the trend side's SELL, not
+  stay frozen at BOTH).
+- Implemented in compute_control_timeline() / all_tf_combined_generator.py
+  -- NONE direction + BOTH-handling, and the opposing-zone-death revert,
+  both verified against a live full-2021-2026-history run with the
+  specific moments checked against the user's own hand-walked chart
+  narrative. Each checkpoint now also carries a plain-English `reason`
+  string (which zone, which mechanism) precisely so this is checkable
+  against the chart going forward, not just the resulting state.
+- STILL OPEN (not yet coded, confirmed necessary 2026-10-04): the "4H
+  side continues, 1H specifically abandoned" picture (user's Jan-2
+  walkthrough: "PDL was taken leaving us with sell only with 4h") is
+  correctly computed by the EXISTING separate PDH/PDL wick-chain
+  mechanism (build_pdh_pdl_chain/chain_abandon_at) for actual TRADE
+  decisions in compute_5m_trades -- but compute_control_timeline's own
+  reported state/reason does NOT yet fold this in, so a CONTROL
+  checkpoint reported as plain "SELL" can actually mean "SELL, but 1H is
+  currently abandoned" without that showing anywhere in the output.
+  Needs the abandonment ceiling surfaced alongside state/reason, not a
+  new mechanism -- the correct answer already exists, it just isn't
+  joined with CONTROL's own reporting yet.
 
 BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 - Visible in BOTH 5m_trades_ledger.csv AND the on-chart 5m trades
@@ -504,6 +546,112 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 
 SESSION LOG (newest first)
 ----------------------------
+
+2026-10-04 — Full 2021-2026 multi-year history: four real performance bugs found and fixed, CONTROL's NONE mechanism rebuilt after a /compact nearly lost it, opp_death revert bug fixed
+- Context: merged the 2021-2022 and 2023-2024 EURUSD datasets with the
+  existing 2025-2026 one into one continuous ~2.15M-row file
+  (EURUSD_m1_BidAndAsk_2021-01-03_to_2026-09-30.csv, verified zero
+  duplicate/out-of-order timestamps, all large gaps are real weekend
+  closes) so old POIs from 2021-2024 are genuinely known and can be
+  traded off when 2025/2026 price returns to them -- this is NOT a new
+  mechanism, the engine already carries full zone history forward
+  automatically; --since only trims the OUTPUT/trade-scan window, never
+  what the engine has built.
+- PINE OUTPUT FIX: the OB/RB/FVG box count caps (--pine-obs/rbs/fvgs,
+  default 200 each) used to mean "most recent 200 by birth date" --
+  fine for a short window, wrong for multi-year history: a POI born
+  years ago but still genuinely alive/tradeable could silently fall
+  outside the cap once 200 newer zones exist, while the Python ledger
+  (uncapped) would still correctly trade off it -- chart and logic
+  would disagree. Fixed: every zone still alive (status != SPENT) is
+  now ALWAYS drawn, no cap; the cap only trims already-dead zones kept
+  for visual history. Real complication found immediately after: Daily
+  SPENT counts were 0 across OB/RB/FVG over 4 years (Old/OOB zones never
+  go SPENT, per this project's own "Old = fully tradeable, same as
+  Aggressive" rule) -- meaning nearly the WHOLE 4-year zone count counts
+  as "live" and gets drawn, which is what actually caused TradingView's
+  "main body too long" CE10295 error on the combined script. Open
+  design question, not yet resolved: how to reconcile "never hide a
+  live POI" with Pine's hard compile-size ceiling when "live" can mean
+  "almost everything."
+- FOUR REAL PERFORMANCE BUGS, found by profiling the actual running
+  process (py-spy), not guessing -- a single-day run against the full
+  2021-2026 history had not finished after 30+ minutes before these:
+    1. daily_controlling_bias() re-walked the 1-minute data from
+       scratch, from each Daily MSS's own break forward, to find that
+       MSS's confirming minute -- EVERY time it's called, i.e. once per
+       4H/1H zone with an impact_time. A MSS's confirming minute is a
+       fixed fact independent of the as_of being queried. Fixed by
+       computing each MSS's confirm time ONCE, caching the sorted list
+       on d_zones_full (reused across every zone/every 4H+1H call in
+       one run), and a single bisect per zone from then on.
+    2. rb_active/fvg_active/vi_active (weekly_combined_generator.py)
+       were never pruned of dead (SPENT) zones the way ob_active
+       already was -- every RB/FVG/VI zone ever created stayed in these
+       lists forever, so finish_events_and_lifecycle() re-scanned the
+       FULL cumulative zone count on every single candle for the rest
+       of the run. Fixed with the same prune-after-each-candle pattern
+       ob_active already used.
+    3. ob_claimed() was the one holdout still doing an O(n) linear scan
+       over every OB zone, where rb_claimed/fvg_claimed/vi_claimed were
+       already O(1) set lookups (_claimed_pairs sets). Brought in line.
+    4. ob_aifob_in_range() scanned every OB zone for a candle-range
+       check, called from ob_add_ifob on every candle -- became the
+       dominant cost once 1-3 were fixed (confirmed by two consecutive
+       profiler samples landing here). Replaced with a side-specific
+       SORTED index of AIFOB candle positions (bisect.insort on add,
+       correct regardless of creation order) and an O(log n) range
+       check instead of O(n).
+  Together: the full 2021-2026 single-day run went from "not finished
+  after 30+ minutes" to ~18 minutes. All four verified byte-identical
+  against the existing 6-week smoke test baseline after each individual
+  fix (performance-only changes, confirmed zero effect on any result)
+  -- EXCEPT fix #4 below, which briefly was NOT behavior-preserving.
+- REAL CORRECTNESS BUG caught via a cross-machine mismatch, not a smoke
+  test: the user independently ran the SAME code+data on their own
+  machine and got Daily OB=344 where this environment got OB=343 --
+  RB/FVG matched exactly, only OB was off by one. Root cause: fix #4's
+  new sorted AIFOB index was only ever ADDED to at zone creation, never
+  REMOVED when a zone later gets PROMOTED away from AIFOB (orig_state
+  4 -> 0, both call sites in consume_break) -- so the index kept
+  claiming "an AIFOB lives here" forever even after a zone was no
+  longer one. The OLD O(n) scan always re-checked the zone's CURRENT
+  orig_state live, so it never had this problem -- the new index has to
+  be kept in sync by hand. Fixed with _ob_unmark_aifob(), called at
+  both promotion sites; re-verified the user's own 344 count now
+  matches exactly on identical data. Lesson: a cross-machine identical-
+  input/identical-output check caught something the smoke test (which
+  only re-tests the SAME short window every time) structurally cannot --
+  worth doing again whenever a performance-only refactor touches zone
+  bookkeeping.
+- /COMPACT NEARLY LOST THE CONTROL SPEC'S OWN NUANCE: after a context
+  compaction, NONE's rebuild drifted hard from what the user actually
+  taught on 2026-10-02 -- ended up coded as "sweep AND swing-confirm,
+  either order, using 4H swing events" (wrong on direction, wrong on
+  4H-vs-Daily, wrong on "two conditions" at all), and opp_death's
+  unconditional no-op (correct for the ordinary case) went unquestioned
+  even though the user's own Jan-2 walkthrough directly contradicted it.
+  The user caught every one of these independently, by hand, against
+  the real chart -- none were self-caught. Recovery: the ORIGINAL
+  2026-10-02 teaching (14:15 and 16:06 UTC messages) was never actually
+  lost -- the raw session JSONL transcript survives compaction intact;
+  only the AI's own active context (the compacted summary) had degraded.
+  Re-read those two messages directly from the transcript file
+  (~/.claude/projects/.../*.jsonl, filtered by role=="user" and
+  timestamp) rather than trusting memory, confirmed most of the original
+  spec (instant trend regain, respect-required opposing gain, banked-
+  respect tactical reversion, structural/anchor-break = automatic MSS
+  flip) was ALREADY correctly coded from before this session and never
+  actually broke -- only NONE's exact mechanism and opp_death's revert
+  case were genuinely wrong. Lesson for future compactions: anything
+  taught only in chat and never written to this file is at real risk of
+  drifting after a compact, even when the broad shape survives -- the
+  raw transcript is the real backstop, this file is the fast path that
+  avoids needing it.
+- CONTROL fixes (NONE direction/BOTH-handling, opp_death revert) are
+  documented in full in the CONTROL section above, including the still-
+  open "1H abandonment not yet joined with CONTROL's own reporting"
+  item -- not yet closed.
 
 2026-10-02 — Two rule changes, locked: 4H opposing authorized same as 1H; PDL/PDH sweep check now also applies on impact day
 - Change 1: 4H opposing was previously rejected unconditionally (no

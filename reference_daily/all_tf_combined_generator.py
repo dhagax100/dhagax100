@@ -811,6 +811,11 @@ def compute_control_timeline(h4_engine, d_zones_full, minutes, mt: list, display
     one_h_owner = None
     banked_respect = {"BUY": False, "SELL": False}
     controlling_trend_zone = None  # (ptype, id) of whichever trend zone currently anchors full control
+    # (ptype, id) of whichever opposing zone currently anchors THAT side's
+    # hold on control -- either the shared 1H slot in BOTH, or a full grant
+    # via respect (2026-10-03, user correction: when this specific zone
+    # later dies, that grant must be given back, not left as a no-op).
+    controlling_opp_zone = {"BUY": None, "SELL": None}
     last_trend_side = None
 
     def opposite(s):
@@ -827,6 +832,7 @@ def compute_control_timeline(h4_engine, d_zones_full, minutes, mt: list, display
         state = side
         one_h_owner = side
         controlling_trend_zone = zone_id
+        controlling_opp_zone["BUY"] = controlling_opp_zone["SELL"] = None
         record(t, f"trend POI impacted ({zone_label(zone_id)}, {side}) -> full {side}")
 
     for t, kind, side, zone_id in events:
@@ -843,15 +849,35 @@ def compute_control_timeline(h4_engine, d_zones_full, minutes, mt: list, display
             if state == opposite(side) or state == "NONE":
                 state = "BOTH"
                 one_h_owner = side
+                controlling_opp_zone[side] = zone_id
                 record(t, f"opposing POI impacted ({zone_label(zone_id)}, {side}) -> shared BOTH, 1H to {side}")
         elif kind == "opp_death":
-            pass  # no control change -- trend's dominance just reconfirmed
+            # Real bug (2026-10-03, user's own Jan-2 walkthrough caught
+            # this): only a no-op when this opposing zone was never the
+            # one actually holding control. If it currently IS -- either
+            # as BOTH's 1H holder, or holding full control via an earlier
+            # respect -- its death must hand control back, not leave it
+            # untouched ("trend's dominance just reconfirmed" only ever
+            # applied to the ordinary case of an opposing zone that died
+            # WITHOUT ever having taken control in the first place).
+            if controlling_opp_zone[side] == zone_id:
+                if state == "BOTH" and one_h_owner == side:
+                    state = opposite(side)
+                    one_h_owner = opposite(side)
+                    controlling_opp_zone[side] = None
+                    record(t, f"opposing zone death ({zone_label(zone_id)}) -> was holding shared BOTH, control reverts to {opposite(side)}")
+                elif state == side:
+                    state = opposite(side)
+                    one_h_owner = opposite(side)
+                    controlling_opp_zone[side] = None
+                    record(t, f"opposing zone death ({zone_label(zone_id)}) -> was holding full control via respect, control reverts to {opposite(side)}")
         elif kind == "opp_respect":
             banked_respect[side] = True
             if state != side:
                 state = side
                 one_h_owner = side
                 controlling_trend_zone = None
+                controlling_opp_zone[side] = zone_id
                 record(t, f"opposing POI respected ({zone_label(zone_id)}, {side}) -> full {side}")
         elif kind == "trend_death_tactical":
             if controlling_trend_zone == zone_id and state == side:
@@ -863,6 +889,7 @@ def compute_control_timeline(h4_engine, d_zones_full, minutes, mt: list, display
                 else:
                     state = "NONE"
                     one_h_owner = None
+                    controlling_opp_zone["BUY"] = controlling_opp_zone["SELL"] = None
                     reason = f"trend zone tactical death ({zone_label(zone_id)}) -> no banked respect, control to NONE"
                 controlling_trend_zone = None
                 record(t, reason)
@@ -883,6 +910,7 @@ def compute_control_timeline(h4_engine, d_zones_full, minutes, mt: list, display
                 state = "NONE"
                 one_h_owner = None
                 controlling_trend_zone = None
+                controlling_opp_zone["BUY"] = controlling_opp_zone["SELL"] = None
                 record(t, f"Daily swing {swing_word} confirmed -> strips {side} (was alone), control to NONE")
             elif state == "BOTH":
                 # side was part of a shared BOTH -- the other side was
@@ -892,6 +920,7 @@ def compute_control_timeline(h4_engine, d_zones_full, minutes, mt: list, display
                 state = opposite(side)
                 one_h_owner = opposite(side)
                 controlling_trend_zone = None
+                controlling_opp_zone[side] = None
                 record(t, f"Daily swing {swing_word} confirmed -> strips {side} from BOTH, control to {opposite(side)}")
             # else: side isn't currently held at all (state is opposite(side)
             # or already NONE) -- nothing to strip, no-op.
