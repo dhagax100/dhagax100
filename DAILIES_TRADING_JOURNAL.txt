@@ -9,6 +9,74 @@ Entry format, every day: Bias / Session / Daily driver / 1H+4H context /
 Trade taken / Result / Notes. Short, plain, no fluff.
 
 
+2025-01-13 (Monday) — SELL day, 1H abandoned before window, no trade
+---------------------------------
+BIAS/CONTROL: SELL all day (carried over). 1H sell abandoned 07:33 Riyadh
+(before the 11:00 window opened) — only 4H sell live all day.
+TRADE TAKEN: none — no H4 SELL POI existed that day; every 1H SELL
+candidate was already dead on arrival.
+RESULT: flat.
+
+2025-01-14 (Tuesday) — SELL day, H4 trade hits SL
+---------------------------------
+BIAS/CONTROL: SELL, reconfirmed 01:11 (brief NONE blip then instant
+regrant via FVG#210 — same minute).
+TRADE TAKEN: H4 RB#134 SELL, impact 10:00, entry 12:00 @ 1.02585,
+SL 1.02745, TP 1.02105.
+RESULT: SL hit 17:40 (-1R). Body closed back ABOVE entry (1.02591) at
+12:13 — just 13 minutes in — and still rode to the full SL six hours
+later. See BE-RULE RESEARCH DATA note on body-close-against-position
+exits in the learning log.
+NOTE (fixed after this day's walkthrough): 1H sell had been wrongly
+shown as abandoned all day from a stale pre-01-13 wick carry-in. Fixed
+in code — FVG#210's 01:11 regrant now correctly resets the 1H wick
+chain. Re-verified: no new 1H trade appears even with the fix (RB#483
+still breached before any entry), so this day's trade outcome is
+unchanged, just now correctly reasoned.
+
+2025-01-15 (Wednesday) — real intraday flip to NONE (not BUY), then back to SELL, no trade
+---------------------------------
+BIAS/CONTROL: FVG#210's SELL group died tactically at 01:00. CORRECTED
+(was first reported as a flip to BUY via "banked respect" — wrong): BUY
+was never actually handed control via a genuine respect in this control
+episode (the last real BUY respect anywhere in the data was 2025-01-06,
+RB#189, stale and long superseded by later SELL regrants) — so control
+correctly goes to NONE, not BUY. Fixed in code: a fresh trend grant now
+clears both sides' banked respect, so a stale respect from a much
+earlier episode can't resurface later. Stayed NONE until FVG#209
+regranted full SELL at 16:30.
+TRADE TAKEN: none. Every BUY candidate during the NONE stretch was
+correctly blocked (NO_CONTROL); nothing formed after the 16:30 SELL
+regrant either.
+RESULT: flat.
+
+2025-01-16 (Thursday) — SELL day, 1H confirmed live (no PDL taken since the 15th's regrant), no trade
+---------------------------------
+BIAS/CONTROL: SELL, unchanged since 01-15 16:30. 1H sell confirmed LIVE
+all day — no PDL sweep happened between the 01-15 16:30 regrant and now,
+so the (now-fixed) wick chain never re-abandoned it.
+TRADE TAKEN: none — H4 RB#143 and 1H OB#405/RB#501 all genuinely live
+but breached before any entry could form.
+RESULT: flat.
+
+2025-01-17 (Friday) — SELL day, 1H confirmed live, one H4 trade hits TP
+---------------------------------
+BIAS/CONTROL: SELL, unchanged. 1H sell still live (same reasoning as the
+16th).
+TRADE TAKEN: H4 RB#145 SELL, impact 13:29, entry 14:33 @ 1.03046,
+SL 1.03098, TP 1.02890.
+RESULT: TP hit 16:24 (+3R).
+OPEN QUESTION: a second, earlier SELL loss trade around 14:00 was
+expected (1H OB#410/RB#508, impact 13:48, same leg) — checked directly
+against raw M1 data: price does trade into that zone's range (1.03047-
+1.03091) between ~14:10-14:16 before breaking the protect level at
+14:17, but the engine never registers a fill (stage=POI_BREACHED, entry
+fields empty) — no resting-order trigger condition was met before the
+breach. Not confirmed as a real trade from this engine's own rules;
+flagged for the user to clarify which POI/mechanism they're seeing this
+from before treating it as a bug.
+
+
 2025-01-09 (Thursday) — SELL day, full control all day, one trade, carries into 10th
 ---------------------------------
 BIAS/CONTROL: SELL all day (full 4H+1H) — the Day 8 BUY share (FVG#208)

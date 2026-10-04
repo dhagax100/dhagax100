@@ -464,15 +464,22 @@ def find_prev_day_extreme(minutes, mt: list, date_str: str, display_tz: ZoneInfo
         prev_date -= timedelta(days=1)
     return None
 
-def find_prev_day_sweep_time(minutes, mt: list, date_str: str, display_tz: ZoneInfo, side: str, extreme):
+def find_prev_day_sweep_time(minutes, mt: list, date_str: str, display_tz: ZoneInfo, side: str, extreme,
+                              start_t: "datetime | None" = None):
     """First minute, anywhere in today's own full calendar day (same
     scope as Daily's own -- a sweep can happen before the trading window
     even opens), that actually takes the previous day's extreme. None if
     it never happens -- the case the user confirmed by hand for 13 Jan
-    2026 ("13 did not take 12's low")."""
+    2026 ("13 did not take 12's low").
+
+    `start_t` (2026-10-04, user-taught): scan from this moment instead of
+    the calendar day's own 00:00 -- used when a brand new trend-POI grant
+    lands partway through the day (see build_pdh_pdl_chain's reset)."""
     if extreme is None:
         return None
     win_start, win_end = calendar_day_bounds(date_str, display_tz)
+    if start_t is not None and start_t > win_start:
+        win_start = start_t
     i0 = bisect_left(mt, win_start)
     for m in minutes[i0:]:
         if m.t >= win_end:
@@ -525,12 +532,32 @@ def build_pdh_pdl_chain(minutes, mt: list, side: str, display_tz: ZoneInfo,
     for every calendar day in the dataset up to window_end. pre_abandoned
     True means 1H is dead from that day's own 00:00 Riyadh; fresh_trigger_time
     (when pre_abandoned is False) is the exact minute a NEW sweep fires
-    that same day, or None if the day stays fully armed throughout."""
+    that same day, or None if the day stays fully armed throughout.
+
+    TREND-GRANT RESET (2026-10-04, user-taught, caught on 2025-01-14 and
+    2025-01-15): a brand new trend-direction POI impact that hands `side`
+    FULL control (compute_control_timeline's "trend POI impacted ... ->
+    full <side>" grant) is a clean start for the wick chain too, same as
+    it already is for control itself -- any stale PDL/PDH wick carried in
+    from BEFORE that grant stops mattering; 1H re-arms fresh from the
+    grant's own minute, watching only price action from there onward.
+    User's own words: "we have a brand new bearish POI impacted, so it
+    takes full control, thus the wick chain stops here." Without this, a
+    wick-based abandonment from days (even control-episodes) earlier kept
+    silently blocking 1H even after a fresh trend grant had every right to
+    re-arm it -- caught first on 2025-01-14 (FVG#210 regrants full SELL at
+    01:11, but the OLD pre-abandoned carry-in from 01-13 kept 1H SELL dead
+    all day regardless) and again on 2025-01-16/17 (FVG#209's 01-15 16:30
+    SELL grant should have re-armed 1H SELL from there -- no PDL was
+    actually taken since, so 1H stayed live through the 17th, but the old
+    carry-in chain never gave it the chance)."""
     chain_days = {}
     active_level = None
     cur = minutes[0].t.astimezone(display_tz).date()
     end_date = window_end.astimezone(display_tz).date()
     prev_date_str = None
+    grant_times = sorted(t for t, s, _o, r in (control_checkpoints or [])
+                          if s == side and r.startswith("trend POI impacted"))
     while cur <= end_date:
         date_str = cur.isoformat()
         win_start, win_end = calendar_day_bounds(date_str, display_tz)
@@ -546,11 +573,24 @@ def build_pdh_pdl_chain(minutes, mt: list, side: str, display_tz: ZoneInfo,
             if c_state not in (side, "BOTH"):
                 active_level = None  # structural reversal already cleared it by today
 
+        # A fresh trend grant landing partway through today resets the
+        # chain as of its own minute -- only the day's remaining minutes
+        # (from the grant forward) count for this day's sweep/ratchet.
+        reset_t = max((g for g in grant_times if win_start <= g < win_end), default=None)
+        if reset_t is not None:
+            active_level = None
+            scan_minutes = day_minutes[bisect_left([m.t for m in day_minutes], reset_t):]
+        else:
+            scan_minutes = day_minutes
+
         pre_abandoned = active_level is not None
         fresh_trigger_time = None
-        day_high = max(m.h for m in day_minutes)
-        day_low = min(m.l for m in day_minutes)
-        day_close = day_minutes[-1].c
+        if scan_minutes:
+            day_high = max(m.h for m in scan_minutes)
+            day_low = min(m.l for m in scan_minutes)
+            day_close = scan_minutes[-1].c
+        else:
+            day_high = day_low = day_close = None
 
         if active_level is not None:
             touched = (day_high >= active_level) if side == "BUY" else (day_low <= active_level)
@@ -560,9 +600,9 @@ def build_pdh_pdl_chain(minutes, mt: list, side: str, display_tz: ZoneInfo,
                     active_level = None  # clears starting TOMORROW
                 else:
                     active_level = day_high if side == "BUY" else day_low  # ratchet forward
-        elif prev_date_str is not None:
+        elif prev_date_str is not None or reset_t is not None:
             prev_extreme = find_prev_day_extreme(minutes, mt, date_str, display_tz, side)
-            t = find_prev_day_sweep_time(minutes, mt, date_str, display_tz, side, prev_extreme)
+            t = find_prev_day_sweep_time(minutes, mt, date_str, display_tz, side, prev_extreme, start_t=reset_t)
             if t is not None:
                 fresh_trigger_time = t
                 closed_through = (day_close > prev_extreme) if side == "BUY" else (day_close < prev_extreme)
@@ -898,6 +938,22 @@ def compute_control_timeline(d_zones_full, minutes, mt: list, display_tz: ZoneIn
         one_h_owner = side
         controlling_trend_group = {zone_id}
         controlling_opp_zone["BUY"] = controlling_opp_zone["SELL"] = None
+        # STALE-RESPECT BUG fixed 2026-10-04 (user caught on 2025-01-15):
+        # a brand new trend POI taking full control is a CLEAN START --
+        # any respect banked by the opposite side from a PRIOR, now-over
+        # control episode must not keep echoing into a tactical death
+        # many days later. Real case: BUY respected once on 2025-01-06
+        # (RB#189), then SELL re-took full control several times after
+        # (Jan 7, Jan 9, Jan 14 01:11) without the bias itself ever
+        # flipping -- banked_respect only ever reset on an actual bias
+        # flip, so that single Jan-6 respect was STILL marked banked when
+        # FVG#210 died tactically on 2025-01-15 01:00, wrongly handing
+        # control to BUY. User: "we see no respect opposing POI impacted
+        # that handed over control there, so we go to NONE instead of
+        # buy." Every fresh trend grant now clears both sides' banked
+        # respect -- it can only mean something again if EARNED fresh
+        # within this new control episode.
+        banked_respect["BUY"] = banked_respect["SELL"] = False
         record(t, f"trend POI impacted ({zone_label(zone_id)}, {side}) -> full {side}")
 
     for t, kind, side, zone_id in events:

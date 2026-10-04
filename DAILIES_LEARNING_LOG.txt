@@ -712,10 +712,77 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
   direction the trade was aiming for. Flag any future near-miss like this
   the same way, with the exact SL price, the exact extreme reached, and
   the pip difference.
+- BODY-CLOSE-AGAINST-POSITION EXIT (new note, 2026-10-04, user-requested,
+  from the 2025-01-14 RB#134 SELL loss): candidate future rule for
+  optimization research only, NOT yet live: once in a trade, if a body
+  CLOSES against the position's direction while the trade is still open
+  (a bearish zone's SELL trade sees a bullish body close above entry, or
+  the mirror for BUY) — even before SL/TP — it might be better to exit
+  there rather than wait for the SL. Same spirit as the existing
+  structural-notes mechanism (first-touch time of a named level), just a
+  different named condition: "body-close-against-position" with its
+  first-touch time, tracked per trade alongside MFE/MAE. Not yet
+  automated — flag manually on any future SL-hit trade where this
+  happened, same as the SL near-miss note above, until it's built into
+  the ledger for real. Confirmed real instance, same trade that prompted
+  this: RB#134 SELL (entry 2025-01-14 12:00 @ 1.02585) saw its first body
+  close back above entry (1.02591) at 12:13 — just 13 minutes in — and
+  still rode all the way to the SL at 17:40 (-1R). Exiting on that first
+  against-position body close would have cut the loss far earlier.
 
 
 SESSION LOG (newest first)
 ----------------------------
+
+2026-10-04 (part 8) — TWO real engine bugs fixed (not reporting this time), caught on 2025-01-14/15/16/17: stale banked_respect across control episodes; 1H wick-chain never reset on a fresh trend grant
+- STALE BANKED_RESPECT BUG (compute_control_timeline): banked_respect
+  only ever got cleared on an actual Daily BIAS flip -- never on an
+  ordinary trend-POI regrant (grant_trend()). Real case: BUY earned a
+  genuine respect once, 2025-01-06 (RB#189). SELL then retook full
+  control multiple times afterward (Jan 7, Jan 9, Jan 14 01:11) without
+  bias itself ever flipping, so that single stale Jan-6 respect was STILL
+  marked banked when FVG#210 (SELL) died tactically on 2025-01-15 01:00 --
+  wrongly handed control to BUY instead of NONE. User's own correction:
+  "we see no respect opposing POI impacted that handed over control
+  there, so we go to NONE instead of buy." Verified directly: queried
+  every BUY opp_respect/opp_death/impact_opp event up to the 2025-01-15
+  cutoff -- the LAST real BUY opp_respect anywhere in the data was
+  2025-01-06 04:15 (RB#189); nothing re-earned it since. Fixed:
+  grant_trend() now clears BOTH sides' banked_respect on every call (a
+  fresh trend grant is a clean start for everyone, not just the trend's
+  own side) -- confirmed by rerun: 2025-01-15 01:00 now correctly reads
+  "no banked respect, control to NONE" instead of "BUY had banked
+  respect, control to BUY."
+- 1H WICK-CHAIN NEVER RESET BUG (build_pdh_pdl_chain): the PDL/PDH wick-
+  abandonment chain only ever cleared on a day-start control-state check
+  or a genuine body-close-through-level -- a fresh SAME-side trend-POI
+  regrant mid-chain (e.g. FVG#210 regranting full SELL at 2025-01-14
+  01:11, or FVG#209 regranting full SELL at 2025-01-15 16:30) never reset
+  it, so a stale wick abandonment from a completely earlier control
+  episode kept silently blocking 1H for days after it should have been
+  moot. User's own words: "we have a brand new bearish POI impacted, so
+  it takes full control, thus the wick chain stops here" -- caught
+  independently on FOUR consecutive days (14th, 15th, 16th, 17th), each
+  time as "1H should be live, it's not." Fixed: build_pdh_pdl_chain now
+  takes the same control_checkpoints it already receives and extracts
+  every "trend POI impacted ... -> full <side>" grant time for its own
+  side; any such grant landing inside a calendar day resets active_level
+  to None as of that exact minute, and the day's sweep/ratchet scan for
+  the REST of that day runs from the grant forward (not from the day's
+  own 00:00) -- added find_prev_day_sweep_time's new optional `start_t`
+  for this. Verified by rerun: SELL/PDL abandon_at went from
+  2025-01-14=00:00 (pre-abandoned, wrong) / 2025-01-15=00:00 / 2025-01-16
+  not yet checked that day / 2025-01-17=00:00, to None/None/None/None --
+  1H sell correctly stays live from the 01-14 01:11 grant all the way
+  through the 17th (no genuine PDL sweep happened in between to re-
+  abandon it for real). This directly surfaced a previously-invisible 1H
+  SELL loss on 2025-01-17 around 14:00 that the stale abandonment had
+  been silently hiding -- see that day's journal entry for the specifics.
+  NOT YET DECIDED (flagged, not applied): whether a structural MSS flip
+  (trend_death_structural, handing control to the opposite side) should
+  ALSO reset that opposite side's wick chain the same way a trend impact
+  does -- logically analogous, but not something the user has confirmed
+  yet, so left untouched pending a real case to check it against.
 
 2026-10-04 (part 7) — Day 9 trade hits TP on Day 10; REPORTING lesson on 1H abandonment (not an engine bug)
 - Day 9's H4 RB#124 SELL (entry 16:53 @ 1.03098, SL 1.03188, TP 1.02828)
