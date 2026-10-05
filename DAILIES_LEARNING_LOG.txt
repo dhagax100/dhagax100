@@ -793,6 +793,69 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 SESSION LOG (newest first)
 ----------------------------
 
+2026-10-05 (part 3) — Real guard_price boundary bug fixed in aggressive FVG/VI creation (weekly_combined_generator.py) -- a zone-CREATION bug, not a CONTROL bug; HANDOFF.md and verify_day.py added for February hand-off
+- THE BUG (fvg_try_create_afvgs / vi_try_create_avis, both bullish and
+  bearish branches): an aggressive FVG/VI zone needs its 1st/3rd (FVG)
+  or 1st/2nd (VI) candle to clear a `guard_price` -- the price of the
+  swing that triggered the whole check. The comparison used strict `>`
+  (or `<`). But `guard_price` IS that trigger candle's own swing price
+  whenever the LAST candle of the pattern (c3 for FVG, c2 for VI) is the
+  SAME candle that confirmed the swing -- which is the normal, expected
+  case, not an edge case. So the code was comparing a number to itself
+  and requiring it be strictly greater -- always false. This silently
+  blocked the single most common real aggressive FVG/VI shape from ever
+  being created.
+- HOW IT WAS FOUND: the user described, in precise step-by-step detail,
+  a real aggressive bearish FVG (origin 2025-01-27, candles 27-28-29)
+  that should have impacted at the exact same minute Day 30's 1H buy got
+  abandoned (PDH taken), handing part of control to SELL. No such zone
+  existed anywhere in the engine's own zone list. Traced it candle by
+  candle: the price gap genuinely exists (Jan 27 low 1.04534 > Jan 29
+  high 1.04433 -- the EXACT two prices the user read off their own
+  chart); the claim-dedup mechanism (keyed on (candle, direction), not
+  just candle) was ruled out as a cause; traced into
+  fvg_try_bull_afvg -> fvg_try_create_afvgs and found Jan 29 -- the
+  gap's own c3 -- is also the exact candle that set the new swing low
+  being checked against, so l3 (c3's own low) and guard_price were
+  literally the same float, and `l3 > guard_price` failed on equality.
+- FIX: `>`/`<` changed to `>=`/`<=` on both guard checks in
+  fvg_try_create_afvgs, and the same fix mirrored in vi_try_create_avis
+  (identical pattern, confirmed via code read, not yet hit by a real
+  case but fixed pre-emptively since it's the exact same bug). Verified:
+  FVG#220 now exists exactly as described -- bearish, origin Jan 27,
+  zb=1.04433/zt=1.04534 (exact match to the user's own chart numbers),
+  impact 2025-01-30 16:57:00 (the exact PDH-sweep minute).
+- SCOPE: this is a bug in weekly_combined_generator.py's zone-CREATION
+  layer, not in CONTROL or any Daily-specific logic -- it affects every
+  timeframe (Daily/4H/1H) and every month, not just January. Re-verified
+  the full Jan 2-31 trade set afterward (batch re-run, single engine
+  build reused across all 22 days): every previously-confirmed trade
+  (Jan 3, 7, 9->10, 14, 17, 22, 28->29) is unchanged. Day 30/31
+  themselves still produce no new trade either way -- the fix corrects
+  the zone/control picture (BOTH briefly shares control at the PDH-sweep
+  minute, same as the Jan-8/28 pattern), not the trading outcome that
+  day.
+- FALSE TURN caught mid-investigation and corrected on the spot: before
+  finding the real guard_price bug, a first hypothesis (treating
+  swing_spent as a trend-CONTROL death cause) was tried, immediately
+  reverted after the user's sharp correction ("this swing spent death
+  cause is just something you made up"), and replaced by actually
+  tracing the user's literal account candle-by-candle instead of
+  pattern-matching to the nearest available reason code. Full story,
+  including the revert, is in the next session-log entry below (part 2).
+- HAND-OFF PREPARED for the next AI to continue into February:
+  `reference_daily/verify_day.py` -- a committed, parameterized version
+  of the fast-hybrid single-day verification pattern used throughout
+  this entire January walkthrough (full-history Daily engine + short
+  lead-in 4H/1H/5m engines), previously only living as ad hoc scratch
+  scripts outside the repo. `HANDOFF.md` at the repo root -- the
+  onboarding document: what the project is, which files matter, the
+  locked day-report format, the day-by-day workflow, the standing rules
+  (never commit without explicit instruction that turn; never guess and
+  present it as fact; re-verify the FULL validated range after any fix,
+  not just the day that exposed it), and the explicit next task
+  (February 2025, same rigor, same format, starting at Feb 2).
+
 2026-10-05 (part 2) — Real h4_close/body_close rename; fixed a genuine masking bug after a false start that wrongly wired swing_spent into trend-zone CONTROL deaths (reverted)
 - NAMING: "h4_close" renamed to "body_close" throughout
   all_tf_combined_generator.py -- the old name was a holdover from when

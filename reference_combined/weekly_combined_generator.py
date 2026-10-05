@@ -597,13 +597,23 @@ class WeeklyCombinedEngine:
                 l1, h3 = self.w[c1].l, self.w[c3].h
                 if l1 > h3:
                     l3 = self.w[c3].l
-                    if l1 > guard_price and l3 > guard_price:
+                    # BOUNDARY BUG fixed 2026-10-05 (user caught on
+                    # 2025-01-27/28/29's missing bearish aggressive FVG):
+                    # guard_price IS c3's own swing price whenever c3 is
+                    # the candle that confirmed the triggering swing --
+                    # the normal, expected case, not an edge case. Strict
+                    # `>` then compares l3 to itself and always fails,
+                    # silently rejecting the most common real aggressive
+                    # FVG. `>=` lets the zone through when c3 sits exactly
+                    # at the guard level, same as when it's cleanly beyond.
+                    if l1 > guard_price and l3 >= guard_price:
                         self.fvg_add(c1, h3, l1, False, trigger_k, 1, trigger_time, protect_idx)
             else:
                 h1, l3 = self.w[c1].h, self.w[c3].l
                 if h1 < l3:
                     h3 = self.w[c3].h
-                    if h1 < guard_price and h3 < guard_price:
+                    # Mirror of the fix above.
+                    if h1 < guard_price and h3 <= guard_price:
                         self.fvg_add(c1, h1, l3, True, trigger_k, 1, trigger_time, protect_idx)
 
     def fvg_try_bull_afvg(self, preg: int, armed_swh: int, new_swl_i: int, new_swl_p: float, k: int, at: Optional[datetime]) -> None:
@@ -720,12 +730,17 @@ class WeeklyCombinedEngine:
             if bullish:
                 if cl1 > op2 and cl2 < cl1 and not is_bull1:
                     l1, l2 = self.w[c1].l, self.w[c2].l
-                    if l1 > guard_price and l2 > guard_price:
+                    # Same boundary fix as fvg_try_create_afvgs (2026-10-05):
+                    # guard_price IS c2's own swing price whenever c2 is the
+                    # candle that confirmed the triggering swing -- the
+                    # normal case, not an edge case. `>=` instead of `>`.
+                    if l1 > guard_price and l2 >= guard_price:
                         self.vi_add(c1, op2, cl1, False, trigger_k, 1, trigger_time, protect_idx)
             else:
                 if cl1 < op2 and cl2 > cl1 and is_bull1:
                     h1, h2 = self.w[c1].h, self.w[c2].h
-                    if h1 < guard_price and h2 < guard_price:
+                    # Mirror of the fix above.
+                    if h1 < guard_price and h2 <= guard_price:
                         self.vi_add(c1, cl1, op2, True, trigger_k, 1, trigger_time, protect_idx)
 
     def vi_try_bull_avi(self, preg: int, armed_swh: int, new_swl_i: int, new_swl_p: float, k: int, at: Optional[datetime]) -> None:

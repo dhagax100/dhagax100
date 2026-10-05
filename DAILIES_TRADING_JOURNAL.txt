@@ -9,6 +9,32 @@ Entry format, every day: Bias / Session / Daily driver / 1H+4H context /
 Trade taken / Result / Notes. Short, plain, no fluff.
 
 
+JANUARY 2025 — MONTH CLOSE (2026-10-05)
+---------------------------------
+Full month verified, days 2-31 (weekends skipped), locked 4-column
+format throughout. Final trade list (7 trades):
+  Jan 3   1H OB#336 BUY   entry 17:40 @ 1.02944  SL 1.02875  TP 1.03151  -> SL (18:17)
+  Jan 7   4H RB#117 SELL  2 attempts, both SL (11:18 and 12:55 entries)
+  Jan 9->10  4H RB#124 SELL  entry 16:53 @ 1.03098  SL 1.03188  TP 1.02828  -> TP (Jan10 09:14)
+  Jan 14  4H RB#134 SELL  entry 12:00 @ 1.02585  SL 1.02745  TP 1.02105  -> SL (17:40)
+  Jan 17  4H RB#145 SELL  entry 14:33 @ 1.03046  SL 1.03098  TP 1.02890  -> TP (16:24)
+  Jan 22  4H FVG#63 BUY   2 attempts, both SL (17:48 and 19:37 entries)
+  Jan 28->29  1H OB#464 BUY  entry 19:11 @ 1.04320  SL 1.04206  TP 1.04662  -> SL (Jan29 10:29)
+All other trading days: no trade (every live candidate either breached,
+ran out of window time, or control didn't authorize that side).
+Net: 3 wins, 4 losses (counting each re-armed attempt separately: 3 TP
+legs, 6 SL legs across the 7 parent trades).
+Two real engine bugs found and fixed this month, both re-verified
+against the full month afterward with zero regressions: the 1H single-
+owner slot wrongly reopening to the trend side on a later calendar day
+(Day 27), and a strict-inequality boundary bug in aggressive FVG/VI
+creation that silently blocked the most common real aggressive-zone
+shape from ever forming (Day 30). Full detail, including one false
+start that was caught and fully reverted before being committed, is in
+DAILIES_LEARNING_LOG.txt's 2026-10-05 session-log entries.
+Hand-off prepared for February: see HANDOFF.md at the repo root.
+
+
 2025-01-13 (Monday) — SELL day, 1H abandoned before window, no trade
 ---------------------------------
 BIAS/CONTROL: SELL all day (carried over). 1H sell abandoned 07:33 Riyadh
