@@ -632,7 +632,7 @@ def chain_abandon_at(chain_days: dict, date_str: str, display_tz: ZoneInfo):
 def structural_hard_death_between(z, start_t: "datetime", end_t: "datetime",
                                    bars: list, bar_starts: list, minutes, mt: list):
     """CONTROL (2026-10-02): checks ONLY the two hard-death triggers
-    (h4_close, swing_break) in (start_t, end_t] -- used to confirm a
+    (body_close, swing_break) in (start_t, end_t] -- used to confirm a
     zone that went swing_spent first never ALSO takes a real structural
     hit before its PDL/PDH sweep completes "respect" (spec: "what we
     care is that swing high confirmed and the POI zone is clear from
@@ -642,7 +642,7 @@ def structural_hard_death_between(z, start_t: "datetime", end_t: "datetime",
     bull = z.bullish
     near_boundary = z.zt if bull else z.zb
 
-    h4_close_at = None
+    body_close_at = None
     start_idx = max(0, bisect_right(bar_starts, start_t) - 1)
     for hb in bars[start_idx:]:
         if hb.end <= start_t:
@@ -651,7 +651,7 @@ def structural_hard_death_between(z, start_t: "datetime", end_t: "datetime",
             break
         breach = (hb.c <= near_boundary) if bull else (hb.c >= near_boundary)
         if breach:
-            h4_close_at = hb.end
+            body_close_at = hb.end
             break
 
     swing_break_at = None
@@ -663,7 +663,7 @@ def structural_hard_death_between(z, start_t: "datetime", end_t: "datetime",
             swing_break_at = m.t
             break
 
-    candidates = [(t, r) for t, r in ((h4_close_at, "h4_close"), (swing_break_at, "swing_break")) if t is not None]
+    candidates = [(t, r) for t, r in ((body_close_at, "body_close"), (swing_break_at, "swing_break")) if t is not None]
     if not candidates:
         return None, None
     return min(candidates, key=lambda tr: tr[0])
@@ -676,7 +676,7 @@ def structural_invalid_at(z, it: "datetime", bars: list, bar_starts: list,
     about directly (2026-09-28) and that compute_5m_trades() previously
     had no answer for. Whichever happens first, from the zone's own
     impact time `it`:
-      (a) 'h4_close' -- a fully completed 4H/1H candle closes its BODY
+      (a) 'body_close' -- a fully completed 4H/1H candle closes its BODY
           at or beyond the NEAR boundary (zt for a bearish zone approached
           from above, zb for a bullish zone approached from below). A
           bare wick, or a close that hasn't reached the zone at all,
@@ -711,12 +711,12 @@ def structural_invalid_at(z, it: "datetime", bars: list, bar_starts: list,
     bull = z.bullish
     near_boundary = z.zt if bull else z.zb
 
-    h4_close_invalid_at = None
+    body_close_invalid_at = None
     start_idx = max(0, bisect_right(bar_starts, it) - 1)
     for hb in bars[start_idx:]:
         breach = (hb.c <= near_boundary) if bull else (hb.c >= near_boundary)
         if breach:
-            h4_close_invalid_at = hb.end
+            body_close_invalid_at = hb.end
             break
 
     swing_break_at = None
@@ -742,7 +742,7 @@ def structural_invalid_at(z, it: "datetime", bars: list, bar_starts: list,
             swing_spent_at = min(spent_candidates)
 
     candidates = [(t, r) for t, r in (
-        (h4_close_invalid_at, "h4_close"),
+        (body_close_invalid_at, "body_close"),
         (swing_break_at, "swing_break"),
         (swing_spent_at, "swing_spent"),
     ) if t is not None]
@@ -807,8 +807,6 @@ def compute_control_timeline(d_zones_full, minutes, mt: list, display_tz: ZoneIn
                 continue
             side = "BUY" if z.bullish else "SELL"
             zone_id = (ptype, z.id)
-            invalidated_at, reason = structural_invalid_at(z, z.impact_time, d_zones_full.w, d_bar_starts,
-                                                             minutes, mt, d_zones_full.events)
             if z.bullish == controlling:
                 events.append((z.impact_time, "impact_trend", side, zone_id))
                 # CONTROL spec item 6: what happens to the SPECIFIC trend
@@ -818,13 +816,37 @@ def compute_control_timeline(d_zones_full, minutes, mt: list, display_tz: ZoneIn
                 # by future zones' classification already using the
                 # post-flip bias -- but CONTROL itself must also flip
                 # immediately, not wait for the next zone impact).
-                if reason == "h4_close":
+                #
+                # MASKING BUG fixed 2026-10-05 (user caught on 2025-01-30,
+                # RB#434): structural_invalid_at() returns only the SINGLE
+                # earliest of three death types (body_close, swing_break,
+                # swing_spent). The trend branch here never asked about
+                # swing_spent -- it only ever reads body_close/swing_break
+                # -- but whenever swing_spent happened to land EARLIEST
+                # chronologically, structural_invalid_at() still returned
+                # IT, silently burying a real, later body_close/swing_break
+                # this branch actually needed. RB#434 genuinely body-closed
+                # at 2025-01-31 01:00 (Jan 30's own daily close, exactly
+                # matching the user's account), but a swing_spent at
+                # 2025-01-30 16:57 masked it entirely, so CONTROL never
+                # saw ANY death for RB#434 at all. Fixed by using
+                # structural_hard_death_between() instead -- the SAME
+                # swing_spent-blind helper already used on the opposing-
+                # zone respect path for exactly this reason ("swing_spent
+                # itself is deliberately excluded -- already known, not a
+                # disqualifier here") -- searched from impact to
+                # window_end instead of a respect window.
+                invalidated_at, reason = structural_hard_death_between(
+                    z, z.impact_time, window_end, d_zones_full.w, d_bar_starts, minutes, mt)
+                if reason == "body_close":
                     events.append((invalidated_at, "trend_death_tactical", side, zone_id))
                 elif reason == "swing_break":
                     events.append((invalidated_at, "trend_death_structural", side, zone_id))
                 continue
+            invalidated_at, reason = structural_invalid_at(z, z.impact_time, d_zones_full.w, d_bar_starts,
+                                                             minutes, mt, d_zones_full.events)
             events.append((z.impact_time, "impact_opp", side, zone_id))
-            if reason in ("h4_close", "swing_break"):
+            if reason in ("body_close", "swing_break"):
                 events.append((invalidated_at, "opp_death", side, zone_id))
             elif reason == "swing_spent":
                 date_str = z.impact_time.astimezone(display_tz).date().isoformat()

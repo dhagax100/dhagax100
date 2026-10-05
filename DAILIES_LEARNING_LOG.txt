@@ -793,6 +793,63 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 SESSION LOG (newest first)
 ----------------------------
 
+2026-10-05 (part 2) — Real h4_close/body_close rename; fixed a genuine masking bug after a false start that wrongly wired swing_spent into trend-zone CONTROL deaths (reverted)
+- NAMING: "h4_close" renamed to "body_close" throughout
+  all_tf_combined_generator.py -- the old name was a holdover from when
+  this logic was 4H-only; it has applied to Daily (and 1H) zones for a
+  long time and the name never caught up. Pure rename, no behavior
+  change. (reference/five_bso_engine.py, the historical source this was
+  ported from, intentionally left untouched.)
+- FALSE START, FULLY REVERTED: mid-investigation of 2025-01-30/31 (user's
+  detailed walkthrough of OB#348/origin-22 and RB#434/origin-23 sharing
+  BUY control, RB#434 being the last one standing), I found RB#434's
+  computed death reason was "swing_spent" and wired that reason into the
+  trend-zone branch of compute_control_timeline, triggering the
+  proactive-flip rule. User's direct, sharp correction: "this swing spent
+  death cause is just something you made up." Correct -- swing_spent was
+  never taught as a trend-CONTROL trigger, and wiring it in rippled
+  through the ENTIRE dataset (not just this one zone), silently changing
+  already-validated results as far back as Day 9 and Day 13. Fully
+  reverted (confirmed via git diff against the last pushed commit) before
+  any of it was committed.
+- THE REAL BUG, found after walking through the user's account literally
+  step by step: RB#434 was never supposed to die by swing_spent at all --
+  per the user's own account, it dies by a plain BODY CLOSE exactly at
+  2025-01-30's own daily close (timestamped 2025-01-31 01:00 under the
+  NY-close boundary convention). Checked directly: the Jan-30 daily
+  candle closes at 1.03891, through RB#434's near edge at 1.04081 --
+  confirmed, a real body-close. So why did the code only ever see
+  swing_spent? Because structural_invalid_at() computes all three death
+  types (body_close, swing_break, swing_spent) and returns only the
+  SINGLE earliest one -- and swing_spent happened to land chronologically
+  EARLIER that same day (16:57) than the body-close (next day's 01:00
+  boundary). The trend-zone branch never asked about swing_spent at all
+  -- it only reads body_close/swing_break -- but it was still handed
+  swing_spent's earlier timestamp as "the" answer, silently burying the
+  later, real body-close it actually needed. User's own question, which
+  named the actual bug precisely: "since when do we use swing spent as
+  death cause even if it comes first?" -- answer: never, that was always
+  a bug, not a feature, in any caller that doesn't itself want swing_spent.
+- FIX: the trend-zone branch now calls structural_hard_death_between()
+  instead of structural_invalid_at() -- an ALREADY-EXISTING helper, built
+  specifically for the opposing-zone respect path for this exact reason
+  ("swing_spent itself is deliberately excluded -- already known, not a
+  disqualifier here"), just reused here with window_end as its search
+  ceiling instead of a bounded respect window. No new logic invented --
+  the swing_spent-blind pattern already existed elsewhere in the file and
+  the trend branch simply wasn't using it.
+- VERIFIED: 2025-01-30/31 now matches the user's account exactly --
+  RB#434 dies by body_close at 2025-01-31 01:00 (not swing_spent at
+  01-30 16:57), last of its group, proactive flip to full SELL; Day 31's
+  ENTIRE trading window now reads SELL/SELL throughout (previously it
+  read NONE all day, since RB#434's death was invisible before this fix
+  and the only thing CONTROL ever saw that day was an unrelated swing-
+  high strip of a BUY that, structurally, no longer had any real zone
+  backing it). Full Jan 2-31 regression re-run after this fix: every
+  previously-validated trade (Day 3, 7, 9->10, 14, 17, 22, 28->29) is
+  byte-identical -- this fix is isolated to exactly the case that
+  motivated it.
+
 2026-10-05 — Full January push: proactive-flip rule replaces banked_respect; opposing-group tracking fixed; Day 17 loss-trade question investigated and unresolved; Jan 23 NONE anomaly flagged, blocking further rollout
 - PROACTIVE FLIP and OPPOSING-GROUP fixes: see the CONTROL section's new
   "TREND'S LAST POI DYING TACTICALLY = PROACTIVE FLIP" and "OPPOSING-SIDE
