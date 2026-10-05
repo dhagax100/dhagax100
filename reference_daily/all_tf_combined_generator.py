@@ -902,7 +902,6 @@ def compute_control_timeline(d_zones_full, minutes, mt: list, display_tz: ZoneIn
     checkpoints = []
     state = "NONE"
     one_h_owner = None
-    banked_respect = {"BUY": False, "SELL": False}
     # SET of (ptype, id) -- every trend-direction zone (in-favor or
     # aggressive-in-favor alike, both "trade with the trend" per the
     # user) currently anchoring full control. Real bug fixed 2026-10-04,
@@ -916,12 +915,20 @@ def compute_control_timeline(d_zones_full, minutes, mt: list, display_tz: ZoneIn
     # once EVERY member has died (tactical or structural), not on the
     # first one.
     controlling_trend_group = set()
-    # (ptype, id) of whichever opposing zone currently anchors THAT side's
-    # hold on control -- either the shared 1H slot in BOTH, or a full grant
-    # via respect (2026-10-03, user correction: when this specific zone
-    # later dies, that grant must be given back, not left as a no-op).
-    controlling_opp_zone = {"BUY": None, "SELL": None}
-    last_trend_side = None
+    # Same group-tracking fix, mirrored for the OPPOSING side (2026-10-05,
+    # user's own correction on 2025-01-24): "we have been through this
+    # before, you need to be careful with price impacting multiple POI in
+    # the same day" -- a second opposing zone of the SAME side impacting
+    # while the first still holds the shared BOTH slot was previously
+    # silently untracked (impact_opp's grant branch only fires when state
+    # isn't already BOTH), so controlling_opp_zone stayed pointed at
+    # whichever zone granted it FIRST; if that original zone died while a
+    # LATER sibling was still alive and un-breached, nothing protected the
+    # still-alive sibling from being silently invisible to opp_death's
+    # own tracking. Per side: SET of (ptype, id) of every opposing zone
+    # currently anchoring that side's hold -- dies only once every member
+    # has died, same rule as the trend group.
+    controlling_opp_group = {"BUY": set(), "SELL": set()}
 
     def opposite(s):
         return "SELL" if s == "BUY" else "BUY"
@@ -937,32 +944,10 @@ def compute_control_timeline(d_zones_full, minutes, mt: list, display_tz: ZoneIn
         state = side
         one_h_owner = side
         controlling_trend_group = {zone_id}
-        controlling_opp_zone["BUY"] = controlling_opp_zone["SELL"] = None
-        # STALE-RESPECT BUG fixed 2026-10-04 (user caught on 2025-01-15):
-        # a brand new trend POI taking full control is a CLEAN START --
-        # any respect banked by the opposite side from a PRIOR, now-over
-        # control episode must not keep echoing into a tactical death
-        # many days later. Real case: BUY respected once on 2025-01-06
-        # (RB#189), then SELL re-took full control several times after
-        # (Jan 7, Jan 9, Jan 14 01:11) without the bias itself ever
-        # flipping -- banked_respect only ever reset on an actual bias
-        # flip, so that single Jan-6 respect was STILL marked banked when
-        # FVG#210 died tactically on 2025-01-15 01:00, wrongly handing
-        # control to BUY. User: "we see no respect opposing POI impacted
-        # that handed over control there, so we go to NONE instead of
-        # buy." Every fresh trend grant now clears both sides' banked
-        # respect -- it can only mean something again if EARNED fresh
-        # within this new control episode.
-        banked_respect["BUY"] = banked_respect["SELL"] = False
+        controlling_opp_group["BUY"] = controlling_opp_group["SELL"] = set()
         record(t, f"trend POI impacted ({zone_label(zone_id)}, {side}) -> full {side}")
 
     for t, kind, side, zone_id in events:
-        controlling = daily_controlling_bias(d_zones_full, t, minutes, mt)
-        trend_side = "BUY" if controlling else "SELL" if controlling is False else None
-        if trend_side is not None and trend_side != last_trend_side:
-            banked_respect = {"BUY": False, "SELL": False}
-            last_trend_side = trend_side
-
         if kind == "impact_trend":
             if state != side:
                 grant_trend(t, side, zone_id)
@@ -978,8 +963,15 @@ def compute_control_timeline(d_zones_full, minutes, mt: list, display_tz: ZoneIn
             if state == opposite(side) or state == "NONE":
                 state = "BOTH"
                 one_h_owner = side
-                controlling_opp_zone[side] = zone_id
+                controlling_opp_group[side] = {zone_id}
                 record(t, f"opposing POI impacted ({zone_label(zone_id)}, {side}) -> shared BOTH, 1H to {side}")
+            elif state == "BOTH" and one_h_owner == side:
+                # Same group-join rule as impact_trend: a second same-side
+                # opposing zone impacting while the first still holds the
+                # shared BOTH slot doesn't cause a new flip/checkpoint, but
+                # joins the group backing that slot -- the slot only gives
+                # it up once EVERY member has died, not on the first one.
+                controlling_opp_group[side].add(zone_id)
         elif kind == "opp_death":
             # Real bug (2026-10-03, user's own Jan-2 walkthrough caught
             # this): only a no-op when this opposing zone was never the
@@ -989,41 +981,59 @@ def compute_control_timeline(d_zones_full, minutes, mt: list, display_tz: ZoneIn
             # untouched ("trend's dominance just reconfirmed" only ever
             # applied to the ordinary case of an opposing zone that died
             # WITHOUT ever having taken control in the first place).
-            if controlling_opp_zone[side] == zone_id:
+            if zone_id in controlling_opp_group[side]:
+                controlling_opp_group[side].discard(zone_id)
+                if controlling_opp_group[side]:
+                    continue  # other opposing zones from the same group are still alive -- no change
                 if state == "BOTH" and one_h_owner == side:
                     state = opposite(side)
                     one_h_owner = opposite(side)
-                    controlling_opp_zone[side] = None
-                    record(t, f"opposing zone death ({zone_label(zone_id)}) -> was holding shared BOTH, control reverts to {opposite(side)}")
+                    record(t, f"opposing zone death ({zone_label(zone_id)}, last of its group) -> was holding shared BOTH, control reverts to {opposite(side)}")
                 elif state == side:
                     state = opposite(side)
                     one_h_owner = opposite(side)
-                    controlling_opp_zone[side] = None
-                    record(t, f"opposing zone death ({zone_label(zone_id)}) -> was holding full control via respect, control reverts to {opposite(side)}")
+                    record(t, f"opposing zone death ({zone_label(zone_id)}, last of its group) -> was holding full control via respect, control reverts to {opposite(side)}")
         elif kind == "opp_respect":
-            banked_respect[side] = True
             if state != side:
                 state = side
                 one_h_owner = side
                 controlling_trend_group = set()
-                controlling_opp_zone[side] = zone_id
+                controlling_opp_group[side] = {zone_id}
                 record(t, f"opposing POI respected ({zone_label(zone_id)}, {side}) -> full {side}")
         elif kind == "trend_death_tactical":
             if zone_id in controlling_trend_group and state == side:
                 controlling_trend_group.discard(zone_id)
                 if controlling_trend_group:
                     continue  # other trend zones from the same group are still alive -- no change
-                if banked_respect[opposite(side)]:
-                    state = opposite(side)
-                    one_h_owner = opposite(side)
-                    reason = (f"trend zone tactical death ({zone_label(zone_id)}, last of its group) -> "
-                              f"{opposite(side)} had banked respect, control to {opposite(side)}")
-                else:
-                    state = "NONE"
-                    one_h_owner = None
-                    controlling_opp_zone["BUY"] = controlling_opp_zone["SELL"] = None
-                    reason = f"trend zone tactical death ({zone_label(zone_id)}, last of its group) -> no banked respect, control to NONE"
-                record(t, reason)
+                # PROACTIVE FLIP, not NONE (2026-10-05, user-taught,
+                # reversing the 2026-10-04 "no banked respect -> NONE"
+                # fix after the user's own correction on 2025-01-15/20-22):
+                # the trend running OUT of any currently-controlling POI
+                # is itself the signal that the trend is "almost being
+                # changed" -- so the opposite side takes FULL control
+                # immediately, the same as a real structural MSS flip,
+                # not a conditional reversion that depends on whether the
+                # opposite side happened to earn a "respect" first. User's
+                # own words: "a POI with the trend getting breached or
+                # violated simply means this trend is almost being
+                # changed... we then simply stop buying or trading against
+                # the trend and we keep full sell control." Verified on
+                # 2025-01-20/21/22: the Daily zone that was the LAST one
+                # left in its bearish leg died tactically (body close) on
+                # the 20th -- proactively flips to full BUY there, holds
+                # through the 21st (nothing left in that leg to re-grant
+                # SELL), and the REAL structural MSS flip (the protective
+                # swing high actually breaking) on the 22nd just confirms
+                # what CONTROL had already anticipated two days earlier --
+                # exactly the user's own account of "we anticipated it
+                # with the body close... to be part of the move that makes
+                # the trend change." Renders the old banked_respect
+                # mechanism moot (it only ever fed this one branch) --
+                # removed entirely rather than left dormant.
+                state = opposite(side)
+                one_h_owner = opposite(side)
+                record(t, f"trend zone tactical death ({zone_label(zone_id)}, last of its group) -> "
+                          f"no trend POI left standing, proactive full control to {opposite(side)}")
         elif kind == "trend_death_structural":
             if zone_id in controlling_trend_group and state == side:
                 controlling_trend_group.discard(zone_id)
@@ -1034,7 +1044,6 @@ def compute_control_timeline(d_zones_full, minutes, mt: list, display_tz: ZoneIn
                 # control immediately, not just on its next own impact.
                 state = opposite(side)
                 one_h_owner = opposite(side)
-                banked_respect = {"BUY": False, "SELL": False}
                 record(t, f"trend zone structural death / Daily MSS flip ({zone_label(zone_id)}, last of its group) -> control to {opposite(side)}")
         elif kind == "daily_swing_strip":
             swing_word = "high" if side == "BUY" else "low"
@@ -1043,7 +1052,7 @@ def compute_control_timeline(d_zones_full, minutes, mt: list, display_tz: ZoneIn
                 state = "NONE"
                 one_h_owner = None
                 controlling_trend_group = set()
-                controlling_opp_zone["BUY"] = controlling_opp_zone["SELL"] = None
+                controlling_opp_group["BUY"] = controlling_opp_group["SELL"] = set()
                 record(t, f"Daily swing {swing_word} confirmed -> strips {side} (was alone), control to NONE")
             elif state == "BOTH":
                 # side was part of a shared BOTH -- the other side was
@@ -1053,7 +1062,7 @@ def compute_control_timeline(d_zones_full, minutes, mt: list, display_tz: ZoneIn
                 state = opposite(side)
                 one_h_owner = opposite(side)
                 controlling_trend_group = set()
-                controlling_opp_zone[side] = None
+                controlling_opp_group[side] = set()
                 record(t, f"Daily swing {swing_word} confirmed -> strips {side} from BOTH, control to {opposite(side)}")
             # else: side isn't currently held at all (state is opposite(side)
             # or already NONE) -- nothing to strip, no-op.

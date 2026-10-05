@@ -593,13 +593,13 @@ above for exactly how those combine and how to report it.
   asymmetric rule as always); opposing mere impact grants shared
   control (4H + pending 1H) same as always, and still needs to build
   full respect from scratch -- NONE pre-grants nothing.
-  CAVEAT on tactical reversion (sharpens the BOTH/tactical rule above):
-  reverting to "whoever had control last" after a trend POI's tactical
-  failure (body-close/OPEN_INSIDE_ZONE) only works if that previous
-  side had ACTUALLY EARNED (respected) control, banked. If the trend
-  POI instead claimed control out of NONE (not dethroning an actual
-  live controller), there is nothing to revert to -- it goes back to
-  NONE, not to the opposing side.
+  SUPERSEDED 2026-10-05 -- see "TREND'S LAST POI DYING TACTICALLY =
+  PROACTIVE FLIP" further down for the rule that replaced this: tactical
+  death of the trend's last-standing POI (group empty) now ALWAYS flips
+  FULL control to the opposite side, unconditionally -- not a conditional
+  reversion to "whoever had banked respect, else NONE." The
+  banked_respect mechanism this caveat described no longer exists in the
+  code.
 - OPPOSING ZONE DEATH WHILE HOLDING A GRANT -- real bug fixed 2026-10-04:
   an opposing zone that currently holds control (either the shared BOTH
   1H slot, or full control via an earlier respect) dying -- ANY death
@@ -619,6 +619,65 @@ above for exactly how those combine and how to report it.
   narrative. Each checkpoint now also carries a plain-English `reason`
   string (which zone, which mechanism) precisely so this is checkable
   against the chart going forward, not just the resulting state.
+- OPPOSING-SIDE GROUPING, mirrored from the trend-group fix (2026-10-05,
+  user's own correction, general warning not tied to one specific day):
+  "we have been through this before, you need to be careful with price
+  impacting multiple POI in the same day." The opposing side's hold on
+  control (the shared BOTH 1H slot, or a full grant via respect) was
+  still tracked as a SINGLE zone id (controlling_opp_zone), not a group
+  -- a second same-side opposing zone impacting while the first still
+  held the slot was silently untracked (impact_opp's grant branch only
+  fires when the state isn't already BOTH), so if the ORIGINAL granting
+  zone later died while that untracked sibling was still alive and
+  un-breached, nothing protected the slot from being wrongly given up.
+  Fixed: controlling_opp_zone -> controlling_opp_group, a SET per side,
+  exactly mirroring controlling_trend_group -- a second same-side
+  opposing zone impacting while BOTH is already held now joins the group
+  silently (no new checkpoint), and the slot only reverts once EVERY
+  member of the group has died, not on the first one.
+- TREND'S LAST POI DYING TACTICALLY = PROACTIVE FLIP, not NONE
+  (2026-10-05, user-taught, REVERSES the 2026-10-04 "no banked respect ->
+  NONE" fix after the user's own correction on 2025-01-15 and again on
+  2025-01-20/21/22): a trend-direction zone's tactical death (body-close/
+  OPEN_INSIDE_ZONE) that empties the whole controlling_trend_group (the
+  LAST trend POI currently holding any part of control just died) now
+  ALWAYS flips FULL control to the opposite side immediately -- the same
+  as a real structural MSS flip -- regardless of whether the opposite
+  side ever earned a "respect." User's own words: "a POI with the trend
+  getting breached or violated simply means this trend is almost being
+  changed... we then simply stop buying or trading against the trend and
+  we keep full sell control." The user explicitly apologized and reversed
+  their own earlier Jan-15 correction once they worked through the Jan-
+  20/21/22 sequence: a Daily zone that was the LAST one left in its
+  bearish leg died tactically (body close) on the 20th -- CONTROL
+  proactively flips to full BUY right there, holds through the 21st
+  (nothing left in that leg to re-grant SELL), and the REAL structural
+  MSS flip (the protective swing actually breaking) on the 22nd just
+  confirms what CONTROL had already anticipated two days earlier. User's
+  own reasoning for WHY: "what is the point of stopping... it is to wait
+  until price impacts another POI... so if it happens [i.e. doesn't
+  happen, nothing left] we [stay committed the other way]" -- paraphrased
+  from "we anticipated it with the body close... to be part of the move
+  that makes the trend change." This makes the banked_respect mechanism
+  entirely moot (it only ever fed this one branch) -- removed from the
+  code entirely rather than left dormant, since it's genuinely dead now.
+  Re-verified Days 2-17 unaffected (no tactical death of a fully-emptied
+  group occurred on any of those days, so this change is additive there);
+  2025-01-21 now correctly reads "no trend POI left standing, proactive
+  full control to BUY" instead of "no banked respect, control to NONE".
+  OPEN QUESTION surfaced by this same rerun, NOT YET RESOLVED (flagged
+  for the user, not guessed at): a plain Daily-swing-high-confirms NONE
+  event now fires on 2025-01-23 10:10 (stripping the just-established
+  BUY, held alone, to NONE) -- this contradicts the user's own Day 22
+  account ("the trend officially became up the moment the anchor was
+  broken"), where BUY should still be controlling, not stripped to NONE,
+  days after the proactive flip. Need to understand from the user whether
+  the swing-high-confirms-strips-BUY mechanism is supposed to apply this
+  soon after a genuine trend change (a routine continuation swing high
+  forming is not the same thing as the exhaustion-type swing high the
+  original NONE rule was taught against), or whether this is a real,
+  separate bug. NOT applied/guessed at -- holding further day-by-day
+  January reporting past the 22nd until this is resolved.
 - STILL OPEN (not yet coded, confirmed necessary 2026-10-04): the "4H
   side continues, 1H specifically abandoned" picture (user's Jan-2
   walkthrough: "PDL was taken leaving us with sell only with 4h") is
@@ -733,6 +792,55 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 
 SESSION LOG (newest first)
 ----------------------------
+
+2026-10-05 — Full January push: proactive-flip rule replaces banked_respect; opposing-group tracking fixed; Day 17 loss-trade question investigated and unresolved; Jan 23 NONE anomaly flagged, blocking further rollout
+- PROACTIVE FLIP and OPPOSING-GROUP fixes: see the CONTROL section's new
+  "TREND'S LAST POI DYING TACTICALLY = PROACTIVE FLIP" and "OPPOSING-SIDE
+  GROUPING" entries above for full detail -- both implemented and pushed.
+- DAY 17 LOSS-TRADE QUESTION (user flagged via a TradingView screenshot
+  showing a swing low around 13:35 Riyadh that they recall gave a real
+  entry and a loss, before RB#145's eventual TP win): investigated
+  directly against the engine's own entry-matching code
+  (run_5m_bso/run_5m_chain) and raw M1 data. Findings:
+    * RB#145 itself (the eventual TP winner) shows only ONE attempt,
+      entered straight to TP -- no prior SL on this exact zone. Its
+      `replacements=3` means the resting STOP-entry reference price (a
+      5m swing low, chased forward as newer lows confirm) moved three
+      times between 13:31 and 14:33 without any of those three levels
+      ever actually breaking -- not three fills, just three re-pricings
+      of a still-pending order.
+    * The parallel H4 zone born at the same minute (OB#109, impact
+      13:29) was immediately superseded by RB#145 under the same-leg
+      collapse rule (mark_superseded_same_leg) -- it never got to search
+      for its own entry at all.
+    * The two 1H candidates in that window (OB#410/RB#508, impact 13:48)
+      -- OB#410 was itself immediately superseded by RB#508 (same-leg
+      collapse); RB#508 rested from 14:00, and price DID trade into its
+      zone range (1.03047-1.03091) between ~14:10-14:16 before breaking
+      the zone's protect level at 14:17, but the engine's own stop-entry
+      rule (entry fires only on a confirmed break BELOW a resting 5m
+      swing low, not on mere zone-range touch) never found a qualifying
+      break before the protect level broke -- stage=POI_BREACHED, no
+      fill, no loss.
+  CONCLUSION: under the engine's own documented entry-matching rules, no
+  loss trade exists on 2025-01-17 before RB#145's win. This may mean (a)
+  the user is recalling a different POI/time than I've matched here, or
+  (b) the coded stop-entry mechanism (break of a resting 5m swing low)
+  doesn't match the user's actual entry method (e.g., a limit-style entry
+  on mere zone touch, which WOULD have filled around 13:35-14:10 and
+  likely lost before RB#145's own level later triggered). NOT guessed
+  at or silently resolved -- flagged for the user to clarify exactly
+  which price/time they mean, since this could reveal a fundamental
+  mismatch between the coded entry rule and real trading practice, which
+  would need checking across the whole month/dataset, not just patched
+  for one day.
+- JAN 23 NONE ANOMALY: see the CONTROL section's "OPEN QUESTION" note
+  above. A real Daily-swing-high-confirms-strips-BUY event now fires
+  2025-01-23 10:10, days after the Jan-20/21/22 trend-change sequence the
+  user just confirmed as correct -- appears to contradict the user's own
+  "trend officially became up" account for the 22nd. Not applied or
+  guessed at; day-by-day January reporting is PAUSED past the 22nd until
+  this is resolved with the user.
 
 2026-10-04 (part 8) — TWO real engine bugs fixed (not reporting this time), caught on 2025-01-14/15/16/17: stale banked_respect across control episodes; 1H wick-chain never reset on a fresh trend grant
 - STALE BANKED_RESPECT BUG (compute_control_timeline): banked_respect
