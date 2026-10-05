@@ -1081,20 +1081,6 @@ def control_state_at(checkpoints: list, t: "datetime"):
     return state, one_h_owner
 
 
-def control_checkpoint_time_at(checkpoints: list, t: "datetime"):
-    """Returns the OWN timestamp of the checkpoint currently in effect at
-    `t` (the last one at or before `t`), or None if `t` is before the
-    first one. Used only to tell whether `t` falls on the SAME calendar
-    day that checkpoint was recorded on -- see its one call site's own
-    comment (the 1H same-day-only transfer rule, 2026-10-04)."""
-    result = None
-    for ct, _cs, _ch, _reason in checkpoints:
-        if ct > t:
-            break
-        result = ct
-    return result
-
-
 def control_ceiling(checkpoints: list, t0: "datetime", side: str, resource: str):
     """First checkpoint AFTER t0 where `side` stops holding `resource`
     ("4h" or "1h"). None if it never does within the available
@@ -1478,23 +1464,30 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
             if resource == "4h":
                 held = c_state in (zone_side, "BOTH")
             else:
-                # Real bug fixed 2026-10-04 -- user's own correction,
-                # verbatim: "transfer to opposing POI... this is only for
-                # the impact day, for the next day 1h follows the PDL/H
-                # and wick chain rule only." one_h_owner's single-slot
-                # transfer is a fact about the SPECIFIC day it happened --
-                # it must not keep gating 1H on every later day just
-                # because nothing has re-granted it since. Same calendar
-                # day as the grant -> still requires the exact owner
-                # match. A LATER day -> 1H for this side falls back to
-                # the same test 4H uses (does CONTROL include this side
-                # at all); the separate PDL/PDH abandonment chain above
-                # (zone_abandon_at) is what actually restricts it further
-                # from there, independent of who originally got the slot.
-                grant_t = control_checkpoint_time_at(control_checkpoints, z.impact_time)
-                same_day = (grant_t is not None and
-                            grant_t.astimezone(display_tz).date() == z.impact_time.astimezone(display_tz).date())
-                held = (c_owner == zone_side) if same_day else (c_state in (zone_side, "BOTH"))
+                # SIMPLIFIED 2026-10-05 (user caught on 2025-01-27): 1H is
+                # single-owner, full stop -- always test against whoever
+                # CURRENTLY holds the slot (c_owner), same day or ten days
+                # later alike. The old same-day/later-day split (2026-
+                # 10-04) let a later-day BOTH authorize 1H for BOTH sides
+                # via the state-based 4H-style fallback -- wrong: once the
+                # slot is handed to the opposing side (a mere opposing
+                # impact), the TREND side's own 1H is gone until something
+                # actually re-grants it (its own fresh impact_trend, which
+                # calls grant_trend() and resets owner back to it) -- it
+                # does NOT passively reopen just because the calendar
+                # rolled over while state is still BOTH. User's own words,
+                # 2025-01-24's opposing SELL grant carrying into 01-27:
+                # "buy is 4h only since Day 24, because we handed it over
+                # to the selling POI, the opposing one." Re-derivation
+                # confirmed this doesn't regress the original 2026-10-04
+                # fix it replaces (Day 8/9/10's owner already stayed in
+                # lockstep with state in every case that motivated it --
+                # opp_death resets owner back to the trend side the same
+                # moment state reverts, so plain owner-matching alone
+                # already covered it). The separate PDL/PDH abandonment
+                # chain above (zone_abandon_at) still restricts 1H further
+                # from there, on top of this owner check, same as before.
+                held = c_owner == zone_side
             if not held:
                 ledger_rows.append(dict(row_base, stage="NO_CONTROL"))
                 continue
