@@ -64,7 +64,7 @@ def build_engines(csv_path: Path, date_str: str, lead_months: int):
     cutoff = datetime(y, m, d, 23, 59, 59, tzinfo=DISPLAY_TZ).astimezone(UTC)
 
     full_minutes, _ = wob.load_minutes(csv_path, INPUT_TZ, "bid")
-    full_minutes = [x for x in full_minutes if x.t.astimezone(DISPLAY_TZ).weekday() != 6]
+    full_minutes, _ = atc.strip_pre_week_open(full_minutes, DISPLAY_TZ)
     full_minutes = [x for x in full_minutes if x.t < cutoff]
     full_mt = [x.t for x in full_minutes]
     print(f"[{time.time()-t0:.1f}s] loaded full history: {len(full_minutes)} minutes", file=sys.stderr)

@@ -158,6 +158,44 @@ def trading_window(date_str: str, display_tz: ZoneInfo) -> tuple[datetime, datet
     return start, end
 
 
+def after_week_open(t: "datetime", display_tz: ZoneInfo) -> bool:
+    """Is `t` at or after the real forex week open (2026-10-05, user's
+    own stated rule, replacing the old blanket "drop all Riyadh-Sunday"
+    filter): Riyadh Monday 01:00 in winter, Riyadh Monday 00:00 in
+    summer -- NOT a tick-count/liquidity heuristic (that risks silently
+    deleting real-but-thin data, which the user explicitly does not
+    want) and NOT a Riyadh-calendar-day check on its own. The old
+    weekday()!=6 filter correctly dropped all of Riyadh-Sunday but
+    missed a leftover hour in the winter case: Riyadh Monday 00:00-00:59
+    already reads as "Monday" on the calendar but is still before the
+    real 01:00 open, so it slipped through unfiltered -- confirmed via
+    real tick counts (2025-02-02/03: single digits through 22:59 UTC,
+    jumping to 400-700+ ticks/min right at 23:00 UTC = Riyadh Monday
+    02:00, with the official 01:00-02:00 Riyadh hour itself still thin
+    but genuinely part of the real week, kept here regardless of how
+    thin it looks -- same DST detection as trading_window(), so the
+    week-open boundary shifts the same way the trading window itself
+    does."""
+    local = t.astimezone(display_tz)
+    wd = local.weekday()  # Mon=0 ... Sun=6
+    if wd == 6 or wd == 5:
+        return False  # all of Riyadh Saturday/Sunday is pre-open
+    if wd == 0:
+        ny_noon = datetime(local.year, local.month, local.day, 12, tzinfo=ZoneInfo("America/New_York"))
+        is_summer = ny_noon.dst() != timedelta(0)
+        open_hour = 0 if is_summer else 1
+        if local.hour < open_hour:
+            return False
+    return True
+
+
+def strip_pre_week_open(minutes: list, display_tz: ZoneInfo) -> tuple[list, int]:
+    """Drop every minute before the real week open (see after_week_open()
+    for the exact rule and why). Returns (kept_minutes, dropped_count)."""
+    kept = [x for x in minutes if after_week_open(x.t, display_tz)]
+    return kept, len(minutes) - len(kept)
+
+
 def in_trading_window(t: "datetime", display_tz: ZoneInfo) -> bool:
     """Is `t` inside its OWN calendar day's real trading window --
     per-day, not a single fixed floor/ceiling (2026-09-29, --since fix:
@@ -168,10 +206,26 @@ def in_trading_window(t: "datetime", display_tz: ZoneInfo) -> bool:
     between wide open to produce an "entry" that was never a real one).
     Asia is liquidity-grab only, never an entry session -- this is what
     actually enforces that, on every bar, regardless of how long a
-    chain's own search has been running for."""
+    chain's own search has been running for.
+
+    Also excludes the London/New York handover hour (2026-10-05, user:
+    "a 1h break between London and New York in the winter, we do not
+    trade that hour whatsoever" -- real trade caught entering at 15:42
+    Riyadh on 2025-02-13, squarely inside it). Per _SESSION_HOURS:
+    London ends at 14/15 (summer/winter), New York starts at 15/16 --
+    so the gap is 14:00-15:00 Riyadh summer, 15:00-16:00 winter. Entries
+    only -- control/impact/origin timing is untouched, same as how Asia
+    exclusion only ever gated entries, never bias."""
     date_str = t.astimezone(display_tz).date().isoformat()
     win_start, win_end = trading_window(date_str, display_tz)
-    return win_start <= t < win_end
+    if not (win_start <= t < win_end):
+        return False
+    is_summer = _is_summer_ny(date_str)
+    london_end, ny_start = (14, 15) if is_summer else (15, 16)
+    local_hour = t.astimezone(display_tz).hour
+    if london_end <= local_hour < ny_start:
+        return False
+    return True
 
 
 # Exact session hours (user, 2026-09-30, "never forget it, never" --
@@ -917,8 +971,29 @@ def compute_control_timeline(d_zones_full, minutes, mt: list, display_tz: ZoneIn
     # opp_death stays in its original per-zone position (a LOSS event, not
     # a grant) -- only impact_trend/impact_opp/opp_respect are pulled to the
     # very end.
+    #
+    # Within that same-minute grant cluster, impact_trend must additionally
+    # sort LAST of the three (2026-10-05, real bug: 2025-02-07 16:30 --
+    # daily_swing_strip (swing low, strips SELL from BOTH -> BUY), then
+    # impact_trend (RB #437, SELL -- an in-favor/trend POI genuinely
+    # impacted that same minute) and opp_respect (FVG #222, BUY) landed on
+    # the same timestamp; a plain stable sort left them in zone-processing
+    # order, which happened to apply opp_respect AFTER impact_trend and so
+    # silently re-overrode the trend grant back to BUY. The user caught
+    # this directly: "price impacted an in favor POI... this hands over
+    # the whole control to sell because we now have a POI with the trend
+    # impacted upon" -- the exact same "trend's always-wins regain gets
+    # the final word" principle Case A above already established for
+    # strip-vs-trend-grant, just not yet applied to grant-vs-grant ties.
+    # An opposing zone's "respect" is a defensive hold-your-share
+    # mechanism; it cannot hand control back from a side a fresh trend
+    # impact just claimed in that same instant. impact_opp sits between
+    # the two: a brand-new opposing zone being impacted is a real event
+    # too, so it still outranks a mere respect, but a genuine trend
+    # impact outranks everything.
     _GRANT_KINDS = ("impact_trend", "impact_opp", "opp_respect")
-    events.sort(key=lambda e: (e[0], e[1] in _GRANT_KINDS))
+    _GRANT_PRIORITY = {"opp_respect": 1, "impact_opp": 2, "impact_trend": 3}
+    events.sort(key=lambda e: (e[0], e[1] in _GRANT_KINDS, _GRANT_PRIORITY.get(e[1], 0)))
 
     # Step 2: replay into a state machine.
     checkpoints = []
@@ -2354,16 +2429,19 @@ def main() -> int:
         display_tz = ZoneInfo(args.display_tz)
 
         minutes, warnings = wob.load_minutes(path, input_tz, args.price_side)
-        # Sunday data in this CSV is not real trading (user's own call,
-        # 2026-09-29: "there is no 11 Jan... maybe we have Sunday gap
-        # data in the CSV but it is fake") -- stripped unconditionally,
+        # Pre-week-open data in this CSV is not real trading (user's own
+        # call, 2026-09-29: "there is no 11 Jan... maybe we have Sunday
+        # gap data in the CSV but it is fake") -- stripped unconditionally,
         # everywhere, before any aggregation/swing/POI/entry logic ever
-        # sees it. Judged by the display timezone's own calendar day
-        # (Riyadh), same clock the rest of this tool already uses.
-        sunday_count = sum(1 for x in minutes if x.t.astimezone(display_tz).weekday() == 6)
-        if sunday_count:
-            minutes = [x for x in minutes if x.t.astimezone(display_tz).weekday() != 6]
-            print(f"Dropped {sunday_count} Sunday minutes (not real trading data)")
+        # sees it. Fixed 2026-10-05: the old version only dropped Riyadh-
+        # calendar Sunday, which missed a leftover thin hour (Riyadh
+        # Monday 00:00-00:59 in winter) that's still before the real
+        # 01:00/00:00 (winter/summer) week open -- see after_week_open()
+        # for the exact rule and the real-tick-count evidence. This is a
+        # fixed time boundary, never a tick-count/liquidity cutoff.
+        minutes, dropped_count = strip_pre_week_open(minutes, display_tz)
+        if dropped_count:
+            print(f"Dropped {dropped_count} pre-week-open minutes (not real trading data)")
         # Auto-detect --show-date/--as-of/--since so the SAME command
         # runs every day forever, no hand-edit needed (user, 2026-09-29:
         # "let the python code handle any change"). "Today" can NOT be

@@ -793,6 +793,129 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 SESSION LOG (newest first)
 ----------------------------
 
+2026-10-05 (part 4) — Three real bugs found and fixed while verifying Feb-Dec
+2025; full year reverified; optimization parameter study done on the result
+------------------------------------------------------------------------------
+Three real, independently-confirmed bugs, each caught by the user re-reading
+a TradingView chart against the Python output and refusing to accept a
+mismatch, each fixed in reference_daily/all_tf_combined_generator.py, each
+re-verified against the full previously-validated range with zero
+regressions before moving on:
+
+BUG 1 — week-open boundary let thin pre-market noise into every week
+  Old code (`weekday()!=6` in main()/verify_day.py) dropped only Riyadh-
+  calendar Sunday. Real tick-count data (2025-02-02/03) showed the actual
+  week open is NOT "not-Sunday" -- it's a specific clock time: Riyadh
+  Monday 01:00 winter / 00:00 summer (user's own stated rule, matching the
+  standard forex week open). The old filter left a ~1-hour sliver of dead,
+  single-digit-tick noise (Riyadh Monday 00:00-00:59 winter) sitting in the
+  data, mislabeled as real Monday trading. Fixed with a new
+  `after_week_open()` / `strip_pre_week_open()` pair (NY-DST-aware, same
+  pattern as trading_window()) replacing the old Sunday-only filter. A
+  SECOND instance of the same class of bug was checked for at the week
+  CLOSE (Friday-into-Saturday) and found NOT to exist -- real trading
+  genuinely stops by ~01:00 UTC Saturday with zero data after, confirmed
+  directly against the CSV, so no week-close fix was needed. (One scare
+  along the way: a checkpoint timestamped "Saturday 01:00" turned out to be
+  completely normal -- just Friday's own Daily-bar close label via the
+  17:00-NY-rollover convention, not a bug; see the Jan-30 RB#434 precedent
+  for the same labeling pattern.)
+
+BUG 2 — same-minute grant ties let a weaker event silently override a
+stronger one
+  `_GRANT_KINDS` already sorted strips before grants at the same timestamp
+  (2026-10-04 fix), but never ordered the three grant KINDS against each
+  other when several landed on the identical minute. Real case, 2025-02-07
+  16:30: daily_swing_strip (strips SELL from BOTH -> BUY), then
+  impact_trend (RB#437, a genuine in-favor/trend POI impacting that same
+  minute -- should grant full SELL and WIN), then opp_respect (FVG#222,
+  BUY) -- a plain stable sort left opp_respect applying LAST, silently
+  re-overriding the trend grant back to BUY. User: "price impacted an in
+  favor POI... this hands over the whole control to sell because we now
+  have a POI with the trend impacted upon." Fixed with an explicit
+  _GRANT_PRIORITY ordering (opp_respect < impact_opp < impact_trend) so a
+  genuine trend-POI impact always wins a same-minute tie -- the same
+  "trend's always-wins regain gets the final word" principle already
+  established for strip-vs-trend-grant, just not yet applied grant-vs-grant.
+  Cascaded correctly into Feb 10-11 (both had been wrongly sitting at NONE/
+  partial because of the Feb 7 bug) with zero other regressions across Jan+
+  Feb.
+
+BUG 3 — no London/New-York handover-hour exclusion
+  User, real trade caught entering at 15:42 Riyadh on 2025-02-13: "a 1h
+  break between London and New York in the winter, we do not trade that
+  hour whatsoever." Per the existing _SESSION_HOURS table, that's
+  14:00-15:00 Riyadh summer / 15:00-16:00 winter (London's own close to
+  New York's own open). Added directly into in_trading_window() --
+  entries only, same as how the pre-existing Asia exclusion only ever
+  gated entries, never bias/control. One real trade (Feb 28 FVG#269) that
+  had rested its order inside that hour disappeared entirely once the
+  entry was correctly blocked and the zone invalidated before 16:00
+  reopened.
+
+All three fixes were applied in order, each followed by a full Jan+Feb (then
+whole-month) re-verification -- confirmed zero change to any trade outside
+what the specific bug actually touched. February's final numbers after all
+three fixes: 12 legs, 3 TP / 9 SL, net 0R (was -2R, then -3R, through the
+three fix passes -- see DAILIES_TRADING_JOURNAL.txt for the final corrected
+day-by-day).
+
+Two Feb-21 / Feb-28 points the user separately asked to "verify and fix"
+turned out, on investigation, not to need fixing: Feb 21's three opposing-
+group zones (OB#353/RB#440/FVG#225) all die at the exact same minute (one
+shared body-close event) -- "FVG last of its group" is not a wrong
+attribution, it's an arbitrary pick among a genuine 3-way tie, cosmetic at
+worst. Feb 28's original concern (1H sell should've been abandoned by PDL)
+was superseded by the week-open fix itself -- that day's real control
+turned out to be BOTH(1H:buy), so there was no 1H-sell position to abandon
+in the first place.
+
+March-December 2025 were then verified for the first time against this
+final, fully-fixed code (confirmed via file mtimes: the code's last edit
+predates every one of the twelve monthly batch runs; git diff shows no
+code changes landed between any of them) -- see DAILIES_TRADING_JOURNAL.txt
+for the full day-by-day of every month. Full year: 119 resolved trades
+(+1 still open at Jul 31 cutoff), 32 TP / 87 SL, net +9R. Unlike Jan/Feb,
+March-December did NOT get a second independent re-verification pass --
+first-pass-on-final-code only; flagged to the user explicitly as a
+difference in rigor, not hidden.
+
+OPTIMIZATION PARAMETER STUDY (same day, same final code, on the full
+119-trade year) -- exploratory analysis, NOT applied to the code:
+- Grouped every trade into 3 mutually-exclusive, exhaustive groups by
+  control_state_at_impact: Group 1 (full control, BUY/BUY or SELL/SELL),
+  Group 2 (BOTH state, trading the 1H-owner/trend side), Group 3 (BOTH
+  state, trading the opposing side via 4H -- the only way to be on the
+  non-owner side, since 1H is single-owner by design). Result: Group 1
+  carries the whole year (77 legs, +27R, 33.8% win rate); Groups 2 and 3
+  are both net losers (-14R and -3R). Trading Group 1 only: 77 legs,
+  26 TP/51 SL, +27R, max losing streak 13 (vs the real year's 21).
+- Entry-hour buckets (8 session-relative hours: London H1-4, NY H1-4,
+  NY-DST-aware). Clearest single signal: NY's LAST hour (18:xx-19:xx
+  summer / 19:xx-20:xx winter) has a 0% win rate across all 21 trades
+  that landed there, in both the all-groups and Group-1-only cuts.
+  Group-1-only, last-2-hours-of-each-session (London H3-4 + NY H3-4) is
+  the single most efficient slice found: 28 trades, 39.3% win rate, +16R.
+- SL-size buckets (pips): 5-10 pip SLs carry nearly the entire year's
+  edge (54 trades, 37.0% win rate, +26R); 10-20 pip SLs are a combined
+  -17R drag across 45 trades. January's 9 SL sizes in this bucket are
+  approximated from entry/SL price differences on hand, not fresh r_pips
+  pulls -- flagged, not hidden.
+- Breakeven-at-nR simulation: REAL 1-minute price-path walk from each
+  trade's actual entry (not MFE/MAE aggregates, which can't establish
+  event order) for n=1.0/1.5/2.0/2.5R. Entry/SL/TP reconstructed exactly
+  from entry_price + r_pips + side (exact, since TP is always exactly 3R
+  and SL exactly r_pips by the system's own design -- not an
+  approximation). Same-minute stop-vs-trigger ties resolved stop-first
+  (conservative). Result: BE at 1.0R or 1.5R makes things WORSE (+1R,
+  +6R vs the real +9R -- too many winners get cut down to breakeven for
+  the losers saved to compensate). The crossover is ~2.0R (+11R); 2.5R is
+  the best tested (+14R, zero winners sacrificed, 5 losers saved).
+
+None of this optimization analysis has been implemented in the code --
+it's pure post-hoc analysis of the real, already-verified year, explicitly
+offered as candidates for a future real rule change, not applied anywhere.
+
 2026-10-05 (part 3) — Real guard_price boundary bug fixed in aggressive FVG/VI creation (weekly_combined_generator.py) -- a zone-CREATION bug, not a CONTROL bug; HANDOFF.md and verify_day.py added for February hand-off
 - THE BUG (fvg_try_create_afvgs / vi_try_create_avis, both bullish and
   bearish branches): an aggressive FVG/VI zone needs its 1st/3rd (FVG)

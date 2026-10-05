@@ -9,6 +9,128 @@ Entry format, every day: Bias / Session / Daily driver / 1H+4H context /
 Trade taken / Result / Notes. Short, plain, no fluff.
 
 
+FEBRUARY-DECEMBER 2025 — MONTH CLOSES (2026-10-05, part 2)
+---------------------------------
+Full year now verified end to end. Three real code bugs were found and
+fixed while re-verifying February (week-open boundary, same-minute grant
+ordering, London/NY handover-hour exclusion -- full technical detail in
+DAILIES_LEARNING_LOG.txt's 2026-10-05 part-4 entry); every month below
+is on that final, fully-fixed code. January's original "3 TP legs" count
+above does not match a fresh count of its own trade list (only 2 of the
+7 are TP: RB#124, RB#145) -- flagging this discrepancy rather than quietly
+fixing old text; the corrected January read is 2 TP / 7 SL, net -1R.
+
+  FEBRUARY — 12 legs, 3 TP / 9 SL, net 0R
+    Feb4   H4 RB#116 SELL  12:41 @1.03420 SL1.03491 TP1.03207 -> TP 15:00
+    Feb4   1H RB#413 SELL  16:40 @1.03295 SL1.03391 TP1.03007 -> SL 16:59
+    Feb5   1H RB#422 SELL  16:15 @1.04172 SL1.04254 TP1.03926 -> SL 17:55
+    Feb7   1H OB#344 BUY   2 attempts, both SL (14:02, 14:44)
+    Feb11  H4 OB#100 SELL  13:39 @1.03164 SL1.03249 TP1.02909 -> SL 15:13
+    Feb11  H4 RB#128 SELL  16:00 @1.03252 SL1.03282 TP1.03162 -> TP 16:30
+    Feb12  1H RB#470 SELL  19:04 @1.03695 SL1.03823 TP1.03311 -> SL 19:55
+    Feb13  H4 FVG#56 BUY   16:11 @1.03926 SL1.03854 TP1.04142 -> SL 16:27
+    Feb24  H4 RB#152 BUY   2 attempts: SL (16:16), TP (18:09->Feb25 18:11)
+    Feb26  H4 OB#125 BUY   16:23 @1.04927 SL1.04746 TP1.05470 -> SL Feb27 04:00
+
+  MARCH — 2 legs, 2 TP / 0 SL, net +6R
+    Mar4   H4 FVG#55 BUY  18:42 @1.05150 SL1.04960 TP1.05720 -> TP 21:29
+    Mar24  1H RB#545 SELL 13:48 @1.08485 SL1.08544 TP1.08308 -> TP 15:00
+
+  APRIL — 13 legs, 4 TP / 9 SL, net +3R
+    Apr2   H4 RB#116 BUY   10:36 @1.07889 -> TP 15:57
+    Apr4   1H FVG#230 SELL 15:00 @1.10605 -> SL 15:24
+    Apr4   1H RB#436 SELL  15:36 @1.10425 -> TP Apr7 00:00
+    Apr8   H4 RB#125 SELL  10:19 @1.09676 -> TP 10:57
+    Apr8   1H OB#382 SELL  16:01 @1.09431 -> SL 21:30
+    Apr11  H4 RB#133 BUY   18:27 @1.13318 -> SL 19:03
+    Apr15  H4 OB#103 SELL  2 attempts, both SL (10:27, 11:52)
+    Apr15  H4 RB#138 BUY   15:00 @1.13228 -> SL 15:58
+    Apr16  1H OB#430 SELL  16:49 @1.13584 -> SL 17:01
+    Apr24  1H OB#480 SELL  16:46 @1.13688 -> SL 17:10
+    Apr24  1H RB#582 SELL  17:49 @1.13760 -> SL 22:19
+    Apr29  H4 OB#123 BUY   15:21 @1.13769 -> TP 15:43
+
+  MAY — 7 legs, 3 TP / 4 SL, net +5R
+    May6   H4 OB#91 SELL   3 attempts, all SL (10:17, 11:07, 11:53)
+    May16  H4 RB#149 SELL  10:18 @1.12073 -> TP 17:31
+    May16  1H OB#431 SELL  15:00 @1.12009 -> TP 17:17
+    May20  H4 RB#154 BUY   15:53 @1.12360 -> TP 20:42
+    May27  1H FVG#286 BUY  17:15 @1.13602 -> SL 17:35
+
+  JUNE — 11 legs, 3 TP / 8 SL, net +1R
+    Jun6   H4 OB#97 BUY    2 attempts, both SL (10:52, 11:27)
+    Jun9   1H FVG#64 SELL  12:37 @1.14330 -> TP 14:25
+    Jun11  H4 RB#126 SELL  12:45 @1.14365 -> SL 15:30
+    Jun13  1H RB#515 BUY   12:55 @1.15289 -> SL 13:16
+    Jun13  1H RB#517 BUY   16:36 @1.15116 -> TP 17:25
+    Jun23  H4 RB#153 BUY   12:41 @1.14693 -> TP 17:08
+    Jun24  1H RB#585 SELL  13:35 @1.15953 -> SL 17:22
+    Jun25  1H RB#597 BUY   13:16 @1.16019 -> SL 15:47
+    Jun30  H4 RB#169 SELL  17:50 @1.17338 -> SL 18:15
+    Jun30  1H RB#632 SELL  15:00 @1.17236 -> SL 17:21
+
+  JULY — 11 resolved legs (+1 still open at month end), 3 TP / 8 SL, net +1R
+    Jul1   H4 OB#95 BUY, H4 RB#116 BUY  both SL (16:40, 18:37)
+    Jul11  H4 RB#136 SELL  15:00 -> SL
+    Jul14  H4 RB#139 SELL  15:25 -> TP; H4 RB#141 BUY 16:35 -> SL
+    Jul15  H4 RB#142 SELL  2 attempts: SL (10:02), TP (11:33->14:30)
+    Jul23  H4 RB#161 SELL  18:33 -> SL
+    Jul24  H4 OB#128 BUY 16:05 -> TP; H4 FVG#78 BUY 15:00 -> SL
+    Jul31  1H RB#645 SELL  attempt1 18:11 -> SL; attempt2 18:24 STILL OPEN
+
+  AUGUST — 10 legs, 1 TP / 9 SL, net -6R
+    Aug4   1H RB#466 BUY 13:41 -> TP; RB#468,RB#469 BUY -> both SL
+    Aug5   H4 RB#125 SELL  18:32 -> SL
+    Aug11  H4 RB#135 BUY  13:13 -> SL
+    Aug12  H4 RB#137 BUY  13:14 -> SL
+    Aug18  H4 FVG#67, H4 FVG#68 (x2) BUY -> all SL
+    Aug19  H4 OB#111 BUY  18:54 -> SL
+
+  SEPTEMBER — 16 legs, 2 TP / 14 SL, net -8R (worst month; part of the
+  21-leg max losing streak spanning Aug4-Sep24)
+    Sep8   H4 RB#115 x2, 1H RB#477 -> all SL
+    Sep9   H4 FVG#66 BUY -> SL
+    Sep10  1H RB#499 BUY -> SL
+    Sep17  H4 RB#134 SELL -> SL
+    Sep22  H4 OB#109 x2, H4 RB#140 x2, 1H FVG#80 -> all SL (5 legs)
+    Sep24  H4 RB#145 BUY -> SL
+    Sep25  1H RB#601 SELL 13:57 -> TP
+    Sep26  1H RB#615 SELL -> SL
+    Sep29  H4 RB#154 SELL -> SL; 1H RB#622 SELL 10:33 -> TP
+
+  OCTOBER — 9 legs, 1 TP / 8 SL, net -5R
+    Oct2   H4 RB#102 SELL  12:30 -> TP
+    Oct10  1H RB#478, RB#480, RB#482 SELL -> all SL
+    Oct21  1H RB#547 BUY -> SL
+    Oct28  H4 RB#142 SELL, 1H FVG#295 SELL -> both SL
+    Oct30  H4 OB#116 SELL  2 attempts, both SL
+
+  NOVEMBER — 13 legs, 4 TP / 9 SL, net +3R
+    Nov3   H4 OB#74 SELL -> SL
+    Nov4   H4 RB#106 SELL  11:31 -> TP
+    Nov10  H4 RB#115 SELL 11:51 -> TP; 1H RB#493 SELL -> SL
+    Nov12  1H RB#513 BUY -> SL
+    Nov17  H4 OB#95 SELL 11:13 -> TP; H4 RB#131 BUY -> SL; 1H RB#538 BUY -> SL
+    Nov18  H4 RB#132 SELL -> SL
+    Nov19  H4 RB#136 SELL -> SL
+    Nov20  1H FVG#276 BUY -> SL
+    Nov26  H4 FVG#76 BUY 17:13 -> TP; 1H OB#476 SELL -> SL
+
+  DECEMBER — 6 legs, 4 TP / 2 SL, net +10R (best month)
+    Dec4   H4 RB#114 BUY -> SL
+    Dec5   H4 RB#116 BUY -> SL
+    Dec12  1H RB#501 BUY 17:15 -> TP
+    Dec16  1H RB#526 BUY 14:49 -> TP
+    Dec29  1H RB#605 BUY 16:01 -> TP
+    Dec31  RB#631+RB#162 BUY (dual-POI same-5m-entry merge) 18:23 -> TP
+
+FULL YEAR 2025: 119 resolved legs (+1 still open), 32 TP / 87 SL, net +9R.
+Max losing streak 21 (Aug4-Sep24). Optimization-angle analysis (control-
+state grouping, entry-hour buckets, SL-size buckets, breakeven-R
+simulation) is in DAILIES_LEARNING_LOG.txt's 2026-10-05 part-4 entry, not
+repeated here since none of it changed any actual trade result above.
+
+
 JANUARY 2025 — MONTH CLOSE (2026-10-05)
 ---------------------------------
 Full month verified, days 2-31 (weekends skipped), locked 4-column
