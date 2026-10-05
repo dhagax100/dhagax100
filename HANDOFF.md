@@ -70,11 +70,20 @@ mechanism and present it as settled.**
   learning log for a worked example of tracing a reporting discrepancy
   all the way down into a 3-candle gap condition).
 - `data/EURUSD_m1_BidAndAsk_2021-01-03_to_2026-09-30.csv` — the real
-  merged multi-year 1-minute price data (gitignored, rebuild locally
-  with `cat` from the three tracked year-range CSVs in `data/` if it's
-  missing — see `.gitignore`'s own comment for the exact command).
-  Every result in this project traces back to this file; there is no
-  other source of truth.
+  merged multi-year 1-minute price data (gitignored, rebuild locally if
+  missing). Every result in this project traces back to this file;
+  there is no other source of truth. **Do not use a plain `cat`** — the
+  three source files have different header styles (quoted vs.
+  unquoted) and each carries its own header row, so a naive `cat` puts
+  two extra header rows in the middle of the data. Use this exact
+  command instead (verified byte-identical to the tracked file):
+  ```
+  (head -1 data/EURUSD_m1_BidAndAsk_2021-01-03_to_2022-12-30.csv
+   tail -n +2 data/EURUSD_m1_BidAndAsk_2021-01-03_to_2022-12-30.csv
+   tail -n +2 data/EURUSD_m1_BidAndAsk_2023-01-02_to_2024-12-31.csv
+   tail -n +2 data/EURUSD_m1_BidAndAsk_2025-01-02_to_2026-09-30.csv) \
+    > data/EURUSD_m1_BidAndAsk_2021-01-03_to_2026-09-30.csv
+  ```
 
 ## The locked day-report format
 
