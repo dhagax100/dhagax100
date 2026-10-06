@@ -460,6 +460,28 @@ def calendar_day_bounds(date_str: str, display_tz: ZoneInfo) -> tuple["datetime"
     return win_start, win_start + timedelta(days=1)
 
 
+def forex_day_bounds(date_str: str, display_tz: ZoneInfo) -> tuple["datetime", "datetime"]:
+    """Like calendar_day_bounds() above, but anchored to the forex
+    trading day (NY 17:00 close = Riyadh 01:00 winter / 00:00 summer)
+    instead of Riyadh calendar midnight -- the SAME day definition the
+    Daily engine's own bars already use everywhere else (dc.aggregate_
+    days, forex_day_start). Used specifically by the PDH/PDL react-day
+    chain below (2026-10-06, user-taught, caught on 2025-01-06): the
+    old calendar-midnight bounds computed "yesterday's high" over the
+    wrong hour range, giving a PDH level that real price swept through
+    hours earlier than the true one -- confirmed on real 1-minute data:
+    the calendar-midnight PDH (1.03072) was swept at 02:46, but the
+    real Daily-bar PDH (1.03096, the same high the Daily engine's own
+    zones/swings already use) wasn't swept until 04:15. The 2026-09-29
+    fix (see find_prev_day_extreme below) correctly picked the right
+    DAY; this fixes the boundary used to measure that day, which was
+    still wrong in a different way."""
+    y, m, d = (int(x) for x in date_str.split("-"))
+    open_hour = 0 if _is_summer_ny(date_str) else 1
+    win_start = datetime(y, m, d, open_hour, tzinfo=display_tz).astimezone(UTC)
+    return win_start, win_start + timedelta(days=1)
+
+
 def find_prev_day_extreme(minutes, mt: list, date_str: str, display_tz: ZoneInfo, side: str):
     """"React day" rule (user, 2026-09-29): the previous day's relevant
     extreme -- its LOW for a SELL bias (a sell setup dies as a fresh
@@ -510,7 +532,7 @@ def find_prev_day_extreme(minutes, mt: list, date_str: str, display_tz: ZoneInfo
     for _ in range(10):
         while prev_date.weekday() >= 5:  # 5=Saturday, 6=Sunday
             prev_date -= timedelta(days=1)
-        win_start, win_end = calendar_day_bounds(prev_date.isoformat(), display_tz)
+        win_start, win_end = forex_day_bounds(prev_date.isoformat(), display_tz)
         i0, i1 = bisect_left(mt, win_start), bisect_left(mt, win_end)
         if i0 < i1:
             day_minutes = minutes[i0:i1]
@@ -531,7 +553,7 @@ def find_prev_day_sweep_time(minutes, mt: list, date_str: str, display_tz: ZoneI
     lands partway through the day (see build_pdh_pdl_chain's reset)."""
     if extreme is None:
         return None
-    win_start, win_end = calendar_day_bounds(date_str, display_tz)
+    win_start, win_end = forex_day_bounds(date_str, display_tz)
     if start_t is not None and start_t > win_start:
         win_start = start_t
     i0 = bisect_left(mt, win_start)
@@ -614,7 +636,7 @@ def build_pdh_pdl_chain(minutes, mt: list, side: str, display_tz: ZoneInfo,
                           if s == side and r.startswith("trend POI impacted"))
     while cur <= end_date:
         date_str = cur.isoformat()
-        win_start, win_end = calendar_day_bounds(date_str, display_tz)
+        win_start, win_end = forex_day_bounds(date_str, display_tz)
         i0, i1 = bisect_left(mt, win_start), bisect_left(mt, win_end)
         day_minutes = minutes[i0:i1]
         if not day_minutes:
@@ -678,7 +700,7 @@ def chain_abandon_at(chain_days: dict, date_str: str, display_tz: ZoneInfo):
         return None
     pre_abandoned, fresh_trigger_time = entry
     if pre_abandoned:
-        win_start, _ = calendar_day_bounds(date_str, display_tz)
+        win_start, _ = forex_day_bounds(date_str, display_tz)
         return win_start
     return fresh_trigger_time
 
@@ -1098,7 +1120,24 @@ def compute_control_timeline(d_zones_full, minutes, mt: list, display_tz: ZoneIn
                 controlling_opp_group[side] = {zone_id}
                 record(t, f"opposing POI respected ({zone_label(zone_id)}, {side}) -> full {side}")
         elif kind == "trend_death_tactical":
-            if zone_id in controlling_trend_group and state == side:
+            # BOTH-state gap (2026-10-06, user-taught, caught on
+            # 2025-01-30/31, RB#432): `state == side` alone missed the
+            # case where `side`'s trend is still standing but only
+            # SHARED (state=="BOTH", 1H currently owned by the
+            # opposite side via an opposing-POI impact) -- e.g. Jan 30
+            # closed BOTH (BUY trend, 1H owner SELL since 16:57), then
+            # RB#432 (BUY's own last standing trend zone) body-closed
+            # at Jan 31 01:00. The old condition never even looked,
+            # because state was "BOTH" not "BUY", so this real trend
+            # death silently produced no checkpoint at all -- CONTROL
+            # only flipped to SELL later (01:49), by an unrelated
+            # swing-confirmation strip, 49 minutes after the zone that
+            # was actually the day's last BUY trend reference had
+            # already died. `side` is still the trend backing BOTH
+            # whenever one_h_owner is the OTHER side -- generalizes the
+            # same proactive-flip principle to the shared-control case.
+            is_trend_side = state == side or (state == "BOTH" and one_h_owner == opposite(side))
+            if zone_id in controlling_trend_group and is_trend_side:
                 controlling_trend_group.discard(zone_id)
                 if controlling_trend_group:
                     continue  # other trend zones from the same group are still alive -- no change
@@ -1132,7 +1171,13 @@ def compute_control_timeline(d_zones_full, minutes, mt: list, display_tz: ZoneIn
                 record(t, f"trend zone tactical death ({zone_label(zone_id)}, last of its group) -> "
                           f"no trend POI left standing, proactive full control to {opposite(side)}")
         elif kind == "trend_death_structural":
-            if zone_id in controlling_trend_group and state == side:
+            # Same BOTH-state generalization as trend_death_tactical
+            # above -- a real structural MSS death of the trend's last
+            # standing zone must count even while that trend is only
+            # shared (BOTH, 1H owned by the opposite side), not just
+            # when it holds state outright.
+            is_trend_side = state == side or (state == "BOTH" and one_h_owner == opposite(side))
+            if zone_id in controlling_trend_group and is_trend_side:
                 controlling_trend_group.discard(zone_id)
                 if controlling_trend_group:
                     continue  # other trend zones from the same group are still alive -- no change
@@ -1294,11 +1339,32 @@ def run_5m_bso(z, it, bar_starts5: list, events5_sorted: list, minutes, mt: list
     entry_price = current.price
     entry_time = entry_m.t
 
-    pool = [ev for ev in events5_sorted if ev.kind == need_rest_kind and ev.swing >= start5
-            and ev.at is not None and ev.at <= entry_time]
-    if not pool:
+    # SL anchor (2026-10-06, user-taught, caught on 2025-01-07 RB#115
+    # attempt 1): the extreme since impact must be the real price
+    # extreme (every 1m high/low), not just the extreme among CONFIRMED
+    # 5m swing pivots. A genuine wick can fail to register as a
+    # confirmed swing (never rolls over into a recognized pivot) and
+    # was silently excluded from the old swing-pool, giving a tighter
+    # SL than the real structure since impact -- e.g. RB#115 attempt 1
+    # (impact 10:39, entry 11:18): the real high since impact was
+    # 1.04241 (10:44 wick, never confirmed as a swing), but the old
+    # pool-based SL used 1.04206 (the only swing actually confirmed by
+    # entry time). User's own words: "SL should have been placed at the
+    # most extreme swing high not the immediate one... by extreme we
+    # mean the extreme since impact. period." Universal: every SL from
+    # here on is the raw 1-minute extreme from impact through the entry
+    # minute (inclusive), same direction as the SL-anchor kind.
+    # Use the zone's real impact_time here, NOT `it` -- `it` is
+    # max(impact_time, window_start) (clamped to when the trading
+    # window opens, since entries can't be searched for before that),
+    # but the SL-anchor lookback must start from the TRUE impact,
+    # trading-window or not (e.g. RB#115 attempt 1: impact 10:39,
+    # window didn't open until 11:00 -- the real 1.04241 wick at 10:44
+    # would be silently excluded again if clamped the same way entry
+    # search is).
+    sl_price = _minutes_extreme(mt, minutes, z.impact_time, entry_time + timedelta(minutes=1), bull)
+    if sl_price is None:
         return dict(stage="NO_SL_POOL", resting_at=resting.at, entry_time=entry_time, entry_price=entry_price)
-    sl_price = min(p.price for p in pool) if bull else max(p.price for p in pool)
     risk = abs(entry_price - sl_price)
     if risk <= 0:
         return dict(stage="ZERO_RISK", resting_at=resting.at, entry_time=entry_time,
