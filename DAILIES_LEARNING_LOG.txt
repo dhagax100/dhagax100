@@ -803,6 +803,272 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 SESSION LOG (newest first)
 ----------------------------
 
+2026-10-07 (second pass, same day) — Items 10, 11, 11b, 25 coded, each
+individually verified against its own real example, then applied one by
+one through the full 12-month year (cumulative, on top of the already-
+committed baseline items 1-6/12/22); London/NY handover-hour experiment
+run in isolation and reverted; final full year 120 trades, 36 TP / 84 SL,
+net +24R, max losing streak 13 (unchanged); DAILIES_DAYBYDAY_REPORT.txt
+and this log rewritten end to end
+------------------------------------------------------------------------------
+Per the user's explicit sequencing instruction this round ("apply one fix
+in the specific example... then apply one by one globally through all of
+the 12 months... then report each month when it is done"), each item below
+was coded, verified against its own cited real example FIRST, then re-run
+across the full year before moving to the next item -- in the order the
+user gave them (25, 11, 11b, 10). The handover-hour experiment (see its own
+section below) was run alongside, fully separately, and is NOT part of the
+committed code.
+
+ITEM #25 -- "instant-stop" note (SL hits within 2 pips of entry)
+  CODED: reference_daily/all_tf_combined_generator.py, new module-level
+  constant INSTANT_STOP_THRESHOLD_PIPS = 2.0 (line 80); computed inside the
+  new shared `_post_entry_walk()` helper (line ~1555, extracted from
+  run_5m_bso's own post-entry loop -- see the refactor note under item #11
+  below) as `instant_stop_pips = risk * 10000` / `instant_stop = (result ==
+  "SL") and (instant_stop_pips <= INSTANT_STOP_THRESHOLD_PIPS)`. Carried
+  through compute_5m_trades into both the trade dict and the ledger CSV as
+  new `instant_stop` / `instant_stop_pips` fields, and into
+  `structural_notes` as "instant-stop: SL only N.N pips from entry" when it
+  fires. This is a NOTE ONLY -- it reads already-computed entry/SL values,
+  never touches whether/how/when a trade is taken.
+  VERIFIED against the real example on file: 2025-11-03 H4 SELL OB#74
+  (entry 19:36 @ 1.15268, SL 20:14 @ 1.15315). The computed SL distance is
+  4.7 pips, not the user's own recollected "~1-2 pips" -- flagged plainly
+  rather than fudging the threshold to force a match; the user's own
+  number was evidently an approximation, and the 2-pip threshold is
+  applied exactly as specified. Confirmed the comparison logic itself is
+  correct by temporarily raising INSTANT_STOP_THRESHOLD_PIPS to 5.0 (the
+  flag fired YES on OB#74, as expected since 4.7<=5.0) then restoring it to
+  2.0 (the user's real specified value) before any further work.
+  FULL-YEAR RESULT: a genuine, verified NULL RESULT on this dataset, not a
+  gap in the code -- across all 120 final trades, the smallest real SL
+  distance anywhere in 2025 is 2.8 pips (2025-02-07 1H OB#347 BUY), still
+  above the 2-pip bar. Zero trades flag `instant_stop=YES` anywhere in the
+  full year. Since this field never affects entry/exit/SL/TP and the
+  locked day-by-day report format has no notes column, every month's
+  Bias/Setups/Entries table is BYTE-IDENTICAL to the pre-item-25 baseline
+  by construction -- there is nothing new to show in table form; the only
+  visible effect is in the ledger CSV's own structural_notes/instant_stop
+  columns.
+
+ITEM #11 -- prior-4H-candle tracking after entry (data collection only)
+  CODED: run_5m_bso() and the new run_5m_bso_premium() (item #10, below)
+  both take optional `h4_bars`/`h4_bar_starts` params; compute_5m_trades()
+  builds these ONCE per day from `h4_engine.w` (ALWAYS the 4H timeframe,
+  regardless of the zone's own timeframe -- the user's own words) and
+  passes them through run_5m_chain(). Refactor note: the post-entry
+  mfe/mae/watch_levels/instant-stop bookkeeping that used to live inline
+  in run_5m_bso() was extracted into a new shared `_post_entry_walk()`
+  helper (line 1509) so run_5m_bso_premium gets item #11/#25 for free,
+  byte-identical logic, zero duplication risk. Inside that helper: finds
+  the H4 bar immediately preceding the one containing entry_time
+  (`bisect_right(h4_bar_starts, entry_time) - 1`, then one more back), and
+  watches its high (BUY)/low (SELL) as an extra entry in the existing
+  watch_levels first-touch mechanism (the same one `pre_impact_swing`
+  already uses) -- recorded as `prior_4h_level` / `prior_4h_taken_at`, and
+  as a new structural_notes clause ("took prior-4H high/low (price) at
+  TIME RYD") and ledger column `prior_4h_taken_riyadh`. Pure data
+  collection -- never changes entry/exit/SL/TP/result.
+  VERIFIED against the real example on file: the task's own cited Dec-5
+  trade (RB BUY, entry 16:00 @ 1.16484) turned out to be STALE relative to
+  this session's own earlier fixes (see the handover-hour section below
+  for why) -- the real, current-code equivalent is 2025-01-09 H4 SELL
+  RB#119 (origin 05:00, entry 16:53 @ 1.03098 -> TP 2025-01-10 09:14 @
+  1.02828, +3R, already the exact trade shown in the locked Jan report)
+  which correctly shows `prior_4h_taken_riyadh=2025-01-10 09:14:00` --
+  this trade took the prior 4H candle's low in the SAME minute it hit TP,
+  exactly the "touches the level right as it resolves" case item #11 is
+  meant to capture.
+  FULL-YEAR RESULT: the note fires on 36 of the 120 final trades (a rich,
+  real dataset for a future BE-rule decision) -- see
+  5m_trades_ledger.csv-style output / the entered-trade CSVs built this
+  session for the full list. Like item #25, this never changes any
+  trade, so every month's table is identical to the pre-item-11 baseline.
+
+ITEM #11b -- prior-candle-extreme-taken-before-entry disqualifier (REAL
+RULE, not a note)
+  CODED: folded directly into structural_invalid_at()
+  (all_tf_combined_generator.py, line 799) as a FOURTH disqualifying
+  condition alongside body_close/swing_break/swing_spent -- same
+  category, same "whichever happens first" min() selection, so it's
+  automatically enforced everywhere invalidated_at already gates entries
+  (both run_5m_bso and run_5m_bso_premium check it on every bar before the
+  break test, no separate wiring needed). IMPLEMENTATION CHOICE (spec left
+  this genuinely ambiguous, documented here per the user's own request):
+  "prior candle" = the zone's OWN-timeframe candle immediately before the
+  candle that contains the zone's own impact (a single FIXED candle,
+  snapshotted at impact, parallel to how protect_level/near_boundary are
+  each a fixed reference) -- NOT a rolling "most recently closed candle"
+  definition. This differs ON PURPOSE from item #11's own "prior 4H
+  candle" (ALWAYS the 4H timeframe, anchored to ENTRY time, data-
+  collection only): #11b is anchored to IMPACT and uses the zone's OWN
+  timeframe, because it must be evaluated continuously from impact
+  forward, before any entry time is even known. Direction: a BUY zone
+  watches the prior candle's HIGH, a SELL zone its LOW (new reason string
+  "prior_candle_taken").
+  VERIFIED in TWO ways: (1) an isolated unit test (synthetic Bar/Minute
+  objects, bypassing the whole engine) confirms the mechanism fires at
+  the exact correct minute when a BUY zone's prior-candle high gets taken
+  after impact, and stays silent (returns None, None) when it never does
+  -- both the positive and negative control passed cleanly; (2) a full
+  Jan-Dec 2025 re-run with #11b applied (items 25+11+11b, item #10 still
+  disabled via a staging flag -- see below) came back BYTE-IDENTICAL to
+  the pre-#11b baseline in every single month: 114 trades, 35 TP / 79 SL,
+  net +26R, zero changes anywhere. This is a genuine, verified NULL
+  RESULT, not a sign the rule is inert: every zone this rule WOULD have
+  disqualified on this dataset was already being disqualified earlier by
+  body_close, swing_break, or swing_spent -- #11b's own check never ends
+  up being the earliest (controlling) reason for any of the 114 real
+  trades in 2025. Documented here exactly as instructed, rather than
+  silently claiming a false positive effect.
+  STAGING NOTE: a module-level `ITEM10_ENABLED = True` flag (line 86) was
+  added purely so this session could reproduce an "item #11b alone, item
+  #10 not yet introduced" state for this specific regression check,
+  matching the user's own requested sequencing. It is always True in the
+  committed code (item #10 fully active); flipping it False only matters
+  for re-deriving this exact historical comparison.
+
+ITEM #10 -- premium/discount-region mechanism for pre-session-impacted
+POIs (first implementation of a genuinely new 5m entry mechanism)
+  CODED: new function run_5m_bso_premium() (all_tf_combined_generator.py,
+  line 1581), wired into compute_5m_trades() at the point where it used to
+  unconditionally call run_5m_chain() (now gated on a new
+  `is_pre_session = ITEM10_ENABLED and (z.impact_time < imp_win_start)`
+  check, line 2085, where imp_win_start is THAT DAY's own trading_window()
+  open). When pre-session, attempt 1 runs through run_5m_bso_premium
+  instead of the ordinary mechanism; if that attempt resolves to a plain
+  SL, attempt 2+ falls back to the ORDINARY run_5m_chain from the SL's own
+  exit time (documented in run_5m_bso_premium's own docstring as "NOT
+  built here" -- by the time a re-entry search starts, the window is
+  necessarily open, so the pre-session condition no longer applies to a
+  fresh search). Every non-pre-session zone (the overwhelming majority)
+  is completely untouched.
+  THE MECHANISM, exactly as specified, with every ambiguous judgment call
+  documented in run_5m_bso_premium's own docstring (reproduced in brief
+  here): track a running MARK (the most extreme price since impact -- the
+  lowest low for a SELL zone, highest high for BUY); each time the mark
+  ratchets to a new extreme, discard any armed `resting` candidate (spec
+  step 5, "keep extending the mark... until price actually turns back up
+  into it"); a fresh `resting` only arms once a confirmed SL-anchor-kind
+  swing confirms AFTER the mark's own most recent update; from there,
+  `candidate`/break-test/chasing is IDENTICAL to the ordinary mechanism
+  (spec step 3, "enter at the last 5m swing low formed before price
+  re-entered the region"); SL/TP/MFE/MAE/items #11/#25 are delegated to
+  the exact same `_minutes_extreme()` call and `_post_entry_walk()` helper
+  the ordinary mechanism uses -- no reimplementation. The
+  trading-window/session-sweep gates on the break test (unchanged, same
+  as ordinary) handle spec's "refinement 2" (a round trip completing
+  entirely before the session opens) for free -- no separate retroactive
+  code path was needed, it is the SAME code path whether the mark/resting
+  process resolves before or after the window opens. Item #11b's
+  disqualifying check (spec's other refinement) is the SAME
+  `invalidated_at` already computed for every zone -- reused as-is.
+  VALIDATION AGAINST THE DEC-5 EXAMPLE -- IMPORTANT CORRECTION: the task's
+  own cited Dec-5 case (an FVG that "impacted pre-session", with the
+  system's real entry only coming at 16:00, late) does NOT hold up under
+  the current, fully-corrected code. Direct re-check: Dec 5's actual
+  tradeable zone (H4 BUY RB, origin 01:00, entry 16:00 @ 1.16484 in the
+  TRUE baseline) impacts at 14:32 Riyadh -- well INSIDE the trading
+  window (opens 11:00 winter) -- so it was never pre-session-impacted at
+  all, and item #10 correctly does NOT engage for it. The "late 16:00
+  entry" observation is instead FULLY EXPLAINED by the (separate, already
+  identified) London/NY handover-hour block: with that hour unlocked (see
+  the handover-hour section below), this exact zone's real entry moves to
+  15:01 @ 1.16468 -- the SAME zone, same SL, just entered ~1 hour earlier,
+  nothing to do with item #10's mechanism. Flagging this plainly rather
+  than forcing a match: Dec 5 is not a live item-#10 case under the
+  corrected code, and the 1H FVGs that DID impact genuinely pre-session
+  that day (FVG#230/231, impact 06:01/06:26) were already dead via
+  body_close before the window opened regardless of entry mechanism, old
+  or new.
+  REAL VALIDATION MATERIAL (found across the full year instead): the
+  mechanism fired 19 times in 2025 on genuinely pre-session-impacted,
+  still-alive zones. 13 of the 19 just reproduce the SAME result the
+  ordinary mechanism already found, with an earlier, better entry/exit
+  (e.g. 2025-04-08 H4 SELL RB#125: ordinary entry 10:19 -> TP 17:35;
+  premium entry 10:05 -> TP 12:25, same +3R, resolved ~5 hours sooner) --
+  a reassuring sign the new mechanism converges to the same answer when
+  there's no real pre-session extension to correct for. The other 6 are
+  genuine behavior changes: 5 new losses (Jan 14, Mar 7, Apr 2, Sep 24,
+  Nov 17 -- each a brand-new earlier attempt, SL -1R) and ONE genuine new
+  win -- 2025-12-16, H4 BUY RB#137, origin Dec 15 21:00, entry 11:00 @
+  1.17519 -> TP 15:58 @ 1.17756, +3R -- the real "item #10 produces a good
+  outcome" case to point to, since Dec 5 itself no longer qualifies.
+  REGRESSION CHECK (explicitly required by the task): full Jan-Dec diff
+  against the item-#11b-only baseline found EXACTLY the above 6 real
+  changes plus 13 pure timing-shifts (same zone/result, earlier entry) and
+  4 cosmetic Setups-column text changes (see the reporting-gap fix below)
+  -- every other day in the year is byte-identical. Net full-year effect
+  of item #10 alone: +6 trades (+1 TP, +5 SL), net R -2 (+26R baseline/
+  #11b -> +24R final).
+  REPORTING GAP FOUND AND FIXED (scratch tooling, not the engine): item
+  #10 introduces two new non-entry stage names (NO_PREMIUM_RESTING,
+  POI_BREACHED_PRE_ENTRY) for a pre-session zone that never resolves into
+  a trade. The month-report builder's phrase table
+  (scratchpad's build_report.py, not part of this repo) didn't know these
+  two stages, so a handful of Setups-column sentences silently dropped one
+  clause (e.g. Jan 28 lost its "a zone broke structure before filling"
+  phrase). Fixed by mapping both to their closest ordinary-mechanism
+  equivalents (NO_RESTING_SWING / POI_BREACHED respectively); the full
+  year was then rebuilt one more time with this fix applied to produce
+  the actual committed DAILIES_DAYBYDAY_REPORT.txt -- same 120 trades,
+  same +24R, text-only correction.
+
+HANDOVER-HOUR EXPERIMENT (run in isolation, NOT applied to the committed
+code -- reverted immediately after, confirmed via `git diff` matching
+HEAD exactly)
+  The user asked, separately from the four items above, to try REMOVING
+  the 2026-10-05 London/NY handover-hour block (14:00-15:00 Riyadh summer
+  / 15:00-16:00 winter) entirely -- "consider it part of London, like
+  fifth hour... I want to see the performance of that hour". This was
+  coded earlier in the session (uncommitted) and this session's job was
+  to run it to completion in isolation, report its own numbers, then
+  revert it -- done.
+  DIRECT ANSWER to "that hour's own standalone performance": 16 trades
+  land inside the hour across the full year once unlocked -- 4 TP, 12 SL,
+  25.0% win rate, net 0R at face value.
+  FULLER PICTURE: 7 of those 16 are just pre-existing trades whose entry
+  clock-time shifted a few minutes earlier into the now-open hour (same
+  zone, same result either way -- not new opportunities). Isolating the
+  real incremental effect: 8 genuinely NEW trades (2 TP, 6 SL, net 0R:
+  Mar 13, Apr 10, May 13, May 27, Jul 2, Jul 16, Aug 1, Nov 10); ONE
+  existing trade's outcome flipped because an earlier in-hour candidate
+  now wins the race (Jun 30 1H SELL RB: old entry 15:00 -> SL -1R; new
+  entry 14:36 -> TP +3R, delta +4R); and TWO pre-existing trades elsewhere
+  vanished entirely as a downstream side effect of the hour's new
+  availability changing which candidate wins an adjacent setup, even
+  though no entry fires during the hour itself (Jul 11 lost a -1R loss,
+  net benefit +1R; Jul 14 lost a +3R win, net cost -3R).
+  FULL-YEAR NET EFFECT: 114 -> 120 trades, 35 -> 37 TP, 79 -> 83 SL, net
+  +26R -> +28R (+2R total, fully reconciled day-by-day against the
+  baseline -- every component above sums to exactly +2R).
+  VERDICT: mixed/marginal -- essentially breakeven on the hour's own
+  trades, a small net positive once indirect effects are included,
+  nothing close to a clear case either way. NOT applied to the committed
+  code per the user's own instruction (the user has not decided whether
+  to keep this change) -- `in_trading_window()`/`_SESSION_HOURS` in
+  all_tf_combined_generator.py are back to the original 2026-10-05 hard
+  block, confirmed identical to commit d2310d1's own version via `git
+  diff`.
+  A useful side effect of this investigation: it explains why the task's
+  own cited Dec-5 "late entry" example (see item #10 above) and the
+  original item #9/#26 complaint about Dec-5's entry timing are the SAME
+  underlying phenomenon as this already-known, already-fixed (2026-10-05)
+  issue -- not evidence for item #10's new mechanism at all.
+
+FINAL FULL-YEAR NUMBERS (all of items 1-6, 10, 11, 11b, 12, 22, 25
+applied; handover-hour change reverted/excluded): 120 trades, 36 TP / 84
+SL, net +24R. Versus the pre-this-pass baseline (114 trades, 35 TP / 79
+SL, net +26R): +6 trades, +1 TP, +5 SL, net -2R -- entirely attributable
+to item #10 (items 25/11/11b are proven no-ops/null-results on this
+dataset, see each one's own section above). MAX LOSING STREAK: 13,
+UNCHANGED from the pre-this-pass baseline's own 13 (the streak's own
+date range shifted with the new trades, but its length did not).
+DAILIES_DAYBYDAY_REPORT.txt has been rewritten end to end with this final
+run (same filename, single source of truth) -- all twelve months, same
+locked 4-column format.
+
 2026-10-06 — Three real bugs found and fixed re-verifying Jan-Apr against the
 new day-by-day report format; day-by-day report regenerated for Jan-Apr 25
 with all-calendar-day scanning so this class of bug can't recur
@@ -1129,7 +1395,14 @@ item's real evidence, root cause and fix location:
         directly re-verified against the live engine; no further code).
   7, 8 -- mechanical re-verification complete (this session's full-year
         re-run IS that re-verification; nothing further needed code-wise).
-  9, 10, 11, 11b -- DATA-COLLECTION ONLY, not actionable, no rule invented.
+  9 -- still DATA-COLLECTION ONLY (1H-break trading performance), deferred
+        "separately for all of the 12 months" per the user, untouched.
+  10, 11, 11b -- UPDATED 2026-10-07 (second pass, same day): all three now
+        CODED, VERIFIED, and APPLIED to the full year -- see the dated
+        session-log entry "Items 10, 11, 11b, 25 coded and applied" at the
+        TOP of this log for the full derivation, exact file/line
+        references and real-example verification. No longer data-
+        collection-only.
   12 -- CONFIRMED REAL BUG, FIXED UNIVERSALLY (swing_break same-minute
         exclusion) -- see POI VIOLATION section above and session log.
   13 -- CHECKED, NO ISSUE (Dec 24: no candidate anywhere in the real
@@ -1170,7 +1443,10 @@ item's real evidence, root cause and fix location:
         from 01:53 that day, PDL swept before the only candidate's own
         impact -- working exactly as the established abandonment rule
         requires).
-  25, 26, 27 -- DEFERRED BY USER, untouched. Item 27's own fact (Dec 31
+  25 -- UPDATED 2026-10-07 (second pass, same day): the "instant-stop" note
+        is now CODED, VERIFIED, and APPLIED (see the dated session-log
+        entry at the TOP of this log) -- no longer deferred.
+  26, 27 -- still DEFERRED BY USER, untouched. Item 27's own fact (Dec 31
         1H/H4 RB, entry 18:23/TP 18:57, +3R) re-verified unchanged.
 Full item-by-item evidence for 6-27, including exact dates/prices/times
 and the raw-CSV cross-checks, is in the dated entry immediately below.
@@ -1424,6 +1700,14 @@ inferred or hand-adjusted), but was not individually hand-audited against
 raw tick data the way each cited date above was -- flagged plainly, not
 hidden, as the practical limit of a single session's rigor on a full
 365-day re-verification.
+
+SUPERSEDED 2026-10-07 (second pass, same day): this 114-trade/+26R number
+and DAILIES_DAYBYDAY_REPORT.txt itself have since been replaced by the
+120-trade/+24R run documented in the dated session-log entry "Items 10,
+11, 11b, 25 coded and applied" at the TOP of this log, which adds items
+10/11/11b/25 on top of everything above -- this paragraph is kept for its
+own historical derivation (items 1-6/12/22) but is no longer the current
+state of either file.
 
 2026-10-05 (part 4) — Three real bugs found and fixed while verifying Feb-Dec
 2025; full year reverified; optimization parameter study done on the result

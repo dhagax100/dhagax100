@@ -74,6 +74,17 @@ TIMEFRAMES = [
 
 SPLIT_MARKER = "var array<int> structX = array.new<int>()"
 
+# Item #25 (2026-10-07, user-requested): any SL-hit trade whose SL distance
+# (entry to SL price) is this many pips or less gets an "instant-stop"
+# structural note -- a tracked category, not a new trading rule.
+INSTANT_STOP_THRESHOLD_PIPS = 2.0
+
+# Item #10 (2026-10-07): staging flag used ONLY to reproduce the
+# item-11b-alone full-year pass (item #10 not yet "introduced") during
+# this session's own sequential per-item verification -- always True in
+# the final, committed state (item #10 fully applied).
+ITEM10_ENABLED = True
+
 
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -238,7 +249,15 @@ def in_trading_window(t: "datetime", display_tz: ZoneInfo) -> bool:
     London ends at 14/15 (summer/winter), New York starts at 15/16 --
     so the gap is 14:00-15:00 Riyadh summer, 15:00-16:00 winter. Entries
     only -- control/impact/origin timing is untouched, same as how Asia
-    exclusion only ever gated entries, never bias."""
+    exclusion only ever gated entries, never bias.
+
+    EXPERIMENT RUN AND REVERTED (2026-10-07): the user asked, separately,
+    to try removing this handover-hour block entirely ("consider it part
+    of London, like fifth hour... I want to see the performance of that
+    hour") -- run in ISOLATION this session (see DAILIES_LEARNING_LOG.txt
+    for the standalone results) and explicitly NOT applied here: the user
+    has not yet decided whether to keep it, so the committed code keeps
+    the original hard block below, unchanged from the 2026-10-05 fix."""
     date_str = t.astimezone(display_tz).date().isoformat()
     win_start, win_end = trading_window(date_str, display_tz)
     if not (win_start <= t < win_end):
@@ -813,6 +832,13 @@ def structural_invalid_at(z, it: "datetime", bars: list, bar_starts: list,
           BEFORE the first entry attempt (11:03) -- so all three of that
           day's entries were already invalid under this rule, even
           though the anchor (protect_level) didn't break until 13:41.
+      (d) 'prior_candle_taken' (2026-10-07, item #11b, user-taught): the
+          zone's own-timeframe candle immediately before its impact candle
+          has its relevant extreme (high for BUY, low for SELL) taken at
+          any point from impact onward, BEFORE this zone ever produces an
+          entry -- "the move already happened before we could react". See
+          the inline comment at this check's own implementation below for
+          the exact anchor-point design decision.
     Returns (time, reason); (None, None) if never invalidated in the
     available data. A candidate whose resting swing or entry trigger
     lands at/after this time is dead: setup only, no entry."""
@@ -836,14 +862,15 @@ def structural_invalid_at(z, it: "datetime", bars: list, bar_starts: list,
             swing_break_at = m.t
             break
 
+    # Compare against the IMPACT BAR's index, not its start timestamp --
+    # impact almost always lands mid-bar (e.g. 05:34 inside a 05:00-09:00
+    # 4H bar), so a plain `bar.start >= it` wrongly excludes a swing point
+    # set by that SAME candle. A swing whose own point is the impact bar
+    # itself (or later) still counts.
+    impact_bar_idx = max(0, bisect_right(bar_starts, it) - 1)
+
     swing_spent_at = None
     if events:
-        # Compare against the IMPACT BAR's index, not its start timestamp
-        # -- impact almost always lands mid-bar (e.g. 05:34 inside a
-        # 05:00-09:00 4H bar), so a plain `bar.start >= it` wrongly
-        # excludes a swing point set by that SAME candle. A swing whose
-        # own point is the impact bar itself (or later) still counts.
-        impact_bar_idx = max(0, bisect_right(bar_starts, it) - 1)
         sl_anchor_kind = 0 if not bull else 1  # a HIGH (0) protects a SELL zone, a LOW (1) protects a BUY zone
         spent_candidates = [e.at for e in events
                              if e.kind == sl_anchor_kind and e.at is not None
@@ -851,10 +878,44 @@ def structural_invalid_at(z, it: "datetime", bars: list, bar_starts: list,
         if spent_candidates:
             swing_spent_at = min(spent_candidates)
 
+    # Item #11b (2026-10-07, user-taught -- a REAL disqualifying rule, not
+    # a note, same category as body_close/swing_break/swing_spent above).
+    # "If the prior 1H/4H candle's relevant extreme (high for a would-be
+    # BUY zone, low for a would-be SELL zone -- the direction that means
+    # 'the move already happened before we could react') is taken at any
+    # point BEFORE a trade's entry actually fires, that zone must NOT
+    # produce an entry at all." Implementation choice (documented in
+    # DAILIES_LEARNING_LOG.txt, since the spec left the exact anchor
+    # ambiguous): "prior candle" here is the zone's OWN-timeframe candle
+    # immediately preceding the candle that contains the zone's own
+    # impact (a single FIXED candle, parallel to how protect_level/
+    # near_boundary are each a single fixed reference snapshotted at/near
+    # impact) -- NOT a rolling "most recently closed candle" definition.
+    # This differs on purpose from item #11's own "prior 4H candle"
+    # (ALWAYS the 4H timeframe, anchored to ENTRY time, data-collection
+    # only) -- #11b is anchored to IMPACT and uses the zone's OWN
+    # timeframe, because it must be evaluated continuously from impact
+    # forward, before any entry time is even known yet. Checked from the
+    # zone's own impact time through to the prospective entry minute, via
+    # the exact same invalidated_at mechanism every other trigger here
+    # already uses -- universal, every timeframe, every zone type, no
+    # special-casing.
+    prior_candle_taken_at = None
+    prior_idx = impact_bar_idx - 1
+    if prior_idx >= 0:
+        prior_bar = bars[prior_idx]
+        prior_level = prior_bar.h if bull else prior_bar.l
+        idx_p = bisect_left(mt, it)
+        for m in minutes[idx_p:]:
+            if (m.h >= prior_level) if bull else (m.l <= prior_level):
+                prior_candle_taken_at = m.t
+                break
+
     candidates = [(t, r) for t, r in (
         (body_close_invalid_at, "body_close"),
         (swing_break_at, "swing_break"),
         (swing_spent_at, "swing_spent"),
+        (prior_candle_taken_at, "prior_candle_taken"),
     ) if t is not None]
     if not candidates:
         return None, None
@@ -1306,7 +1367,8 @@ def control_ceiling(checkpoints: list, t0: "datetime", side: str, resource: str)
 
 def run_5m_bso(z, it, bar_starts5: list, events5_sorted: list, minutes, mt: list,
                invalidated_at, window_end, display_tz: ZoneInfo,
-               watch_levels: list[tuple[str, float]] | None = None) -> dict:
+               watch_levels: list[tuple[str, float]] | None = None,
+               h4_bars: list | None = None, h4_bar_starts: list | None = None) -> dict:
     """Ported from five_bso_engine.py's run_bso() -- a single attempt.
     Genuinely different from the previous "first swing after impact is
     the entry" rule: this races an entry CANDIDATE against replacement
@@ -1436,6 +1498,43 @@ def run_5m_bso(z, it, bar_starts5: list, events5_sorted: list, minutes, mt: list
                     entry_price=entry_price, sl_price=sl_price)
     tp_price = entry_price + 3 * risk if bull else entry_price - 3 * risk
 
+    post = _post_entry_walk(bull, entry_time, entry_price, sl_price, tp_price, risk, minutes, mt,
+                             watch_levels, h4_bars, h4_bar_starts)
+
+    return dict(stage="ENTERED", resting_at=resting.at, replacements=replacements,
+                entry_time=entry_time, entry_price=entry_price, sl_price=sl_price,
+                tp_price=tp_price, risk=risk, **post)
+
+
+def _post_entry_walk(bull: bool, entry_time, entry_price: float, sl_price: float, tp_price: float, risk: float,
+                      minutes, mt: list, watch_levels: list[tuple[str, float]] | None,
+                      h4_bars: list | None, h4_bar_starts: list | None) -> dict:
+    """Shared post-entry walk (2026-10-07 refactor, extracted verbatim
+    from run_5m_bso so run_5m_bso_premium -- item #10's new mechanism --
+    gets the IDENTICAL mfe/mae, watch_levels, item #11 prior-4H note, and
+    item #25 instant-stop note for free, with zero risk of the two
+    mechanisms' post-entry bookkeeping drifting apart. Entry (exclusive)
+    through exit (inclusive), or through all available data if the trade
+    never resolves.
+
+    Item #11 (DATA COLLECTION ONLY -- never changes entry/exit/SL/TP; see
+    item #11b/structural_invalid_at for the BEFORE-entry version, which
+    IS a real disqualifying rule): did price take the PRIOR 4H candle's
+    high (BUY)/low (SELL) between entry and exit? "Prior 4H candle" = the
+    4H bar that closed immediately before THIS TRADE'S OWN entry time --
+    ALWAYS the 4H timeframe, regardless of the zone's own timeframe."""
+    prior_4h_level = None
+    if h4_bars and h4_bar_starts:
+        idx4 = bisect_right(h4_bar_starts, entry_time) - 1
+        prior_idx = idx4 - 1
+        if prior_idx >= 0:
+            prior_bar = h4_bars[prior_idx]
+            prior_4h_level = prior_bar.h if bull else prior_bar.l
+
+    effective_watch_levels = list(watch_levels or [])
+    if prior_4h_level is not None:
+        effective_watch_levels.append(("prior_4h_extreme", prior_4h_level))
+
     result, exit_time = None, None
     mfe_price, mae_price = entry_price, entry_price
     watch_hits: dict[str, "datetime"] = {}
@@ -1447,8 +1546,8 @@ def run_5m_bso(z, it, bar_starts5: list, events5_sorted: list, minutes, mt: list
         else:
             mfe_price = min(mfe_price, m.l)
             mae_price = max(mae_price, m.h)
-        if watch_levels:
-            for label, lvl in watch_levels:
+        if effective_watch_levels:
+            for label, lvl in effective_watch_levels:
                 if label not in watch_hits and ((m.h >= lvl) if bull else (m.l <= lvl)):
                     watch_hits[label] = m.t
         hit_sl = (m.l <= sl_price) if bull else (m.h >= sl_price)
@@ -1463,15 +1562,202 @@ def run_5m_bso(z, it, bar_starts5: list, events5_sorted: list, minutes, mt: list
             result, exit_time = "TP", m.t
             break
 
-    return dict(stage="ENTERED", resting_at=resting.at, replacements=replacements,
-                entry_time=entry_time, entry_price=entry_price, sl_price=sl_price,
-                tp_price=tp_price, risk=risk, result=result or "OPEN", exit_time=exit_time,
-                mfe=abs(mfe_price - entry_price), mae=abs(mae_price - entry_price), watch_hits=watch_hits)
+    # "Instant-stop" note (2026-10-07, item #25, user-requested -- NOT a
+    # trading rule, never changes whether/how a trade is taken). Real
+    # example on file: 2025-11-03 H4 SELL OB#74, entry 19:36 @ 1.15268,
+    # SL 20:14 @ 1.15315 -- SL distance is the same `risk` value already
+    # computed by the caller (entry to SL, in pips). User's threshold: 2
+    # pips. Flag only ever set True on an actual SL exit (an open/TP
+    # trade never had its "SL-hit price" reached at all).
+    instant_stop_pips = risk * 10000
+    instant_stop = (result == "SL") and (instant_stop_pips <= INSTANT_STOP_THRESHOLD_PIPS)
+
+    return dict(result=result or "OPEN", exit_time=exit_time,
+                mfe=abs(mfe_price - entry_price), mae=abs(mae_price - entry_price), watch_hits=watch_hits,
+                instant_stop_pips=instant_stop_pips, instant_stop=instant_stop,
+                prior_4h_level=prior_4h_level, prior_4h_taken_at=watch_hits.get("prior_4h_extreme"))
+
+
+def run_5m_bso_premium(z, impact_time: "datetime", events5_sorted: list, minutes, mt: list,
+                        invalidated_at, window_end: "datetime", display_tz: ZoneInfo,
+                        h4_bars: list | None = None, h4_bar_starts: list | None = None) -> dict:
+    """Item #10 (2026-10-07, user-designed -- a genuinely NEW 5m entry
+    mechanism, FIRST IMPLEMENTATION; full design discussion, every
+    ambiguous-spec judgment call, and the Dec-5 validation are in
+    DAILIES_LEARNING_LOG.txt). Activates ONLY for a 1H/4H POI whose own
+    impact happens BEFORE that day's real trading window opens (a
+    "late/pre-session impact") -- the caller (compute_5m_trades) decides
+    when to use this instead of the ordinary run_5m_bso/run_5m_chain;
+    every same-session zone keeps using the ordinary mechanism completely
+    unchanged. SELL case documented below; BUY mirrors with every
+    max/high swapped for min/low (bull flag flips every such swap).
+
+    THE PROBLEM the ordinary mechanism has here: its own `resting` swing
+    is just "the FIRST confirmed SL-anchor-kind swing at/after impact" --
+    fine for a same-session impact, but for a zone that impacted hours
+    before the session even opens, by the time the window opens price
+    may already be deep into the move, and the first confirmed swing the
+    ordinary search finds can be a late, already-extended one with an
+    oversized SL (a chasing entry) -- the exact complaint the user raised
+    using Dec 5 as the worked example.
+
+    THE MECHANISM:
+      1. Track a running MARK = the most extreme price reached since
+         impact (the LOWEST low for a SELL zone, the HIGHEST high for a
+         BUY zone), ratcheting forward every time a new extreme 1-minute
+         bar occurs -- spec's "mark the lowest/highest point reached".
+      2. Each time the mark ratchets to a NEW extreme, any previously-
+         armed `resting` candidate is discarded: it was a false/partial
+         bounce inside a move that kept extending past it (spec step 5,
+         "if price keeps dropping further... keep EXTENDING the mark...
+         until price actually turns back up into it"). A fresh `resting`
+         only arms once a confirmed SL-anchor-kind swing (the "last swing
+         formed after impact" -- a HIGH for sell, a LOW for buy: spec's
+         other named boundary of the premium/discount region) confirms
+         AFTER the mark's own most recent update -- a genuine reaction
+         that only counts once the mark has (so far) stopped extending.
+      3. Once `resting` is armed, `candidate` (the actual entry level) is
+         picked EXACTLY the ordinary way -- the most recent entry-
+         trigger-kind swing at/before resting's own swing (spec step 3,
+         "enter at the last 5m swing low formed before price re-entered
+         the premium region") -- and chases newer candidates exactly like
+         the ordinary mechanism, racing against the break test. The
+         region's two named boundaries (mark, resting) are a CONCEPT that
+         decides WHEN resting/candidate may legitimately arm; they are
+         never themselves tested as a literal price band anywhere in the
+         break test -- a documented implementation choice, since the
+         spec's own wording ("wait for price to re-enter that region")
+         is most naturally read as "wait for a genuine reaction swing to
+         form after the mark stops moving", which is exactly what this
+         is.
+      4. The usual trading-window/session-sweep gates still apply to the
+         BREAK test only (identical to the ordinary mechanism) -- so
+         spec's "refinement 2" (a round trip that completes entirely
+         before the session opens) is handled for free: the mark/
+         resting/candidate machinery runs continuously from impact
+         regardless of the window, and the break test simply waits for
+         the window to open before it can fire -- no separate
+         "retroactive" code path needed, it is the SAME code path.
+      5. Item #11b's disqualifying check (prior-candle-extreme taken
+         before entry) is the SAME `invalidated_at` already computed by
+         structural_invalid_at() for this zone -- reused as-is here,
+         never reimplemented, satisfying spec's own refinement that
+         #11b's check applies to this mechanism too.
+      6. SL/TP/MFE/MAE/instant-stop/prior-4H note: delegated to the SAME
+         `_minutes_extreme()` call and `_post_entry_walk()` helper the
+         ordinary mechanism uses -- byte-identical rules, no
+         reimplementation, so items #11/#25 apply here for free too.
+
+    NOT built here (documented, not a silent gap): no re-entry chain for
+    attempt 2+. After a plain SL under this mechanism, the window is
+    necessarily already open (entries only fire inside it) and the
+    "late/pre-session" condition that justified this whole mechanism no
+    longer applies to a FRESH search starting from the SL's own exit
+    time -- so compute_5m_trades wires attempt 2+ through the ordinary
+    run_5m_chain instead, not this function again.
+
+    Returns the same stage vocabulary as run_5m_bso, plus two premium-
+    mechanism-only stages: NO_PREMIUM_RESTING (the mark/resting process
+    never produced a usable resting swing before window_end) and
+    POI_BREACHED_PRE_ENTRY (the zone died -- usually via #11b's own
+    check -- before a resting swing ever armed)."""
+    bull = z.bullish
+    need_rest_kind = 1 if bull else 0   # the region's OTHER boundary: a HIGH for sell, a LOW for buy
+    need_cand_kind = 0 if bull else 1   # the actual entry-trigger kind, same convention as run_5m_bso
+
+    idx0 = bisect_left(mt, impact_time)
+    if idx0 >= len(minutes):
+        return dict(stage="NO_5M_BAR_FOR_IMPACT")
+
+    rest_events = sorted([e for e in events5_sorted if e.kind == need_rest_kind and e.at is not None
+                          and e.at >= impact_time], key=lambda e: e.at)
+    cand_events_all = sorted([e for e in events5_sorted if e.kind == need_cand_kind and e.at is not None],
+                              key=lambda e: e.at)
+
+    mark = None
+    resting = None
+    ri = 0
+    for i in range(idx0, len(minutes)):
+        m = minutes[i]
+        if m.t >= window_end:
+            break
+        if invalidated_at is not None and m.t >= invalidated_at:
+            return dict(stage="POI_BREACHED_PRE_ENTRY", mark=mark)
+        val = m.h if bull else m.l
+        if mark is None or ((val > mark) if bull else (val < mark)):
+            mark = val
+            resting = None  # a new extreme invalidates any stale resting candidate (spec step 5)
+        while ri < len(rest_events) and rest_events[ri].at <= m.t:
+            ev = rest_events[ri]
+            ri += 1
+            if resting is None:
+                resting = ev
+        if resting is not None:
+            break
+    if resting is None:
+        return dict(stage="NO_PREMIUM_RESTING", mark=mark)
+    if resting.at is None:
+        return dict(stage="RESTING_SWING_UNRESOLVED_M1", mark=mark)
+
+    candidates_before = [ev for ev in cand_events_all if ev.swing <= resting.swing]
+    if not candidates_before:
+        return dict(stage="NO_CANDIDATE", resting_at=resting.at, mark=mark)
+    current = candidates_before[-1]
+
+    later_candidates = [ev for ev in cand_events_all if ev.at > resting.at]
+
+    idx = bisect_left(mt, resting.at)
+    entry_m = None
+    stopped = False
+    cand_ptr = 0
+    replacements = 0
+    for i in range(idx, len(minutes)):
+        m = minutes[i]
+        if m.t >= window_end:
+            break
+        if invalidated_at is not None and m.t >= invalidated_at:
+            stopped = True
+            break
+        while cand_ptr < len(later_candidates) and later_candidates[cand_ptr].at <= m.t:
+            current = later_candidates[cand_ptr]
+            replacements += 1
+            cand_ptr += 1
+        if not in_trading_window(m.t, display_tz):
+            continue
+        if not session_sweep_satisfied(m.t, bull, minutes, mt, display_tz):
+            continue
+        broke = (m.h > current.price) if bull else (m.l < current.price)
+        if broke:
+            entry_m = m
+            break
+    if entry_m is None:
+        return dict(stage="POI_BREACHED" if stopped else "NO_ENTRY_IN_WINDOW",
+                    resting_at=resting.at, candidate_price=current.price, replacements=replacements, mark=mark)
+
+    entry_price = current.price
+    entry_time = entry_m.t
+    sl_price = _minutes_extreme(mt, minutes, z.impact_time, entry_time + timedelta(minutes=1), bull)
+    if sl_price is None:
+        return dict(stage="NO_SL_POOL", resting_at=resting.at, entry_time=entry_time,
+                    entry_price=entry_price, mark=mark)
+    risk = abs(entry_price - sl_price)
+    if risk <= 0:
+        return dict(stage="ZERO_RISK", resting_at=resting.at, entry_time=entry_time,
+                    entry_price=entry_price, sl_price=sl_price, mark=mark)
+    tp_price = entry_price + 3 * risk if bull else entry_price - 3 * risk
+
+    post = _post_entry_walk(bull, entry_time, entry_price, sl_price, tp_price, risk, minutes, mt,
+                             None, h4_bars, h4_bar_starts)
+
+    return dict(stage="ENTERED", mechanism="PREMIUM_REGION", mark=mark, resting_at=resting.at,
+                replacements=replacements, entry_time=entry_time, entry_price=entry_price, sl_price=sl_price,
+                tp_price=tp_price, risk=risk, **post)
 
 
 def run_5m_chain(z, impact_time, bar_starts5: list, events5_sorted: list, minutes, mt: list,
                   invalidated_at, window_end, display_tz: ZoneInfo,
-                  watch_levels: list[tuple[str, float]] | None = None) -> list:
+                  watch_levels: list[tuple[str, float]] | None = None,
+                  h4_bars: list | None = None, h4_bar_starts: list | None = None) -> list:
     """Ported from five_bso_engine.py's run_bso_chain() (SS27, "made
     universal per the user's explicit instruction"). After a plain SL,
     re-arm and search again from the SL's own exit time, as long as the
@@ -1487,7 +1773,7 @@ def run_5m_chain(z, impact_time, bar_starts5: list, events5_sorted: list, minute
     attempt_no = 1
     while True:
         res = run_5m_bso(z, search_from, bar_starts5, events5_sorted, minutes, mt, invalidated_at, window_end,
-                          display_tz, watch_levels)
+                          display_tz, watch_levels, h4_bars=h4_bars, h4_bar_starts=h4_bar_starts)
         entered = res.get("stage") == "ENTERED"
         if attempt_no == 1 or entered:
             res["attempt"] = attempt_no
@@ -1566,6 +1852,12 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
 
     bar_starts5 = [b.start for b in e5.w]
     events5_sorted = sorted(e5.events, key=lambda e: (e.confirm, e.kind))
+
+    # Item #11 (2026-10-07): ALWAYS the 4H timeframe's own bars, regardless
+    # of which timeframe the zone itself belongs to -- see run_5m_bso's
+    # own docstring note for the exact rule.
+    h4_bars_for_note = list(h4_engine.w)
+    h4_bar_starts_for_note = [b.start for b in h4_bars_for_note]
 
     # CONTROL (2026-10-02, user-taught; Daily-only, corrected 2026-10-04
     # -- see compute_control_timeline's own docstring and
@@ -1780,9 +2072,45 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
         # the exact same entry a prior day's own run already found.
         # Everything else (opposing swing, invalidation, premium/
         # discount) still measures from the zone's real impact_time.
-        search_from = max(z.impact_time, window_start)
-        attempts = run_5m_chain(z, search_from, bar_starts5, events5_sorted, minutes, mt,
-                                 invalidated_at, eff_window_end, display_tz, watch_levels)
+        # Item #10 (2026-10-07): a POI whose own impact happens BEFORE
+        # that day's real trading window opens ("late/pre-session
+        # impact") gets the NEW premium/discount-region mechanism for its
+        # FIRST attempt -- see run_5m_bso_premium's own docstring for the
+        # full design. Every same-session zone (the overwhelming
+        # majority) is completely untouched: is_pre_session is False and
+        # this falls straight through to the exact same run_5m_chain call
+        # as before this item was added.
+        impact_date_str = z.impact_time.astimezone(display_tz).date().isoformat()
+        imp_win_start, _ = trading_window(impact_date_str, display_tz)
+        is_pre_session = ITEM10_ENABLED and (z.impact_time < imp_win_start)
+        if is_pre_session:
+            res1 = run_5m_bso_premium(z, z.impact_time, events5_sorted, minutes, mt,
+                                       invalidated_at, eff_window_end, display_tz,
+                                       h4_bars=h4_bars_for_note, h4_bar_starts=h4_bar_starts_for_note)
+            res1["attempt"] = 1
+            attempts = [res1]
+            if res1.get("stage") == "ENTERED" and res1.get("result") == "SL":
+                exit_t1 = res1.get("exit_time")
+                if exit_t1 is not None and not (invalidated_at is not None and exit_t1 >= invalidated_at):
+                    # Re-entry (attempt 2+) falls back to the ORDINARY
+                    # mechanism from the SL's own exit time: the window is
+                    # necessarily open by now, so the pre-session
+                    # condition that justified run_5m_bso_premium no
+                    # longer applies to a fresh search (see that
+                    # function's own docstring, "NOT built here"). Same
+                    # reporting rule as any other re-entry chain: an
+                    # attempt that never becomes a trade is not reported.
+                    later = run_5m_chain(z, exit_t1, bar_starts5, events5_sorted, minutes, mt,
+                                          invalidated_at, eff_window_end, display_tz, watch_levels,
+                                          h4_bars=h4_bars_for_note, h4_bar_starts=h4_bar_starts_for_note)
+                    for n, la in enumerate(la for la in later if la.get("stage") == "ENTERED"):
+                        la["attempt"] = 2 + n
+                        attempts.append(la)
+        else:
+            search_from = max(z.impact_time, window_start)
+            attempts = run_5m_chain(z, search_from, bar_starts5, events5_sorted, minutes, mt,
+                                     invalidated_at, eff_window_end, display_tz, watch_levels,
+                                     h4_bars=h4_bars_for_note, h4_bar_starts=h4_bar_starts_for_note)
         for a in attempts:
             if a.get("stage") != "ENTERED":
                 ledger_rows.append(dict(row_base, stage=a.get("stage"), premium_mid=f"{mid:.5f}",
@@ -1798,6 +2126,9 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
                 entry_time=a["entry_time"], entry_price=a["entry_price"], sl_price=a["sl_price"],
                 tp_price=a["tp_price"], risk=a["risk"], result=a["result"], exit_time=a.get("exit_time"),
                 mfe=a.get("mfe"), mae=a.get("mae"), watch_hits=a.get("watch_hits") or {},
+                instant_stop_pips=a.get("instant_stop_pips"), instant_stop=a.get("instant_stop", False),
+                prior_4h_level=a.get("prior_4h_level"), prior_4h_taken_at=a.get("prior_4h_taken_at"),
+                mechanism=a.get("mechanism", ""), premium_mark=a.get("mark"),
                 pre_impact_swing_price=opp.price,
                 control_state_at_impact=row_base.get("control_state_at_impact", ""),
                 control_ceiling=row_base.get("control_ceiling_riyadh", ""),
@@ -1844,6 +2175,28 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
             if hit_at is not None:
                 notes.append(f"{m['poi']}: reached pre-impact swing ({m['pre_impact_swing_price']:.5f}) "
                              f"at {riyadh(hit_at)} RYD")
+        # Note #2 (2026-10-07, item #25): "instant-stop" -- an SL-hit trade
+        # whose SL distance was INSTANT_STOP_THRESHOLD_PIPS (2) or less.
+        # Tracked, never changes entry/exit/SL/TP. Real example on file:
+        # 2025-11-03 H4 SELL OB#74 (entry 19:36 @ 1.15268, SL 20:14 @
+        # 1.15315) -- its real SL distance is 4.7 pips, ABOVE the 2-pip
+        # threshold, so it correctly does NOT fire under this rule as
+        # specified (flagged explicitly in DAILIES_LEARNING_LOG.txt: the
+        # user's own "~1-2 pips" recollection was an approximation, not
+        # the literal number -- the 2-pip threshold is applied exactly as
+        # instructed, not loosened to force this example to match).
+        if first.get("instant_stop"):
+            notes.append(f"instant-stop: SL only {first['instant_stop_pips']:.1f} pips from entry")
+        # Note #3 (2026-10-07, item #11): did price take the prior 4H
+        # candle's high (BUY)/low (SELL) between entry and exit -- data
+        # collection only, see run_5m_bso's own docstring for the rule.
+        if first.get("prior_4h_taken_at") is not None:
+            notes.append(f"took prior-4H {'high' if first['side'] == 'BUY' else 'low'} "
+                         f"({first['prior_4h_level']:.5f}) at {riyadh(first['prior_4h_taken_at'])} RYD")
+        # Note #4 (2026-10-07, item #10): flag any trade entered via the
+        # new premium/discount-region mechanism (pre-session impact).
+        if first.get("mechanism") == "PREMIUM_REGION":
+            notes.append(f"item #10 premium/discount-region mechanism (mark {first.get('premium_mark'):.5f})")
         structural_notes = "; ".join(notes)
 
         trades.append(dict(
@@ -1853,6 +2206,9 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
             poi_sources=[m["poi"] for m in members],
             mfe_pips=first.get("mfe", 0.0) * 10000, mae_pips=first.get("mae", 0.0) * 10000,
             sl_hit_riyadh=sl_hit_riyadh, tp_hit_riyadh=tp_hit_riyadh, structural_notes=structural_notes,
+            instant_stop_pips=first.get("instant_stop_pips"), instant_stop=bool(first.get("instant_stop")),
+            prior_4h_taken_at=first.get("prior_4h_taken_at"),
+            mechanism=first.get("mechanism", ""),
         ))
 
         ledger_rows.append(dict(
@@ -1880,6 +2236,10 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
             r_multiple="+3.00" if result == "TP" else ("-1.00" if result == "SL" else ""),
             sl_tp_conflict="YES" if sl_tp_conflict else "",
             structural_notes=structural_notes,
+            instant_stop_pips=f"{first['instant_stop_pips']:.1f}" if first.get("instant_stop_pips") is not None else "",
+            instant_stop="YES" if first.get("instant_stop") else "",
+            prior_4h_taken_riyadh=riyadh(first.get("prior_4h_taken_at")) if first.get("prior_4h_taken_at") else "",
+            mechanism=first.get("mechanism", ""),
             control_state_at_impact="/".join(dict.fromkeys(m["control_state_at_impact"] for m in members)),
             control_ceiling_riyadh="/".join(dict.fromkeys(m["control_ceiling"] for m in members if m["control_ceiling"])),
         ))
@@ -1895,6 +2255,7 @@ LEDGER_FIELDS = [
     "entry_riyadh", "entry_price", "sl_price", "tp_price", "sl_hit_riyadh", "tp_hit_riyadh",
     "risk_price", "r_pips", "mfe_pips", "mae_pips",
     "result", "exit_riyadh", "r_multiple", "sl_tp_conflict", "structural_notes",
+    "instant_stop", "instant_stop_pips", "prior_4h_taken_riyadh", "mechanism",
     "control_state_at_impact", "control_ceiling_riyadh",
 ]
 
