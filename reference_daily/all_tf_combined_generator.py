@@ -159,30 +159,52 @@ def trading_window(date_str: str, display_tz: ZoneInfo) -> tuple[datetime, datet
 
 
 def after_week_open(t: "datetime", display_tz: ZoneInfo) -> bool:
-    """Is `t` at or after the real forex week open (2026-10-05, user's
-    own stated rule, replacing the old blanket "drop all Riyadh-Sunday"
-    filter): Riyadh Monday 01:00 in winter, Riyadh Monday 00:00 in
-    summer -- NOT a tick-count/liquidity heuristic (that risks silently
-    deleting real-but-thin data, which the user explicitly does not
-    want) and NOT a Riyadh-calendar-day check on its own. The old
-    weekday()!=6 filter correctly dropped all of Riyadh-Sunday but
-    missed a leftover hour in the winter case: Riyadh Monday 00:00-00:59
-    already reads as "Monday" on the calendar but is still before the
-    real 01:00 open, so it slipped through unfiltered -- confirmed via
-    real tick counts (2025-02-02/03: single digits through 22:59 UTC,
-    jumping to 400-700+ ticks/min right at 23:00 UTC = Riyadh Monday
-    02:00, with the official 01:00-02:00 Riyadh hour itself still thin
-    but genuinely part of the real week, kept here regardless of how
-    thin it looks -- same DST detection as trading_window(), so the
-    week-open boundary shifts the same way the trading window itself
-    does."""
+    """Is `t` real trading-week data -- at or after the real forex week
+    open AND at or before the real forex week close (2026-10-05/2026-10-07,
+    both user-stated rules, replacing the old blanket "drop all Riyadh-
+    weekend" filter): week opens Riyadh Monday 01:00 winter / 00:00
+    summer, closes Riyadh Friday 00:59 winter / 23:59 summer -- NOT a
+    tick-count/liquidity heuristic (that risks silently deleting real-
+    but-thin data, which the user explicitly does not want) and NOT a
+    Riyadh-calendar-day check on its own.
+
+    OPEN side (2026-10-05): the old weekday()!=6 filter correctly dropped
+    all of Riyadh-Sunday but missed a leftover hour in the winter case:
+    Riyadh Monday 00:00-00:59 already reads as "Monday" on the calendar
+    but is still before the real 01:00 open, so it slipped through
+    unfiltered -- confirmed via real tick counts (2025-02-02/03: single
+    digits through 22:59 UTC, jumping to 400-700+ ticks/min right at
+    23:00 UTC = Riyadh Monday 02:00, with the official 01:00-02:00 Riyadh
+    hour itself still thin but genuinely part of the real week, kept
+    here regardless of how thin it looks).
+
+    CLOSE side (2026-10-07, caught on 2025-01-06's PDH/PDL react-day
+    chain): the week's real close is the SAME boundary the Daily engine's
+    own NY-anchored "Friday" candle already closes on elsewhere in the
+    code (forex_day_bounds -- Friday 01:00 Riyadh winter through Saturday
+    01:00 Riyadh winter / 00:00 through 00:00 summer), not Riyadh calendar
+    midnight. In winter this means real trading data genuinely continues
+    into Riyadh Saturday 00:00-00:59 (the tail of Friday's own NY session)
+    and must be kept, not blanket-stripped as "Saturday" -- confirmed
+    directly in the raw CSV: the real week high for 2025-01-03
+    (1.03096) lands at Sat 2025-01-04 00:09 Riyadh, inside this window.
+    In summer the week already closes at Friday 23:59, so all of Saturday
+    is correctly stripped either way -- no change there. Sunday is always
+    fully between weeks in both seasons.
+
+    Same DST detection as trading_window(), so both boundaries shift the
+    same way the trading window itself does."""
     local = t.astimezone(display_tz)
     wd = local.weekday()  # Mon=0 ... Sun=6
-    if wd == 6 or wd == 5:
-        return False  # all of Riyadh Saturday/Sunday is pre-open
+    if wd == 6:
+        return False  # all of Riyadh Sunday is always between weeks
+    ny_noon = datetime(local.year, local.month, local.day, 12, tzinfo=ZoneInfo("America/New_York"))
+    is_summer = ny_noon.dst() != timedelta(0)
+    if wd == 5:
+        if is_summer:
+            return False  # week already closed Friday 23:59 summer
+        return local.hour < 1  # winter: real Friday session tail, keep through 00:59
     if wd == 0:
-        ny_noon = datetime(local.year, local.month, local.day, 12, tzinfo=ZoneInfo("America/New_York"))
-        is_summer = ny_noon.dst() != timedelta(0)
         open_hour = 0 if is_summer else 1
         if local.hour < open_hour:
             return False
@@ -190,8 +212,9 @@ def after_week_open(t: "datetime", display_tz: ZoneInfo) -> bool:
 
 
 def strip_pre_week_open(minutes: list, display_tz: ZoneInfo) -> tuple[list, int]:
-    """Drop every minute before the real week open (see after_week_open()
-    for the exact rule and why). Returns (kept_minutes, dropped_count)."""
+    """Drop every minute outside the real trading week -- before the real
+    open or after the real close (see after_week_open() for the exact
+    rule and why). Returns (kept_minutes, dropped_count)."""
     kept = [x for x in minutes if after_week_open(x.t, display_tz)]
     return kept, len(minutes) - len(kept)
 
@@ -731,7 +754,16 @@ def structural_hard_death_between(z, start_t: "datetime", end_t: "datetime",
             break
 
     swing_break_at = None
-    idx = bisect_right(mt, start_t)
+    # INCLUSIVE of start_t's own minute (2026-10-07, item #12, caught on
+    # 2025-12-04 RB#114): a protect_level breach can land in the EXACT
+    # same 1-minute bar as start_t itself (impact_time, or an already-
+    # found swing_spent time) -- a wild single-minute bar can touch the
+    # zone AND wick past protect_level in the same 60 seconds (no intra-
+    # minute ordering is available in 1m OHLC data, so per the written
+    # rule -- "wick or not, at the exact minute it happens" -- that
+    # minute must count, not be silently skipped). bisect_right excluded
+    # it; bisect_left includes it.
+    idx = bisect_left(mt, start_t)
     for m in minutes[idx:]:
         if m.t > end_t:
             break
@@ -796,7 +828,9 @@ def structural_invalid_at(z, it: "datetime", bars: list, bar_starts: list,
             break
 
     swing_break_at = None
-    idx = bisect_right(mt, it)
+    # INCLUSIVE of the impact minute itself -- see the matching note in
+    # structural_hard_death_between() above (2026-10-07, item #12).
+    idx = bisect_left(mt, it)
     for m in minutes[idx:]:
         if (m.l < z.protect_level) if bull else (m.h > z.protect_level):
             swing_break_at = m.t
@@ -877,6 +911,26 @@ def compute_control_timeline(d_zones_full, minutes, mt: list, display_tz: ZoneIn
             # zone loop never consulted z.rejected at all, so a born-dead
             # zone could still flip control.
             if getattr(z, "rejected", False):
+                # STILLBORN TREND CANDIDATE (2026-10-07, user-taught,
+                # caught on 2025-05-08 RB#458): a Daily swing confirmation
+                # (not a zone impact) can grant a side full control without
+                # ever attaching a zone to controlling_trend_group -- so
+                # when the FIRST real zone that would have been that
+                # side's trend support turns out to be rejected (born
+                # dead), there is nothing for the ordinary trend-zone-
+                # death path to see die, and the day falls through to
+                # plain NONE even though a real, now-dead candidate
+                # existed. Only matters when daily_controlling_bias still
+                # classifies this rejected zone as the TREND side (not
+                # opposing) at its own impact time -- Step 2 below further
+                # gates it to fire only when controlling_trend_group is
+                # still empty (no real zone already backs that side; if
+                # one does, this stillborn candidate is irrelevant).
+                controlling = daily_controlling_bias(d_zones_full, z.impact_time, minutes, mt)
+                if controlling is not None and z.bullish == controlling:
+                    side = "BUY" if z.bullish else "SELL"
+                    zone_id = (ptype, z.id)
+                    events.append((z.impact_time, "trend_candidate_stillborn", side, zone_id))
                 continue
             controlling = daily_controlling_bias(d_zones_full, z.impact_time, minutes, mt)
             if controlling is None:
@@ -1187,6 +1241,17 @@ def compute_control_timeline(d_zones_full, minutes, mt: list, display_tz: ZoneIn
                 state = opposite(side)
                 one_h_owner = opposite(side)
                 record(t, f"trend zone structural death / Daily MSS flip ({zone_label(zone_id)}, last of its group) -> control to {opposite(side)}")
+        elif kind == "trend_candidate_stillborn":
+            # Approved fix (2026-10-07, caught on 2025-05-08 RB#458): only
+            # acts when NO real zone currently backs this trend side
+            # (controlling_trend_group empty) -- if one does, this
+            # stillborn candidate is irrelevant, the real zone's own
+            # later death (if any) is what matters, same as always.
+            is_trend_side = state == side or (state == "BOTH" and one_h_owner == opposite(side))
+            if is_trend_side and not controlling_trend_group:
+                state = opposite(side)
+                one_h_owner = opposite(side)
+                record(t, f"trend candidate stillborn ({zone_label(zone_id)}, born rejected, no real trend zone ever backed {side}) -> proactive full control to {opposite(side)}")
         elif kind == "daily_swing_strip":
             swing_word = "high" if side == "BUY" else "low"
             if state == side:
