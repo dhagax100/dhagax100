@@ -79,11 +79,24 @@ SPLIT_MARKER = "var array<int> structX = array.new<int>()"
 # structural note -- a tracked category, not a new trading rule.
 INSTANT_STOP_THRESHOLD_PIPS = 2.0
 
-# Item #10 (2026-10-07): staging flag used ONLY to reproduce the
-# item-11b-alone full-year pass (item #10 not yet "introduced") during
-# this session's own sequential per-item verification -- always True in
-# the final, committed state (item #10 fully applied).
-ITEM10_ENABLED = True
+# Item #10 (2026-10-07/08): the premium/discount-region mechanism exists
+# in run_5m_bso_premium() but is DISABLED here (2026-10-08) pending
+# resolution -- see HANDOFF.md and DAILIES_LEARNING_LOG.txt's final
+# session entry. Two implementations have been tried and tested against
+# the same 19 known real pre-session-impacted 2025 zones; neither one
+# has yet been shown to change a single outcome relative to the plain
+# baseline, on this dataset, for a reason explained in full in the log.
+# Leave this False until that open question is resolved with the user --
+# do NOT flip it to True without first reading the handoff notes.
+ITEM10_ENABLED = False
+
+# Item #10's real gate (2026-10-08, user's own figure, open to adjustment):
+# the max acceptable SL size (pips) for a premium/discount-region entry
+# candidate, measured against the real extreme since impact (`mark`). A
+# candidate that would need a bigger SL than this to cover the extreme is
+# skipped -- wait for a closer one instead of chasing an oversized-risk
+# entry. See run_5m_bso_premium()'s own docstring for the full derivation.
+PREMIUM_MAX_SL_PIPS = 15.0
 
 
 def parse_args():
@@ -1601,52 +1614,74 @@ def run_5m_bso_premium(z, impact_time: "datetime", events5_sorted: list, minutes
     oversized SL (a chasing entry) -- the exact complaint the user raised
     using Dec 5 as the worked example.
 
-    THE MECHANISM:
+    THE MECHANISM (2026-10-08 SECOND REWRITE -- the first two attempts
+    were both confirmed wrong by direct testing: the 2026-10-07 version
+    armed on ANY swing confirming with no retracement check at all; the
+    first 2026-10-08 "wait for a 50% retracement into the region" version
+    was coded correctly but EMPIRICALLY PROVEN to change nothing on any
+    of the 6 known real cases -- by the time a swing confirms in this
+    engine's own swing-detection logic, price has typically already
+    retraced past the midpoint, so that gate was always trivially
+    satisfied and never actually blocked anything. User's own diagnosis
+    and fix, which this implements directly: the real problem was never
+    about HOW MUCH price retraces -- it's about the resulting SL SIZE.
+    Gate directly on that instead):
       1. Track a running MARK = the most extreme price reached since
          impact (the LOWEST low for a SELL zone, the HIGHEST high for a
          BUY zone), ratcheting forward every time a new extreme 1-minute
-         bar occurs -- spec's "mark the lowest/highest point reached".
-      2. Each time the mark ratchets to a NEW extreme, any previously-
-         armed `resting` candidate is discarded: it was a false/partial
-         bounce inside a move that kept extending past it (spec step 5,
-         "if price keeps dropping further... keep EXTENDING the mark...
-         until price actually turns back up into it"). A fresh `resting`
-         only arms once a confirmed SL-anchor-kind swing (the "last swing
-         formed after impact" -- a HIGH for sell, a LOW for buy: spec's
-         other named boundary of the premium/discount region) confirms
-         AFTER the mark's own most recent update -- a genuine reaction
-         that only counts once the mark has (so far) stopped extending.
-      3. Once `resting` is armed, `candidate` (the actual entry level) is
-         picked EXACTLY the ordinary way -- the most recent entry-
-         trigger-kind swing at/before resting's own swing (spec step 3,
-         "enter at the last 5m swing low formed before price re-entered
-         the premium region") -- and chases newer candidates exactly like
-         the ordinary mechanism, racing against the break test. The
-         region's two named boundaries (mark, resting) are a CONCEPT that
-         decides WHEN resting/candidate may legitimately arm; they are
-         never themselves tested as a literal price band anywhere in the
-         break test -- a documented implementation choice, since the
-         spec's own wording ("wait for price to re-enter that region")
-         is most naturally read as "wait for a genuine reaction swing to
-         form after the mark stops moving", which is exactly what this
-         is.
-      4. The usual trading-window/session-sweep gates still apply to the
-         BREAK test only (identical to the ordinary mechanism) -- so
-         spec's "refinement 2" (a round trip that completes entirely
-         before the session opens) is handled for free: the mark/
-         resting/candidate machinery runs continuously from impact
-         regardless of the window, and the break test simply waits for
-         the window to open before it can fire -- no separate
-         "retroactive" code path needed, it is the SAME code path.
-      5. Item #11b's disqualifying check (prior-candle-extreme taken
+         bar occurs.
+      2. Track the most recently confirmed entry-trigger-kind swing (the
+         SAME kind the ordinary mechanism uses as its breakout candidate
+         -- a HIGH for a BUY zone, a LOW for a SELL zone).
+      3. THE REAL GATE (user's own words, 2026-10-08): compute what the
+         SL would be if we entered at that candidate's own price --
+         `abs(mark - candidate.price)` in pips. Only arm it as the live
+         entry trigger if that distance is <= PREMIUM_MAX_SL_PIPS (15.0,
+         the user's own stated figure, open to adjustment). A candidate
+         that would need a bigger SL than that to cover the real extreme
+         since impact is skipped entirely -- we keep waiting for a
+         CLOSER candidate to confirm instead of chasing an oversized-risk
+         entry.
+      4. If the mark extends to a NEW, more extreme price before any
+         armed candidate's break fires, the armed candidate is
+         RE-VALIDATED against the new mark -- if its own SL distance now
+         exceeds the cap, it's disarmed and the search waits for a fresh,
+         closer candidate, exactly mirroring the original spec's "if
+         price keeps dropping, keep extending the mark" idea, just
+         expressed as a live risk-size check instead of a region/
+         retracement proxy.
+      5. Entry fires on the ordinary break test (price breaking through
+         the currently-armed candidate's price) -- unchanged mechanics,
+         gated by the usual trading-window/session-sweep checks, exactly
+         like the ordinary mechanism. This naturally covers the original
+         spec's "refinement 2" (a round trip completing before the
+         session opens) for free -- the mark/candidate machinery runs
+         continuously from impact regardless of the window; the break
+         test simply can't fire until the window opens.
+      6. Item #11b's disqualifying check (prior-candle-extreme taken
          before entry) is the SAME `invalidated_at` already computed by
-         structural_invalid_at() for this zone -- reused as-is here,
-         never reimplemented, satisfying spec's own refinement that
-         #11b's check applies to this mechanism too.
-      6. SL/TP/MFE/MAE/instant-stop/prior-4H note: delegated to the SAME
+         structural_invalid_at() for this zone -- reused as-is.
+      7. SL/TP/MFE/MAE/instant-stop/prior-4H note: delegated to the SAME
          `_minutes_extreme()` call and `_post_entry_walk()` helper the
-         ordinary mechanism uses -- byte-identical rules, no
-         reimplementation, so items #11/#25 apply here for free too.
+         ordinary mechanism uses -- unchanged, so items #11/#25 apply
+         here for free too. (Note: the FINAL SL, computed the normal way
+         over the real impact-to-entry window, can still differ slightly
+         from the mark used for the live 15-pip gate check, since the
+         gate's `mark` is a running snapshot and the real SL extreme is
+         recomputed fresh at entry time -- in practice these are the same
+         value, since mark only ever ratchets toward the real extreme.)
+
+    CAVEAT, stated plainly rather than hidden: this directly targets and
+    fixes the "oversized SL from chasing a late, already-extended swing"
+    complaint. It can ALSO mean some real, otherwise-valid continuation
+    trades never fire at all, if price never comes back close enough to
+    the extreme to produce a <=15-pip candidate -- that's accepted as
+    the deliberate cost of the fix, not a bug, per the user's own request.
+    This only ever applies inside this function, gated by
+    `compute_5m_trades`'s own is_pre_session check -- it can NEVER affect
+    an ordinary, same-session entry, which keeps using run_5m_bso/
+    run_5m_chain completely unchanged, so same-session trades that
+    legitimately need a bigger-than-15-pip SL are untouched.
 
     NOT built here (documented, not a silent gap): no re-entry chain for
     attempt 2+. After a plain SL under this mechanism, the window is
@@ -1657,99 +1692,82 @@ def run_5m_bso_premium(z, impact_time: "datetime", events5_sorted: list, minutes
     run_5m_chain instead, not this function again.
 
     Returns the same stage vocabulary as run_5m_bso, plus two premium-
-    mechanism-only stages: NO_PREMIUM_RESTING (the mark/resting process
-    never produced a usable resting swing before window_end) and
-    POI_BREACHED_PRE_ENTRY (the zone died -- usually via #11b's own
-    check -- before a resting swing ever armed)."""
+    mechanism-only stages: NO_PREMIUM_RESTING (no candidate ever satisfied
+    the SL-size cap before window_end) and POI_BREACHED_PRE_ENTRY (the
+    zone died -- usually via #11b's own check -- before any candidate
+    ever armed)."""
     bull = z.bullish
-    need_rest_kind = 1 if bull else 0   # the region's OTHER boundary: a HIGH for sell, a LOW for buy
-    need_cand_kind = 0 if bull else 1   # the actual entry-trigger kind, same convention as run_5m_bso
+    need_cand_kind = 0 if bull else 1   # entry-trigger kind, same convention as run_5m_bso: HIGH for buy, LOW for sell
 
     idx0 = bisect_left(mt, impact_time)
     if idx0 >= len(minutes):
         return dict(stage="NO_5M_BAR_FOR_IMPACT")
 
-    rest_events = sorted([e for e in events5_sorted if e.kind == need_rest_kind and e.at is not None
-                          and e.at >= impact_time], key=lambda e: e.at)
     cand_events_all = sorted([e for e in events5_sorted if e.kind == need_cand_kind and e.at is not None],
                               key=lambda e: e.at)
 
     mark = None
-    resting = None
-    ri = 0
+    armed = None            # the currently-armed candidate (satisfies the SL-size cap against the CURRENT mark)
+    resting_at = None       # first time any candidate ever armed (for reporting only)
+    cand_ptr = 0
+    replacements = 0
+    entry_m = None
+    stopped = False
     for i in range(idx0, len(minutes)):
         m = minutes[i]
         if m.t >= window_end:
             break
         if invalidated_at is not None and m.t >= invalidated_at:
-            return dict(stage="POI_BREACHED_PRE_ENTRY", mark=mark)
+            stopped = armed is not None
+            break
         val = m.h if bull else m.l
         if mark is None or ((val > mark) if bull else (val < mark)):
             mark = val
-            resting = None  # a new extreme invalidates any stale resting candidate (spec step 5)
-        while ri < len(rest_events) and rest_events[ri].at <= m.t:
-            ev = rest_events[ri]
-            ri += 1
-            if resting is None:
-                resting = ev
-        if resting is not None:
-            break
-    if resting is None:
-        return dict(stage="NO_PREMIUM_RESTING", mark=mark)
-    if resting.at is None:
-        return dict(stage="RESTING_SWING_UNRESOLVED_M1", mark=mark)
-
-    candidates_before = [ev for ev in cand_events_all if ev.swing <= resting.swing]
-    if not candidates_before:
-        return dict(stage="NO_CANDIDATE", resting_at=resting.at, mark=mark)
-    current = candidates_before[-1]
-
-    later_candidates = [ev for ev in cand_events_all if ev.at > resting.at]
-
-    idx = bisect_left(mt, resting.at)
-    entry_m = None
-    stopped = False
-    cand_ptr = 0
-    replacements = 0
-    for i in range(idx, len(minutes)):
-        m = minutes[i]
-        if m.t >= window_end:
-            break
-        if invalidated_at is not None and m.t >= invalidated_at:
-            stopped = True
-            break
-        while cand_ptr < len(later_candidates) and later_candidates[cand_ptr].at <= m.t:
-            current = later_candidates[cand_ptr]
-            replacements += 1
+        while cand_ptr < len(cand_events_all) and cand_events_all[cand_ptr].at <= m.t:
+            candidate_ev = cand_events_all[cand_ptr]
             cand_ptr += 1
+            sl_pips = abs(mark - candidate_ev.price) * 10000
+            if sl_pips <= PREMIUM_MAX_SL_PIPS:
+                if armed is not None:
+                    replacements += 1
+                else:
+                    resting_at = m.t
+                armed = candidate_ev
+        if armed is not None and abs(mark - armed.price) * 10000 > PREMIUM_MAX_SL_PIPS:
+            armed = None  # mark extended past the point this candidate's SL would still be acceptable
+        if armed is None:
+            continue
         if not in_trading_window(m.t, display_tz):
             continue
         if not session_sweep_satisfied(m.t, bull, minutes, mt, display_tz):
             continue
-        broke = (m.h > current.price) if bull else (m.l < current.price)
+        broke = (m.h > armed.price) if bull else (m.l < armed.price)
         if broke:
             entry_m = m
             break
+    if resting_at is None:
+        return dict(stage="NO_PREMIUM_RESTING", mark=mark)
     if entry_m is None:
         return dict(stage="POI_BREACHED" if stopped else "NO_ENTRY_IN_WINDOW",
-                    resting_at=resting.at, candidate_price=current.price, replacements=replacements, mark=mark)
+                    resting_at=resting_at, candidate_price=(armed.price if armed else None),
+                    replacements=replacements, mark=mark)
 
-    entry_price = current.price
+    entry_price = armed.price
     entry_time = entry_m.t
     sl_price = _minutes_extreme(mt, minutes, z.impact_time, entry_time + timedelta(minutes=1), bull)
     if sl_price is None:
-        return dict(stage="NO_SL_POOL", resting_at=resting.at, entry_time=entry_time,
+        return dict(stage="NO_SL_POOL", resting_at=resting_at, entry_time=entry_time,
                     entry_price=entry_price, mark=mark)
     risk = abs(entry_price - sl_price)
     if risk <= 0:
-        return dict(stage="ZERO_RISK", resting_at=resting.at, entry_time=entry_time,
+        return dict(stage="ZERO_RISK", resting_at=resting_at, entry_time=entry_time,
                     entry_price=entry_price, sl_price=sl_price, mark=mark)
     tp_price = entry_price + 3 * risk if bull else entry_price - 3 * risk
 
     post = _post_entry_walk(bull, entry_time, entry_price, sl_price, tp_price, risk, minutes, mt,
                              None, h4_bars, h4_bar_starts)
 
-    return dict(stage="ENTERED", mechanism="PREMIUM_REGION", mark=mark, resting_at=resting.at,
+    return dict(stage="ENTERED", mechanism="PREMIUM_REGION", mark=mark, resting_at=resting_at,
                 replacements=replacements, entry_time=entry_time, entry_price=entry_price, sl_price=sl_price,
                 tp_price=tp_price, risk=risk, **post)
 

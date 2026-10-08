@@ -803,6 +803,82 @@ BE-RULE RESEARCH DATA (2026-09-29) — not yet a rule, just the inputs
 SESSION LOG (newest first)
 ----------------------------
 
+2026-10-08 — Session hand-off: item 10 rebuilt twice more, disabled
+pending a real validating case; item 14 fully designed, not yet coded;
+HANDOFF.md rewritten for a new AI session
+------------------------------------------------------------------------------
+User is migrating to a new AI session (usage limit, not task completion).
+Full status captured in HANDOFF.md at the repo root -- read that file
+first, it is the authoritative hand-off pointer. Summary of what changed
+in this specific entry:
+
+ITEM 10 -- two more attempts after the 2026-10-07 "first implementation",
+both tested directly against the same 6 known real-outcome-changing 2025
+zones (Jan 14, Mar 7, Apr 2, Sep 24, Nov 17, Dec 16) and the same 19 known
+pre-session-impacted zones overall:
+- User correctly identified the 2026-10-07 version as WRONG: it armed an
+  entry the instant ANY swing confirmed after the mark stabilized, no
+  real "wait" at all -- confirmed via code read, not guessed.
+- Second attempt (midpoint-retracement gate, reusing this engine's own
+  50/50 premium/discount split applied to [mark, next-swing] instead of
+  [protect_level, pre-impact swing]): coded correctly, VERIFIED via a
+  temporary debug trace that it genuinely computes and checks the
+  midpoint -- but empirically changes ZERO of the 6 known cases, because
+  in each, the swing's own confirmation already lands past the midpoint
+  the instant it confirms (this engine's swing-confirmation mechanics
+  inherently lag the real peak by some pullback, which in every checked
+  case already exceeded 50%). A genuine, verified null result -- not a
+  bug, just unproven on this data.
+- Third attempt, user's own redesign after being shown the above: gate
+  directly on the resulting SL SIZE rather than a retracement proxy.
+  `PREMIUM_MAX_SL_PIPS = 15.0` (user's own figure): a candidate only
+  arms if `abs(mark - candidate.price)*10000 <= 15.0`, re-validated
+  continuously as `mark` ratchets (an armed candidate whose SL distance
+  grows past the cap is disarmed and the search waits for a closer one).
+  This is the CURRENT code in run_5m_bso_premium() (rewritten in full,
+  old region_edge/midpoint logic deleted, not patched). Checked against
+  the same 6 known cases: every one already has a natural SL of 2.9-13.6
+  pips -- all comfortably under the 15-pip cap -- so again, ZERO change.
+  This is NOT evidence the fix is wrong; it is evidence that none of the
+  6 known cases were ever genuine "oversized SL" cases by the user's own
+  15-pip standard. The real test (whether the cap excludes a genuinely
+  bad trade among the other 13 "reproducing" zones, which have not been
+  individually checked for their own natural SL size under the OLD
+  mechanism) was not completed before this hand-off.
+DECISION: `ITEM10_ENABLED` set to `False` (was `True`) so the COMMITTED
+baseline reverts to the last fully-validated, stable state (items 1-6,
+11, 11b, 12, 22, 25 only) rather than shipping an unresolved mechanism as
+if it were finished. The code for all three attempts' lessons is
+preserved in run_5m_bso_premium()'s own docstring and the function itself
+reflects the third (current best) design -- just not active. Full-year
+numbers with item 10 disabled: 114 trades, 35 TP / 79 SL, net +26R (the
+same figures already locked before item 10 was ever introduced). This
+number is intentionally NOT repeated in HANDOFF.md -- the user is keeping
+it privately to cross-check whatever a fresh AI session computes on its
+own, rather than risk a new session anchoring on a given answer instead
+of actually computing it.
+
+ITEM 14 -- fully designed and explained to the user this session (OB's
+Aggressive-zone eligibility guard, missing from RB's equivalent code in
+reference_combined/weekly_combined_generator.py), confirmed safe (can
+only ever remove already-granted RB eligibility in the exact narrow case
+OB already filters, never grant new eligibility -- uses zone fields RB
+already carries, `orig_state`/`rejected`/`zb`/`zt`, and the existing
+`rejected`-filtering machinery already in place for `rb_active`). The
+exact before/after code for both the bullish (~line 983) and bearish
+(~line 1016) RB eligibility blocks was given to the user in chat. User
+said "we can run the 10 and 14 fixes" and work began, but was interrupted
+("stop whatever you are running") before any code was written for either
+item in that attempt -- confirmed via git status at the time (clean
+working tree, no edits made). Item 10 was subsequently worked on solo
+(see above); item 14 was NOT revisited this session and remains fully
+specified, zero code written, ready for a fresh session to implement
+directly from this entry or HANDOFF.md.
+
+Nothing was committed or pushed without an explicit same-turn
+instruction at any point in this entry's own work, consistent with the
+project's standing rule throughout.
+
 2026-10-07 (second pass, same day) — Items 10, 11, 11b, 25 coded, each
 individually verified against its own real example, then applied one by
 one through the full 12-month year (cumulative, on top of the already-

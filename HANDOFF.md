@@ -1,82 +1,50 @@
-# Dhagax Dailies — Hand-off
+# Dhagax Dailies — Hand-off (2026-10-08)
 
-You are picking up a running project. Read this file fully before doing
-anything. It tells you what the system is, where the rules live, how to
-run it, and what you're expected to do next. Do not ask the user what
-the assignment is — it's in this file. Do not ask for clarification on
-anything this file or `DAILIES_LEARNING_LOG.txt` already answers.
+You are picking up a running project. Read this file fully, then read
+`DAILIES_LEARNING_LOG.txt` in full, before doing anything. Do not ask the
+user what the assignment is — it's in this file and the log. Do not ask
+for clarification on anything either document already answers. Do not
+invent a mechanism, a number, or a rule and present it as settled — if
+it isn't in the log or confirmed against real 1-minute data, it's a
+guess, and guesses have caused real, costly regressions in this project
+before (see the log's own "swing_spent" and "item #10 first attempt"
+stories).
 
 ## What this is
 
 A real ICT-style trading system for EURUSD, built from real 1-minute
-market data, not simulated or invented. Python generates Daily/4H/1H/5m
+market data (2021-2026), not simulated. Python generates Daily/4H/1H/5m
 Order Block (OB), Rejection Block (RB), Fair Value Gap (FVG) and Volume
 Imbalance (VI) zones, tracks which side ("CONTROL") is actively
-tradeable at any moment, and finds real 5-minute entries against that.
-The same code also emits a merged Pine Script v6 TradingView indicator,
-but the day-by-day verification work (what you're being asked to
-continue) is done directly against the Python output, not the chart.
-
-**Everything here is derived from real price data and the user's own
-direct teaching, verified repeatedly against raw 1-minute candles and
-the user's own chart reading. Nothing is simulated, assumed, or
-invented. If you are ever unsure whether something is a rule or a
-guess, it must come from `DAILIES_LEARNING_LOG.txt` or be verified
-against real data before you treat it as fact — never invent a
-mechanism and present it as settled.**
+tradeable at any moment (Daily-only — 4H/1H never drive control, they
+only consume it), and finds real 5-minute entries against that. The
+year under full test throughout is 2025.
 
 ## Files that matter
 
-- `DAILIES_LEARNING_LOG.txt` — the rule book. Every concept the user has
-  taught, every bug found and fixed, with dates and the user's own
-  words quoted verbatim wherever possible. **Read this in full before
-  doing any day's verification.** It is long because the rules are
-  precise and have been corrected multiple times — later entries
-  supersede earlier ones on the same topic; the `SESSION LOG` section
-  (newest first) is the running history of how each rule was arrived
-  at, including false starts that were caught and reverted. The `DAY
-  REPORTING FORMAT — LOCKED` section near the top is the exact,
-  mandatory format for every day's report — do not deviate from it.
-- `DAILIES_TRADING_JOURNAL.txt` — the day-by-day journal of what
-  actually happened, trade by trade, for every day already verified.
-  Newest entries at the top. This is a record of completed work, not a
-  spoiler to shortcut new work — January is already verified and
-  closed; your job starts at the next unverified month.
-- `reference_daily/all_tf_combined_generator.py` — the live generator.
-  All CONTROL logic, 1H/4H gating, 5-minute entry matching, and the
-  Pine output all live here. This is the file you'll most often be
-  reading and, when a real bug is found, editing.
-- `reference_daily/verify_day.py` — **the tool you run for every single
-  day.** Fast-hybrid single-day verification (~45-60s instead of an
-  ~18-20 minute full run) that still goes through the exact same code
-  paths as the full generator — not an approximation. Usage:
-  ```
-  python3 reference_daily/verify_day.py 2025-02-03
-  ```
-  Add `--lead-months N` (default 2) if a month needs more lead-in for
-  structure continuity. Never re-run the full multi-year generator just
-  to check one day — this script exists specifically so you don't have
-  to.
-- `reference_combined/weekly_combined_generator.py`,
-  `reference_daily/daily_combined_generator.py`,
-  `reference/weekly_ob_generator.py`,
-  `reference_rb/weekly_rb_generator.py`,
-  `reference_fvg/weekly_fvg_generator.py`,
-  `reference_vi/weekly_vi_generator.py` — the engine layers
-  `all_tf_combined_generator.py` is built on (zone detection, swing
-  structure, MSS, the OB/RB/FVG/VI mechanics themselves). You'll read
-  these when a bug traces down into zone *creation* rather than CONTROL
-  logic (this has happened — see the `guard_price` boundary bug in the
-  learning log for a worked example of tracing a reporting discrepancy
-  all the way down into a 3-candle gap condition).
-- `data/EURUSD_m1_BidAndAsk_2021-01-03_to_2026-09-30.csv` — the real
-  merged multi-year 1-minute price data (gitignored, rebuild locally if
-  missing). Every result in this project traces back to this file;
-  there is no other source of truth. **Do not use a plain `cat`** — the
-  three source files have different header styles (quoted vs.
-  unquoted) and each carries its own header row, so a naive `cat` puts
-  two extra header rows in the middle of the data. Use this exact
-  command instead (verified byte-identical to the tracked file):
+- **`DAILIES_LEARNING_LOG.txt`** — the rule book and full session
+  history, newest first in the `SESSION LOG` section. Long, precise,
+  corrected multiple times — later entries supersede earlier ones on
+  the same topic. Read it in full, not skimmed.
+- **`DAILIES_DAYBYDAY_REPORT.txt`** — the current locked full-year
+  day-by-day report (Date/Bias/Setups/Entries, 4 columns). Bias is
+  restricted to BUY/SELL/BOTH/NONE labels only (with transition times
+  and short reasons in brackets); short zone codes (OB/RB/FVG), "origin"
+  not "formed", R-multiple inline with SL/TP, no POI ID numbers in the
+  Entries column. This exact style is locked — match it precisely if
+  you regenerate any part of it.
+- **`reference_daily/all_tf_combined_generator.py`** — the live engine.
+  All CONTROL logic, 1H/4H gating, 5-minute entry matching live here.
+- **`reference_daily/verify_day.py`** — the tool for checking any single
+  day fast (~45-60s via `build_engines(csv_path, date_str, lead_months)`
+  + `report_day(ctx, date_str)`), not the ~18-20 min full generator.
+- **`reference_combined/weekly_combined_generator.py`** — zone-creation
+  engine (OB/RB/FVG/VI eligibility, structure, MSS). Read this when a bug
+  traces into zone *creation* rather than CONTROL logic.
+- **Data** — the three tracked year-range CSVs under `data/` merge into
+  one continuous file. The merged file itself is gitignored (too large,
+  ~190MB) — rebuild it locally with the exact command in the
+  `.gitignore` comment above its ignore line, or:
   ```
   (head -1 data/EURUSD_m1_BidAndAsk_2021-01-03_to_2022-12-30.csv
    tail -n +2 data/EURUSD_m1_BidAndAsk_2021-01-03_to_2022-12-30.csv
@@ -84,99 +52,129 @@ mechanism and present it as settled.**
    tail -n +2 data/EURUSD_m1_BidAndAsk_2025-01-02_to_2026-09-30.csv) \
     > data/EURUSD_m1_BidAndAsk_2021-01-03_to_2026-09-30.csv
   ```
+  Do NOT use a plain `cat` — the source files have different header
+  styles and each carries its own header row.
 
-## The locked day-report format
+## Current state (commit history: `a551db5` → `d2310d1` → `32d0a56`,
+branch `ict-trading-system`)
 
-Every day you report MUST use this exact 4-column table (full spec and
-worked examples in `DAILIES_LEARNING_LOG.txt`'s `DAY REPORTING FORMAT`
-section):
+A 27-item consolidated fix list was worked through this session (full
+detail and evidence for every one is in the log's two most recent
+2026-10-07 session entries, plus a 2026-10-08 entry for what's below).
+Status, exactly as of this hand-off:
 
-| Control window | Setups allowed | POI of interest | Entry info |
+**Committed, verified, stable (items 1-6, 11, 11b, 12, 22, 25):**
+SL-anchor real-extreme fix, BOTH-state proactive-flip fix, weekend-
+checkpoint report-scan fix, week-close boundary fix, stillborn-trend
+proactive-flip fix, the same-minute swing_break bisect fix (item 12 —
+explains items 14's original two cited trades and item 15 too), the
+10-day month-end trailing pad (item 22), prior-4H-candle tracking
+(item 11, data-collection note, verified null on this dataset), the
+pre-entry prior-candle disqualifier (item 11b, verified correct via
+unit test, also a verified null result on this dataset), and the
+instant-stop note (item 25, 2-pip threshold, also a null result —
+smallest real SL anywhere in 2025 is 2.8 pips).
 
-Strict rules, non-negotiable:
-- Never report the side that isn't currently allowed, not even as "it
-  was rejected."
-- Never state a non-event ("1H not abandoned") unless something
-  actually changed.
-- Only list a POI if its side AND its specific resource (4H or 1H) are
-  BOTH actually live that moment — otherwise drop it entirely, don't
-  mention it.
-- Never report anything outside the real trading window
-  (`atc.trading_window()` — 11:00-19:00 Riyadh summer / 11:00-20:00
-  winter, real NY DST transition dates, not a fixed guess).
-- Always name the exact timeframe + side ("1H sell"), never "a POI."
-- BUY's own check is "discount," SELL's is "premium" — never swap these.
+**Coded but DISABLED, unresolved — item 10 (premium/discount-region
+mechanism for pre-session-impacted POIs):** `ITEM10_ENABLED = False` in
+`all_tf_combined_generator.py` right now. Two different implementations
+of this have been built and tested against the SAME 19 known real 2025
+zones whose impact genuinely precedes that day's trading window:
+1. First attempt (2026-10-07): armed an entry the instant any swing
+   confirmed after price stopped extending, with no real "wait" at all
+   — confirmed WRONG by the user, since it produced early/chasing
+   entries, the opposite of the intended design.
+2. Second attempt (2026-10-08): required price to retrace to the
+   midpoint of [extreme, next swing] before arming — coded correctly,
+   verified via debug trace to genuinely compute and check that
+   midpoint, but proven to change ZERO of the 6 known real-outcome-
+   changing cases, because in every one, the confirming swing already
+   satisfies that midpoint the instant it confirms. A real, verified
+   null result, not a bug.
+3. Third attempt, SAME SESSION, user's own redesign (2026-10-08): gate
+   directly on the resulting SL SIZE instead of a retracement proxy —
+   only arm a candidate if `abs(extreme_since_impact - candidate_price)`
+   is <= `PREMIUM_MAX_SL_PIPS` (15.0, the user's own figure, open to
+   change), re-validated continuously as the extreme ratchets. This is
+   the CURRENT code in `run_5m_bso_premium()`. Checked against the same
+   6 known cases: EVERY one already has a natural SL under 15 pips
+   (2.9-13.6 pips), so the cap still changes nothing on this specific
+   known test set — not because it's wrong, but because no known
+   example yet proves it right either.
 
-## How to work a day
+**OPEN QUESTION, not yet resolved — do this next if the user asks you
+to continue item 10:** of the 19 known pre-session-impacted 2025 zones,
+13 "reproduce" the plain baseline's own result exactly (just with
+different, often earlier, entry timing) — these have NOT been
+individually checked for whether any of them carries a genuinely
+oversized SL under the OLD, disabled mechanism, vs. whether item 10's
+current SL-cap logic would have excluded them. Finding even ONE real
+case where the cap changes an outcome (removes an oversized-SL trade,
+or produces a materially different entry) would validate the design;
+finding none across all 19 means the premise (a real oversized-SL
+pre-session case exists in 2025 data) may simply not hold this year,
+and the user should decide whether to keep the mechanism dormant,
+lower the pip cap, or drop the feature. **Do not re-enable
+`ITEM10_ENABLED` without the user's explicit go-ahead on this
+specific question** — they were mid-investigation when this hand-off
+was written and have not yet decided.
 
-1. Run `python3 reference_daily/verify_day.py <date>`.
-2. Read its full output: candidates, any ENTERED attempt's full detail,
-   the control checkpoint timeline for that day (with reasons), and the
-   1H abandonment ceiling for both sides.
-3. Translate that into the locked table format. If control changes
-   mid-window, give one row per control segment.
-4. If a trade entered, give full entry detail (price, SL, TP, result,
-   exit time) in the Entry info column.
-5. If something in the output looks structurally wrong (a zone you'd
-   expect to see doesn't appear, a control transition doesn't match
-   what the real price action should produce), investigate it the way
-   the learning log's own worked examples do: trace it down to the
-   actual code and real candle data, don't guess and don't paper over
-   it. Several real bugs this project has had were found exactly this
-   way — by someone (the user or a prior AI) noticing a report didn't
-   match what the real chart showed, and refusing to accept "the code
-   says so" as an explanation on its own.
-6. Log the day in `DAILIES_TRADING_JOURNAL.txt` (new entry at the TOP,
-   same format as the existing entries — short, plain, no fluff).
-7. If you find and fix a real bug: write it into
-   `DAILIES_LEARNING_LOG.txt`'s `SESSION LOG` (newest entry at the top)
-   AND into whichever conceptual section of the file it belongs to, the
-   same way every prior fix is documented there — what was wrong,
-   real evidence (exact zone IDs, exact prices, exact times), what the
-   fix was, and that you re-verified nothing else regressed. This log
-   is the only thing standing between "settled" and "re-litigated for
-   the tenth time" — treat it as load-bearing, not optional paperwork.
+**Designed, specified, NOT yet coded — item 14 (RB aggressive-zone
+eligibility guard):** a real, confirmed asymmetry — OB's Aggressive-
+zone eligibility code requires the confirming swing to clear the zone's
+own boundary (or it's rejected outright); RB's equivalent code has no
+such guard. The exact fix (mirroring OB's `ok = ...` check into RB's two
+eligibility blocks in `reference_combined/weekly_combined_generator.py`,
+~lines 981-985 bullish / ~1014-1018 bearish) was fully designed and
+explained to the user in this session's chat, confirmed safe (can only
+ever REMOVE already-granted RB eligibility in the narrow case OB already
+filters, never grant new eligibility), but the user said "let's run it"
+and then the task was interrupted before any code was written. **This
+is ready to implement exactly as designed** — see the log's final
+session entry for the precise before/after code block.
 
-## Standing rules (apply to you too)
+**Explicitly deferred/put-aside by the user, do not touch without being
+asked:** items 13, 19, 20, 21, 23, 26, 27. Each has its own real
+evidence and status already recorded in the log — do not re-raise them
+proactively, and do not guess at a fix for any of them.
+
+## Standing rules (apply to you too — tested hard, held every time)
 
 - **Never commit or push without the user explicitly saying so in that
   exact turn.** A general "go ahead" earlier in the conversation does
-  not carry forward. This was tested hard earlier in this project's
-  history and the rule held every single time — do not be the one who
-  breaks it.
-- **Never guess and present it as fact.** If you don't know something,
-  say so and investigate with real data, or ask the user. A real,
-  damaging incident already happened earlier in this project where an
-  AI (a prior instance of you, functionally) invented a mechanism
-  (treating "swing_spent" as a trend-control death trigger) that was
-  never taught, implemented it, and it silently changed already-
-  validated results across weeks of history before being caught by the
-  user and fully reverted. Read that story in the learning log's
-  2026-10-05 session entries in full before you touch CONTROL logic —
-  it is the clearest possible illustration of the cost of inventing
-  something instead of verifying it.
+  not carry forward.
+- **Never guess and present it as fact.** Investigate with real data or
+  ask. This project has a real, costly history of exactly this failure
+  mode (see the log's "swing_spent" story and item #10's first two
+  attempts above) — always verify before claiming something is fixed.
 - **Before claiming a bug is fixed, re-verify the full previously-
-  validated day range, not just the day that exposed it.** A fix to
-  one shared function can silently ripple through the entire dataset.
-  This project's own history has at least two cases of exactly that.
-- Before any day-by-day walkthrough, confirm you understand CONTROL is
-  Daily-only — 4H/1H never drive control, they only consume whatever
-  control currently says, plus their own separate conditions
-  (authorization, premium/discount, 1H's own PDL/PDH abandonment
-  chain). This was wrong once early in the project and fixing it was a
-  major architectural correction — don't reintroduce the mistake.
+  validated range, not just the one case that exposed it.**
+- **A fix only counts as validated once you've found a REAL case where
+  it changes the right thing** — a fix that's merely "coded correctly"
+  but never shown to change a known bad outcome (see item 10's history
+  above) should be reported exactly that honestly, not oversold.
+- CONTROL is Daily-only. 4H/1H never drive it, only consume it.
 
 ## Your task right now
 
-January 2025 (days 2-31, skipping weekends) is fully verified, reported
-day-by-day in the locked format, and logged. **Your job starts at
-February 2025, day by day, in the same format, with the same rigor.**
-Work through it exactly the way January was worked through: run
-`verify_day.py` for each trading day, report it in the locked table
-format, log it, flag anything that looks wrong and investigate it for
-real before accepting or rejecting it. At the end of the month, give a
-short overall performance summary (trades, results, nothing more
-elaborate than that) the same way January's closing summary was given.
+The user is migrating to a new AI session to continue this work because
+of a usage limit, not because the work is finished. They want this
+hand-off to let a fresh AI reproduce the SAME full-year 2025 backtest
+and answer status questions (what's fixed, what's pending, what's put
+aside, what are entry notes, what is 1H abandonment, etc.) correctly
+from this file and the log — the user will verify your first fresh
+backtest's numbers privately against their own saved copy before trusting
+anything further, so compute them for real, don't guess or recall a
+number from this file (no result numbers are given here on purpose).
 
-Do not ask the user "what would you like me to do with this hand-off" —
-this file is the answer. Begin with February 2, 2025.
+Do not ask the user "what would you like me to do with this hand-off"
+— this file is the answer. Start by: (1) reading this file and the
+full learning log, (2) rebuilding the merged CSV if needed, (3) running
+a fresh full-year 2025 verification using `reference_daily/verify_day.py`
+(one engine build per month, every calendar day looped, 10-day trailing
+pad past month-end, matching the pattern described throughout the log's
+2026-10-07 session entries) with the CURRENT code exactly as committed
+(item 10 disabled, everything else active), and reporting the resulting
+trade count / TP / SL / net R and max losing streak back to the user.
+Then ask the user which of item 10 (the open question above) or item 14
+(ready to code) they want you to continue with.
