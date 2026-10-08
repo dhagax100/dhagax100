@@ -980,9 +980,36 @@ class WeeklyCombinedEngine:
                         z.eligible_time = ev.at
                 for zidx in self.rb_active:
                     z = self.rb_zones[zidx]
+                    # Item #14 (2026-10-08, user-designed): mirrors OB's own
+                    # Aggressive/Old guard above -- the confirming swing must
+                    # actually clear the zone's own top, or the zone was
+                    # already swept through before it confirmed, else it's
+                    # rejected rather than made eligible. RB previously had
+                    # no such guard at all (every swing confirmation armed
+                    # it unconditionally), letting an Aggressive RB go
+                    # eligible off stale/already-violated structure OB would
+                    # have rejected. RB has no "Old" state (orig_state 1),
+                    # only Aggressive (4), so the condition is orig_state != 4
+                    # instead of OB's `not in (1, 4)`.
                     if z.bullish and z.state in (0, 4) and z.eligible < 0 and k > z.trigger:
-                        z.eligible = k
-                        z.eligible_time = ev.at
+                        # CORRECTION (2026-10-08): RB has no "orig_state"
+                        # attribute at all -- it uses `created_state`, with
+                        # its OWN numbering (0=IRB, 1=ARB, 2=ORB, 3=SPENT,
+                        # 4=AIRB), different from OB's. This loop's own
+                        # `z.state in (0, 4)` filter already restricts it to
+                        # IRB/AIRB zones only (pure ARB/ORB zones, state 1/2,
+                        # never reach this branch at all) -- so a zone
+                        # z.state==4 here was necessarily CREATED as AIRB
+                        # (created_state==4 too; state 4 only ever promotes
+                        # TO 0, nothing promotes INTO 4), making
+                        # `created_state != 4` the correct equivalent of
+                        # OB's "is this an Old/Aggressive zone" check.
+                        ok = z.created_state != 4 or z.zt < ev.price
+                        if not ok or (k > 0 and self.w[k - 1].l < z.zb):
+                            z.rejected = True
+                        else:
+                            z.eligible = k
+                            z.eligible_time = ev.at
             else:
                 if not consumed_l:
                     self.have_l = True
@@ -1013,9 +1040,15 @@ class WeeklyCombinedEngine:
                         z.eligible_time = ev.at
                 for zidx in self.rb_active:
                     z = self.rb_zones[zidx]
+                    # Item #14, bearish mirror -- see the bullish branch
+                    # above for why created_state (not orig_state) is right.
                     if not z.bullish and z.state in (0, 4) and z.eligible < 0 and k > z.trigger:
-                        z.eligible = k
-                        z.eligible_time = ev.at
+                        ok = z.created_state != 4 or z.zb > ev.price
+                        if not ok or (k > 0 and self.w[k - 1].h > z.zt):
+                            z.rejected = True
+                        else:
+                            z.eligible = k
+                            z.eligible_time = ev.at
             self.ei += 1
 
         # ---- OB lifecycle: IMPACT + STRAND + STRUCTURAL_BREACH ----

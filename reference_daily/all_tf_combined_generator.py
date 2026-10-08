@@ -79,16 +79,20 @@ SPLIT_MARKER = "var array<int> structX = array.new<int>()"
 # structural note -- a tracked category, not a new trading rule.
 INSTANT_STOP_THRESHOLD_PIPS = 2.0
 
-# Item #10 (2026-10-07/08): the premium/discount-region mechanism exists
-# in run_5m_bso_premium() but is DISABLED here (2026-10-08) pending
-# resolution -- see HANDOFF.md and DAILIES_LEARNING_LOG.txt's final
-# session entry. Two implementations have been tried and tested against
-# the same 19 known real pre-session-impacted 2025 zones; neither one
-# has yet been shown to change a single outcome relative to the plain
-# baseline, on this dataset, for a reason explained in full in the log.
-# Leave this False until that open question is resolved with the user --
-# do NOT flip it to True without first reading the handoff notes.
-ITEM10_ENABLED = False
+# Item #10 (2026-10-07/08): the premium/discount-region mechanism in
+# run_5m_bso_premium(). RE-ENABLED 2026-10-08 (user's own explicit
+# instruction) WITHOUT a proven real-world validating case on 2025 data --
+# three implementations were tried and none was shown to change an
+# outcome on the 19 known pre-session-impacted 2025 zones (full history
+# in DAILIES_LEARNING_LOG.txt). Per the user's instruction, every trade
+# this mechanism touches now carries a diagnostic `item10_note` in its
+# structural_notes -- a direct, computed comparison against what the
+# ordinary mechanism alone would have produced for that same zone -- so
+# every real case across the full 2008-2026 backtest is visible and
+# auditable, not silently trusted. Treat this as an EXPERIMENTAL, watched
+# mechanism, not a settled fix, until real cases accumulate across the
+# wider dataset.
+ITEM10_ENABLED = True
 
 # Item #10's real gate (2026-10-08, user's own figure, open to adjustment):
 # the max acceptable SL size (pips) for a premium/discount-region entry
@@ -2107,6 +2111,42 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
                                        h4_bars=h4_bars_for_note, h4_bar_starts=h4_bar_starts_for_note)
             res1["attempt"] = 1
             attempts = [res1]
+            # DIAGNOSTIC NOTE (2026-10-08, user-requested): since item #10
+            # is being re-enabled without a proven real-world validating
+            # case yet, compute what the ORDINARY mechanism alone would
+            # have produced for this SAME zone (its own real baseline
+            # search, from window_start) purely for comparison -- NEVER
+            # used for the actual trade decision above, only recorded so
+            # every real case this mechanism touches is visible and
+            # auditable in the output, not silently trusted.
+            baseline_search_from = max(z.impact_time, window_start)
+            baseline_attempts = run_5m_chain(z, baseline_search_from, bar_starts5, events5_sorted, minutes, mt,
+                                              invalidated_at, eff_window_end, display_tz, watch_levels,
+                                              h4_bars=h4_bars_for_note, h4_bar_starts=h4_bar_starts_for_note)
+            b_first = baseline_attempts[0] if baseline_attempts else None
+            b_stage = b_first.get("stage") if b_first else "NO_ATTEMPT"
+            b_entered = b_first is not None and b_stage == "ENTERED"
+            r_entered = res1.get("stage") == "ENTERED"
+            if r_entered and b_entered:
+                if (res1.get("entry_time") == b_first.get("entry_time")
+                        and res1.get("entry_price") == b_first.get("entry_price")):
+                    item10_note = "no change vs ordinary mechanism (identical entry)"
+                else:
+                    item10_note = (f"CHANGE: ordinary would enter {b_first.get('entry_time')} "
+                                    f"@ {b_first.get('entry_price')} -> {b_first.get('result')}; "
+                                    f"item #10 entered {res1.get('entry_time')} @ {res1.get('entry_price')} "
+                                    f"-> {res1.get('result')}")
+            elif r_entered and not b_entered:
+                item10_note = (f"CHANGE: ordinary mechanism found no entry ({b_stage}); "
+                                f"item #10 entered {res1.get('entry_time')} @ {res1.get('entry_price')} "
+                                f"-> {res1.get('result')}")
+            elif not r_entered and b_entered:
+                item10_note = (f"CHANGE: ordinary mechanism would have entered {b_first.get('entry_time')} "
+                                f"@ {b_first.get('entry_price')} -> {b_first.get('result')}; "
+                                f"item #10 produced no entry here ({res1.get('stage')})")
+            else:
+                item10_note = f"no change vs ordinary mechanism (neither entered: item10={res1.get('stage')}, ordinary={b_stage})"
+            res1["item10_note"] = item10_note
             if res1.get("stage") == "ENTERED" and res1.get("result") == "SL":
                 exit_t1 = res1.get("exit_time")
                 if exit_t1 is not None and not (invalidated_at is not None and exit_t1 >= invalidated_at):
@@ -2134,7 +2174,8 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
                 ledger_rows.append(dict(row_base, stage=a.get("stage"), premium_mid=f"{mid:.5f}",
                                          invalidated_riyadh=riyadh(invalidated_at), invalidated_reason=reason or "",
                                          attempt=a.get("attempt"), resting_riyadh=riyadh(a.get("resting_at")),
-                                         replacements=a.get("replacements")))
+                                         replacements=a.get("replacements"),
+                                         item10_note=a.get("item10_note", "")))
                 continue
             trades_raw.append(dict(
                 tf=tf_tag, poi=poi, side="SELL" if sell else "BUY", zone_bottom=z.zb, zone_top=z.zt,
@@ -2146,7 +2187,7 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
                 mfe=a.get("mfe"), mae=a.get("mae"), watch_hits=a.get("watch_hits") or {},
                 instant_stop_pips=a.get("instant_stop_pips"), instant_stop=a.get("instant_stop", False),
                 prior_4h_level=a.get("prior_4h_level"), prior_4h_taken_at=a.get("prior_4h_taken_at"),
-                mechanism=a.get("mechanism", ""), premium_mark=a.get("mark"),
+                mechanism=a.get("mechanism", ""), premium_mark=a.get("mark"), item10_note=a.get("item10_note", ""),
                 pre_impact_swing_price=opp.price,
                 control_state_at_impact=row_base.get("control_state_at_impact", ""),
                 control_ceiling=row_base.get("control_ceiling_riyadh", ""),
@@ -2213,8 +2254,22 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
                          f"({first['prior_4h_level']:.5f}) at {riyadh(first['prior_4h_taken_at'])} RYD")
         # Note #4 (2026-10-07, item #10): flag any trade entered via the
         # new premium/discount-region mechanism (pre-session impact).
+        # (Correction 2026-10-08: briefly misread this as a key-name bug --
+        # "premium_mark" IS the right field here, trades_raw renames the
+        # attempt dict's own "mark" to "premium_mark" at construction time,
+        # a few lines below where this note is built from "first"/members.
+        # No bug; reverted that change.)
         if first.get("mechanism") == "PREMIUM_REGION":
-            notes.append(f"item #10 premium/discount-region mechanism (mark {first.get('premium_mark'):.5f})")
+            mk = first.get("premium_mark")
+            notes.append(f"item #10 premium/discount-region mechanism (mark {mk:.5f})" if mk is not None
+                         else "item #10 premium/discount-region mechanism")
+            # Diagnostic note (2026-10-08, user-requested): since item #10
+            # is being re-enabled without a proven real-world validating
+            # case, every trade it touches carries a direct comparison
+            # against what the ordinary mechanism alone would have done --
+            # see compute_5m_trades' own item10_note computation.
+            if first.get("item10_note"):
+                notes.append(first["item10_note"])
         structural_notes = "; ".join(notes)
 
         trades.append(dict(

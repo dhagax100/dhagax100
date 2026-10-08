@@ -51,7 +51,7 @@ INPUT_TZ = ZoneInfo("UTC")
 CLOSE_TZ = ZoneInfo("America/New_York")
 UTC = ZoneInfo("UTC")
 
-DEFAULT_CSV = _HERE.parent / "data" / "EURUSD_m1_BidAndAsk_2021-01-03_to_2026-09-30.csv"
+DEFAULT_CSV = _HERE.parent / "data" / "EURUSD_m1_BidAndAsk_2001-11-28_to_2026-09-30.csv"
 
 
 def disp(t):
