@@ -1922,6 +1922,16 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
                     continue
                 candidates.append((eng, eng_bar_starts, z, ptype, tf_tag))
 
+    # item #6 (2026-10-10): did this zone form off a bar where
+    # high_first() hit a genuine same-minute tie (a single 1-minute
+    # candle crossing BOTH the prior bar's high and low -- no tick data
+    # to say which side came first)? Flagged, never acted on -- see
+    # WeeklyCombinedEngine.ambiguous_tie_bars and high_first()'s own
+    # docstring for the full reasoning.
+    def zone_origin_is_ambiguous(eng, z):
+        origin_idx = z.candle if hasattr(z, "candle") else z.left
+        return origin_idx in getattr(eng, "ambiguous_tie_bars", ())
+
     trades_raw = []  # one dict per zone's own ENTERED attempt, pre-merge
     ledger_rows = []  # non-entered (skip/no-trade) rows go straight in, already string-formatted
     for eng, eng_bar_starts, z, ptype, tf_tag in candidates:
@@ -1936,7 +1946,8 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
                          sl_hit_riyadh="", tp_hit_riyadh="", risk_price="", r_pips="",
                          mfe_pips="", mae_pips="", result="", exit_riyadh="", r_multiple="",
                          sl_tp_conflict="", structural_notes="", h1_abandoned_riyadh="",
-                         control_state_at_impact="", control_ceiling_riyadh="")
+                         control_state_at_impact="", control_ceiling_riyadh="",
+                         ambiguous_tie_origin=zone_origin_is_ambiguous(eng, z))
 
         # Same-leg supersession (see mark_superseded_same_leg): a later
         # same-direction, unbroken-leg POI caps how much longer THIS zone
@@ -2188,6 +2199,7 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
                 instant_stop_pips=a.get("instant_stop_pips"), instant_stop=a.get("instant_stop", False),
                 prior_4h_level=a.get("prior_4h_level"), prior_4h_taken_at=a.get("prior_4h_taken_at"),
                 mechanism=a.get("mechanism", ""), premium_mark=a.get("mark"), item10_note=a.get("item10_note", ""),
+                ambiguous_tie_origin=row_base.get("ambiguous_tie_origin", False),
                 pre_impact_swing_price=opp.price,
                 control_state_at_impact=row_base.get("control_state_at_impact", ""),
                 control_ceiling=row_base.get("control_ceiling_riyadh", ""),
@@ -2270,6 +2282,14 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
             # see compute_5m_trades' own item10_note computation.
             if first.get("item10_note"):
                 notes.append(first["item10_note"])
+        # Note #5 (2026-10-10, item #6): this trade's zone formed off a
+        # bar whose swing order was a genuine OHLC tie -- no tick data to
+        # confirm which side was actually touched first, so the engine's
+        # heuristic (body direction) was used. Flagged for visibility,
+        # never changes the trade itself.
+        if any(m.get("ambiguous_tie_origin") for m in members):
+            notes.append("item #6: zone formed off an ambiguous same-minute candle "
+                         "(no tick data to confirm swing order)")
         structural_notes = "; ".join(notes)
 
         trades.append(dict(

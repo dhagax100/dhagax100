@@ -108,7 +108,8 @@ def build_engines(csv_path: Path, date_str: str, lead_months: int):
     tf_full_h4 = SimpleNamespace(
         ob_zones=list(h4_engine.ob_zones), rb_zones=list(h4_engine.rb_zones),
         fvg_zones=list(h4_engine.fvg_zones), vi_zones=list(h4_engine.vi_zones),
-        events=h4_engine.events, w=h4_engine.w)
+        events=h4_engine.events, w=h4_engine.w,
+        ambiguous_tie_bars=set(h4_engine.ambiguous_tie_bars))
     print(f"[{time.time()-t0:.1f}s] 4H engine built", file=sys.stderr)
 
     bars_h1 = dc.aggregate_hours(short_minutes, 1, CLOSE_TZ, 17, DISPLAY_TZ)
@@ -122,7 +123,8 @@ def build_engines(csv_path: Path, date_str: str, lead_months: int):
     tf_full_h1 = SimpleNamespace(
         ob_zones=list(h1_engine.ob_zones), rb_zones=list(h1_engine.rb_zones),
         fvg_zones=list(h1_engine.fvg_zones), vi_zones=list(h1_engine.vi_zones),
-        events=h1_engine.events, w=h1_engine.w)
+        events=h1_engine.events, w=h1_engine.w,
+        ambiguous_tie_bars=set(h1_engine.ambiguous_tie_bars))
     print(f"[{time.time()-t0:.1f}s] 1H engine built", file=sys.stderr)
 
     bars5 = dc.aggregate_minutes(short_minutes, 5)

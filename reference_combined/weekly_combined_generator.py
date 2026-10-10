@@ -144,6 +144,19 @@ class WeeklyCombinedEngine:
         self.ei = 0
         self.last_h = self.last_l = -1
 
+        # item #6 (2026-10-10): bars where high_first() hit a genuine
+        # same-minute tie -- a single 1-minute candle whose range crosses
+        # BOTH the prior bar's high and its low, so OHLC data alone cannot
+        # say which side was touched first (no tick data). Rare (1 case
+        # across ~23 years of H4 bars, 32 across 5 years of H1 bars, 0 in
+        # Daily bars, both real cases found so far landing on NFP-release
+        # or session-rollover minutes) but genuinely unresolvable, so
+        # rather than swap one guess for another, every such bar index is
+        # recorded here and later surfaced as a structural note on any
+        # trade whose decision passed through one -- see
+        # mark_ambiguous_tie_trades() in all_tf_combined_generator.py.
+        self.ambiguous_tie_bars: List[int] = []
+
         # ---- OB-specific state (mirrors WeeklyOBEngine) ----
         self.ob_zones: List["wob.Zone"] = []
         self.ob_active: List[int] = []
@@ -234,6 +247,10 @@ class WeeklyCombinedEngine:
         if hi and lo:
             if hi.t != lo.t:
                 return hi.t < lo.t
+            # item #6: genuine same-minute tie -- record it, then fall
+            # back to the body-direction heuristic (no better answer
+            # exists without tick data).
+            self.ambiguous_tie_bars.append(k)
             return hi.c < hi.o
         return wk.c < wk.o
 
