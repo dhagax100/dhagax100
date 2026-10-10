@@ -1390,7 +1390,8 @@ def control_ceiling(checkpoints: list, t0: "datetime", side: str, resource: str)
 def run_5m_bso(z, it, bar_starts5: list, events5_sorted: list, minutes, mt: list,
                invalidated_at, window_end, display_tz: ZoneInfo,
                watch_levels: list[tuple[str, float]] | None = None,
-               h4_bars: list | None = None, h4_bar_starts: list | None = None) -> dict:
+               h4_bars: list | None = None, h4_bar_starts: list | None = None,
+               origin_bars: list | None = None, origin_bar_starts: list | None = None) -> dict:
     """Ported from five_bso_engine.py's run_bso() -- a single attempt.
     Genuinely different from the previous "first swing after impact is
     the entry" rule: this races an entry CANDIDATE against replacement
@@ -1487,6 +1488,11 @@ def run_5m_bso(z, it, bar_starts5: list, events5_sorted: list, minutes, mt: list
 
     entry_price = current.price
     entry_time = entry_m.t
+    # item #5 (2026-10-10, tuning log): how far past the trigger level did
+    # the entry minute's own extreme push -- a trade that barely overshot
+    # (<=1 pip) then reversed straight to SL is a candidate optimization
+    # signal. Observational only, never changes entry/SL/TP.
+    entry_overshoot_pips = abs((entry_m.h if bull else entry_m.l) - entry_price) * 10000
 
     # SL anchor (2026-10-06, user-taught, caught on 2025-01-07 RB#115
     # attempt 1): the extreme since impact must be the real price
@@ -1521,7 +1527,9 @@ def run_5m_bso(z, it, bar_starts5: list, events5_sorted: list, minutes, mt: list
     tp_price = entry_price + 3 * risk if bull else entry_price - 3 * risk
 
     post = _post_entry_walk(bull, entry_time, entry_price, sl_price, tp_price, risk, minutes, mt,
-                             watch_levels, h4_bars, h4_bar_starts)
+                             watch_levels, h4_bars, h4_bar_starts,
+                             zb=z.zb, zt=z.zt, origin_bars=origin_bars, origin_bar_starts=origin_bar_starts)
+    post["entry_overshoot_pips"] = entry_overshoot_pips
 
     return dict(stage="ENTERED", resting_at=resting.at, replacements=replacements,
                 entry_time=entry_time, entry_price=entry_price, sl_price=sl_price,
@@ -1530,7 +1538,9 @@ def run_5m_bso(z, it, bar_starts5: list, events5_sorted: list, minutes, mt: list
 
 def _post_entry_walk(bull: bool, entry_time, entry_price: float, sl_price: float, tp_price: float, risk: float,
                       minutes, mt: list, watch_levels: list[tuple[str, float]] | None,
-                      h4_bars: list | None, h4_bar_starts: list | None) -> dict:
+                      h4_bars: list | None, h4_bar_starts: list | None,
+                      zb: float | None = None, zt: float | None = None,
+                      origin_bars: list | None = None, origin_bar_starts: list | None = None) -> dict:
     """Shared post-entry walk (2026-10-07 refactor, extracted verbatim
     from run_5m_bso so run_5m_bso_premium -- item #10's new mechanism --
     gets the IDENTICAL mfe/mae, watch_levels, item #11 prior-4H note, and
@@ -1594,15 +1604,33 @@ def _post_entry_walk(bull: bool, entry_time, entry_price: float, sl_price: float
     instant_stop_pips = risk * 10000
     instant_stop = (result == "SL") and (instant_stop_pips <= INSTANT_STOP_THRESHOLD_PIPS)
 
+    # item #4 (2026-10-10, tuning log): did the ORIGINATING POI's own
+    # timeframe candle (its zb/zt, whatever tf this zone is -- H4 or 1H)
+    # body-CLOSE back inside the zone after we entered? Observational
+    # only, never changes the trade -- a candidate future optimization
+    # signal the user wants mined from real data, not yet a filter.
+    body_close_in_poi_at = None
+    if zb is not None and zt is not None and origin_bars and origin_bar_starts:
+        first_bar_idx = bisect_right(origin_bar_starts, entry_time)
+        end_t = exit_time or (minutes[-1].t if minutes else entry_time)
+        for ob in origin_bars[first_bar_idx:]:
+            if ob.start > end_t:
+                break
+            if zb <= ob.c <= zt:
+                body_close_in_poi_at = ob.start
+                break
+
     return dict(result=result or "OPEN", exit_time=exit_time,
                 mfe=abs(mfe_price - entry_price), mae=abs(mae_price - entry_price), watch_hits=watch_hits,
                 instant_stop_pips=instant_stop_pips, instant_stop=instant_stop,
-                prior_4h_level=prior_4h_level, prior_4h_taken_at=watch_hits.get("prior_4h_extreme"))
+                prior_4h_level=prior_4h_level, prior_4h_taken_at=watch_hits.get("prior_4h_extreme"),
+                item4_body_close_in_poi_at=body_close_in_poi_at)
 
 
 def run_5m_bso_premium(z, impact_time: "datetime", events5_sorted: list, minutes, mt: list,
                         invalidated_at, window_end: "datetime", display_tz: ZoneInfo,
-                        h4_bars: list | None = None, h4_bar_starts: list | None = None) -> dict:
+                        h4_bars: list | None = None, h4_bar_starts: list | None = None,
+                        origin_bars: list | None = None, origin_bar_starts: list | None = None) -> dict:
     """Item #10 (2026-10-07, user-designed -- a genuinely NEW 5m entry
     mechanism, FIRST IMPLEMENTATION; full design discussion, every
     ambiguous-spec judgment call, and the Dec-5 validation are in
@@ -1763,6 +1791,7 @@ def run_5m_bso_premium(z, impact_time: "datetime", events5_sorted: list, minutes
 
     entry_price = armed.price
     entry_time = entry_m.t
+    entry_overshoot_pips = abs((entry_m.h if bull else entry_m.l) - entry_price) * 10000
     sl_price = _minutes_extreme(mt, minutes, z.impact_time, entry_time + timedelta(minutes=1), bull)
     if sl_price is None:
         return dict(stage="NO_SL_POOL", resting_at=resting_at, entry_time=entry_time,
@@ -1774,7 +1803,9 @@ def run_5m_bso_premium(z, impact_time: "datetime", events5_sorted: list, minutes
     tp_price = entry_price + 3 * risk if bull else entry_price - 3 * risk
 
     post = _post_entry_walk(bull, entry_time, entry_price, sl_price, tp_price, risk, minutes, mt,
-                             None, h4_bars, h4_bar_starts)
+                             None, h4_bars, h4_bar_starts,
+                             zb=z.zb, zt=z.zt, origin_bars=origin_bars, origin_bar_starts=origin_bar_starts)
+    post["entry_overshoot_pips"] = entry_overshoot_pips
 
     return dict(stage="ENTERED", mechanism="PREMIUM_REGION", mark=mark, resting_at=resting_at,
                 replacements=replacements, entry_time=entry_time, entry_price=entry_price, sl_price=sl_price,
@@ -1784,7 +1815,8 @@ def run_5m_bso_premium(z, impact_time: "datetime", events5_sorted: list, minutes
 def run_5m_chain(z, impact_time, bar_starts5: list, events5_sorted: list, minutes, mt: list,
                   invalidated_at, window_end, display_tz: ZoneInfo,
                   watch_levels: list[tuple[str, float]] | None = None,
-                  h4_bars: list | None = None, h4_bar_starts: list | None = None) -> list:
+                  h4_bars: list | None = None, h4_bar_starts: list | None = None,
+                  origin_bars: list | None = None, origin_bar_starts: list | None = None) -> list:
     """Ported from five_bso_engine.py's run_bso_chain() (SS27, "made
     universal per the user's explicit instruction"). After a plain SL,
     re-arm and search again from the SL's own exit time, as long as the
@@ -1800,7 +1832,8 @@ def run_5m_chain(z, impact_time, bar_starts5: list, events5_sorted: list, minute
     attempt_no = 1
     while True:
         res = run_5m_bso(z, search_from, bar_starts5, events5_sorted, minutes, mt, invalidated_at, window_end,
-                          display_tz, watch_levels, h4_bars=h4_bars, h4_bar_starts=h4_bar_starts)
+                          display_tz, watch_levels, h4_bars=h4_bars, h4_bar_starts=h4_bar_starts,
+                          origin_bars=origin_bars, origin_bar_starts=origin_bar_starts)
         entered = res.get("stage") == "ENTERED"
         if attempt_no == 1 or entered:
             res["attempt"] = attempt_no
@@ -2124,7 +2157,8 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
         if is_pre_session:
             res1 = run_5m_bso_premium(z, z.impact_time, events5_sorted, minutes, mt,
                                        invalidated_at, eff_window_end, display_tz,
-                                       h4_bars=h4_bars_for_note, h4_bar_starts=h4_bar_starts_for_note)
+                                       h4_bars=h4_bars_for_note, h4_bar_starts=h4_bar_starts_for_note,
+                                       origin_bars=eng.w, origin_bar_starts=eng_bar_starts)
             res1["attempt"] = 1
             attempts = [res1]
             # DIAGNOSTIC NOTE (2026-10-08, user-requested): since item #10
@@ -2138,7 +2172,8 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
             baseline_search_from = max(z.impact_time, window_start)
             baseline_attempts = run_5m_chain(z, baseline_search_from, bar_starts5, events5_sorted, minutes, mt,
                                               invalidated_at, eff_window_end, display_tz, watch_levels,
-                                              h4_bars=h4_bars_for_note, h4_bar_starts=h4_bar_starts_for_note)
+                                              h4_bars=h4_bars_for_note, h4_bar_starts=h4_bar_starts_for_note,
+                                              origin_bars=eng.w, origin_bar_starts=eng_bar_starts)
             b_first = baseline_attempts[0] if baseline_attempts else None
             b_stage = b_first.get("stage") if b_first else "NO_ATTEMPT"
             b_entered = b_first is not None and b_stage == "ENTERED"
@@ -2176,7 +2211,8 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
                     # attempt that never becomes a trade is not reported.
                     later = run_5m_chain(z, exit_t1, bar_starts5, events5_sorted, minutes, mt,
                                           invalidated_at, eff_window_end, display_tz, watch_levels,
-                                          h4_bars=h4_bars_for_note, h4_bar_starts=h4_bar_starts_for_note)
+                                          h4_bars=h4_bars_for_note, h4_bar_starts=h4_bar_starts_for_note,
+                                          origin_bars=eng.w, origin_bar_starts=eng_bar_starts)
                     for n, la in enumerate(la for la in later if la.get("stage") == "ENTERED"):
                         la["attempt"] = 2 + n
                         attempts.append(la)
@@ -2184,7 +2220,8 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
             search_from = max(z.impact_time, window_start)
             attempts = run_5m_chain(z, search_from, bar_starts5, events5_sorted, minutes, mt,
                                      invalidated_at, eff_window_end, display_tz, watch_levels,
-                                     h4_bars=h4_bars_for_note, h4_bar_starts=h4_bar_starts_for_note)
+                                     h4_bars=h4_bars_for_note, h4_bar_starts=h4_bar_starts_for_note,
+                                     origin_bars=eng.w, origin_bar_starts=eng_bar_starts)
         for a in attempts:
             if a.get("stage") != "ENTERED":
                 ledger_rows.append(dict(row_base, stage=a.get("stage"), premium_mid=f"{mid:.5f}",
@@ -2205,6 +2242,22 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
                 prior_4h_level=a.get("prior_4h_level"), prior_4h_taken_at=a.get("prior_4h_taken_at"),
                 mechanism=a.get("mechanism", ""), premium_mark=a.get("mark"), item10_note=a.get("item10_note", ""),
                 ambiguous_tie_origin=row_base.get("ambiguous_tie_origin", False),
+                entry_overshoot_pips=a.get("entry_overshoot_pips"),
+                item4_body_close_in_poi_at=a.get("item4_body_close_in_poi_at"),
+                # item #1 (2026-10-10, tuning log): a 1H trade taken on the
+                # OPPOSING side (CONTROL state BOTH -- the trend side would
+                # otherwise hold 1H alone) is flagged if it entered on a
+                # LATER calendar day than the zone's own impact. The
+                # user's proposed rule: 1H opposing trades should only be
+                # allowed on the impact day itself. Observational only --
+                # the trade is NOT rejected, just flagged for later
+                # filtering/analysis.
+                item1_would_reject=(
+                    tf_tag == "1H"
+                    and str(row_base.get("control_state_at_impact", "")).startswith("BOTH")
+                    and a["entry_time"].astimezone(display_tz).date()
+                        != z.impact_time.astimezone(display_tz).date()
+                ),
                 pre_impact_swing_price=opp.price,
                 control_state_at_impact=row_base.get("control_state_at_impact", ""),
                 control_ceiling=row_base.get("control_ceiling_riyadh", ""),
@@ -2295,6 +2348,24 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
         if any(m.get("ambiguous_tie_origin") for m in members):
             notes.append("item #6: zone formed off an ambiguous same-minute candle "
                          "(no tick data to confirm swing order)")
+        # Note #6 (2026-10-10, item #5): entry barely overshot the trigger
+        # level (<=1 pip) before the trade ultimately went to SL --
+        # candidate optimization signal, observational only.
+        overshoot = first.get("entry_overshoot_pips")
+        if overshoot is not None and overshoot <= 1.0 and result == "SL":
+            notes.append(f"item #5: entry overshot trigger by only {overshoot:.1f} pip(s) before SL")
+        # Note #7 (2026-10-10, item #4): did the originating POI's own
+        # timeframe candle body-close back inside the zone after entry --
+        # candidate optimization signal, observational only.
+        if first.get("item4_body_close_in_poi_at") is not None:
+            notes.append(f"item #4: POI body-closed back inside zone at "
+                         f"{riyadh(first['item4_body_close_in_poi_at'])} RYD after entry")
+        # Note #8 (2026-10-10, item #1): a 1H opposing-side trade entered
+        # on a LATER day than its zone's own impact -- under the user's
+        # proposed stricter rule, this trade would not have been taken.
+        if first.get("item1_would_reject"):
+            notes.append("item #1: would be rejected under 1H-opposing-impact-day-only rule "
+                         "(entered on a later day than impact)")
         structural_notes = "; ".join(notes)
 
         trades.append(dict(
