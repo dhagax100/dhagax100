@@ -1927,6 +1927,23 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
     control_checkpoints = (compute_control_timeline(d_zones_full, minutes, mt, display_tz, window_end)
                             if d_zones_full is not None else None)
 
+    # item #15 (2026-10-10, tuning log): every zone impact across the
+    # full Daily history, with its side -- used below to flag, for each
+    # ENTERED trade, whether an OPPOSING-side zone impacted during the
+    # trade's own lifetime while CONTROL was BOTH. Observational only
+    # (no BE-exit resimulation yet -- that's a bigger follow-up piece);
+    # this just surfaces exactly which trades qualify and when, so the
+    # user can do the counterfactual math from the CSV themselves.
+    all_zone_impacts = []
+    if d_zones_full is not None:
+        for zones in (d_zones_full.ob_zones, d_zones_full.rb_zones,
+                      d_zones_full.fvg_zones, d_zones_full.vi_zones):
+            for zz in zones:
+                if zz.impact_time is not None:
+                    all_zone_impacts.append((zz.impact_time, zz.bullish))
+        all_zone_impacts.sort(key=lambda p: p[0])
+    all_zone_impact_times = [p[0] for p in all_zone_impacts]
+
     # PDH/PDL wick-chain (2026-10-02, user-taught): replaces the plain
     # single-day sweep check for 1H abandonment -- a wick without a
     # body close carries the abandonment forward day after day instead
@@ -2093,7 +2110,46 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
         # begin with should never reach the opposing-swing/premium
         # checks that assume a real zone.
         if getattr(z, "rejected", False):
-            ledger_rows.append(dict(row_base, stage=getattr(z, "rejected_reason", "OPEN_INSIDE_ZONE")))
+            rejected_reason = getattr(z, "rejected_reason", "OPEN_INSIDE_ZONE")
+            # item #16 (2026-10-10, tuning log): the user has observed the
+            # "1H candle opens inside POI -> dead zone" rule looks wrong
+            # specifically for OB (not necessarily RB). Rather than guess,
+            # for every 1H OB/RB rejected THIS way, run the exact same
+            # opposing-swing/premium/entry search the zone would have
+            # gotten if it had NOT been rejected -- purely a side-channel
+            # "what would have happened" row, never a real trade, never
+            # affects the real result. Logged into the ledger under its
+            # own stage so it's distinguishable from real attempts.
+            if tf_tag == "1H" and ptype in ("OB", "RB") and rejected_reason == "OPEN_INSIDE_ZONE":
+                shadow_opp_kind = 1 if sell else 0
+                shadow_opp_events = [e for e in eng.events if e.kind == shadow_opp_kind
+                                      and eng.w[e.confirm].start <= z.impact_time]
+                if shadow_opp_events:
+                    shadow_opp = max(shadow_opp_events, key=lambda e: eng.w[e.confirm].start)
+                    shadow_mid = (z.protect_level + shadow_opp.price) / 2
+                    si0 = bisect_left(mt, eng.w[shadow_opp.confirm].start)
+                    si1 = bisect_left(mt, z.impact_time)
+                    shadow_reached = (si1 >= si0) and (
+                        (max(hi[si0:si1 + 1]) >= shadow_mid) if sell else (min(lo[si0:si1 + 1]) <= shadow_mid))
+                    if shadow_reached:
+                        shadow_search_from = max(z.impact_time, window_start)
+                        shadow_attempts = run_5m_chain(
+                            z, shadow_search_from, bar_starts5, events5_sorted, minutes, mt,
+                            None, eff_window_end, display_tz, None,
+                            h4_bars=h4_bars_for_note, h4_bar_starts=h4_bar_starts_for_note,
+                            origin_bars=eng.w, origin_bar_starts=eng_bar_starts)
+                        shadow_first = shadow_attempts[0] if shadow_attempts else None
+                        if shadow_first and shadow_first.get("stage") == "ENTERED":
+                            ledger_rows.append(dict(
+                                row_base, stage="ITEM16_SHADOW_WOULD_ENTER",
+                                entry_riyadh=riyadh(shadow_first["entry_time"]),
+                                entry_price=shadow_first["entry_price"], sl_price=shadow_first["sl_price"],
+                                tp_price=shadow_first["tp_price"], result=shadow_first["result"],
+                                exit_riyadh=riyadh(shadow_first.get("exit_time")),
+                                r_multiple=(3.0 if shadow_first["result"] == "TP"
+                                            else -1.0 if shadow_first["result"] == "SL" else ""),
+                            ))
+            ledger_rows.append(dict(row_base, stage=rejected_reason))
             continue
 
         # A zone carried in from a prior day (candidates now come from
@@ -2244,6 +2300,13 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
                 ambiguous_tie_origin=row_base.get("ambiguous_tie_origin", False),
                 entry_overshoot_pips=a.get("entry_overshoot_pips"),
                 item4_body_close_in_poi_at=a.get("item4_body_close_in_poi_at"),
+                # item #9 (2026-10-10, tuning log): did the PDH/PDL 1H
+                # abandonment rule actually restrict this zone's search
+                # window before it entered? Pure visibility -- how often
+                # does this rule bind in practice -- sequenced ahead of
+                # investigating whether to loosen it, per the user's own
+                # order (item #1 first, then item #9).
+                item9_h1_abandoned_riyadh=row_base.get("h1_abandoned_riyadh", ""),
                 # item #1 (2026-10-10, tuning log): a 1H trade taken on the
                 # OPPOSING side (CONTROL state BOTH -- the trend side would
                 # otherwise hold 1H alone) is flagged if it entered on a
@@ -2366,6 +2429,27 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
         if first.get("item1_would_reject"):
             notes.append("item #1: would be rejected under 1H-opposing-impact-day-only rule "
                          "(entered on a later day than impact)")
+        # Note #9 (2026-10-10, item #9): the PDH/PDL 1H abandonment rule
+        # actually restricted this trade's search window before it
+        # entered -- visibility only, how often this rule binds.
+        if first.get("item9_h1_abandoned_riyadh"):
+            notes.append(f"item #9: 1H abandonment rule restricted search window "
+                         f"(abandoned at {first['item9_h1_abandoned_riyadh']} RYD)")
+        # Note #10 (2026-10-10, item #15): did an OPPOSING-side zone
+        # impact during this trade's own lifetime while CONTROL was BOTH?
+        # Flagged only -- no BE-exit resimulation yet.
+        if all_zone_impact_times and control_checkpoints is not None:
+            seg_end = exit_t or minutes[-1].t
+            lo_i = bisect_right(all_zone_impact_times, first["entry_time"])
+            hi_i = bisect_right(all_zone_impact_times, seg_end)
+            our_bull = first["side"] == "BUY"
+            for imp_t, imp_bull in all_zone_impacts[lo_i:hi_i]:
+                if imp_bull != our_bull:
+                    c_state, _ = control_state_at(control_checkpoints, imp_t)
+                    if c_state == "BOTH":
+                        notes.append(f"item #15: opposing-side zone impacted at {riyadh(imp_t)} RYD "
+                                     f"while in this trade (CONTROL BOTH)")
+                        break
         structural_notes = "; ".join(notes)
 
         trades.append(dict(
