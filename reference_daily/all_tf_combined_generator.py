@@ -2120,7 +2120,18 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
             # "what would have happened" row, never a real trade, never
             # affects the real result. Logged into the ledger under its
             # own stage so it's distinguishable from real attempts.
-            if tf_tag == "1H" and ptype in ("OB", "RB") and rejected_reason == "OPEN_INSIDE_ZONE":
+            # PERFORMANCE FIX (2026-10-10): this block was running for
+            # EVERY rejected zone across the ENTIRE dataset's history on
+            # every single call (candidates come from full, unfiltered
+            # history -- only impact_time <= window_end is checked before
+            # this point, never a lower bound), turning a cheap per-day
+            # check into a full entry-search over years of ancient,
+            # irrelevant zones. Real cause of the 7000+s/month slowdown
+            # the user caught. Bounding to THIS call's own window, same
+            # as every real candidate effectively is by the time it
+            # reaches an entry search.
+            if (tf_tag == "1H" and ptype in ("OB", "RB") and rejected_reason == "OPEN_INSIDE_ZONE"
+                    and z.impact_time >= window_start):
                 shadow_opp_kind = 1 if sell else 0
                 shadow_opp_events = [e for e in eng.events if e.kind == shadow_opp_kind
                                       and eng.w[e.confirm].start <= z.impact_time]
