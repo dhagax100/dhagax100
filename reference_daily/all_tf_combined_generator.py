@@ -688,6 +688,11 @@ def build_pdh_pdl_chain(minutes, mt: list, side: str, display_tz: ZoneInfo,
     carry-in chain never gave it the chance)."""
     chain_days = {}
     active_level = None
+    if not minutes:
+        # No data at all in this window (e.g. a month beyond the CSV's
+        # actual coverage, such as Oct-Dec 2026 when the dataset ends
+        # Sep 30) -- nothing to chain, same as any other data-free month.
+        return chain_days
     cur = minutes[0].t.astimezone(display_tz).date()
     end_date = window_end.astimezone(display_tz).date()
     prev_date_str = None
