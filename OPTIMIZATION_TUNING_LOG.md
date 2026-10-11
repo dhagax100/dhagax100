@@ -36,7 +36,10 @@ optimization work (the 6-category 1H-A/B/C / 4H-A/B/C taxonomy discussed
 earlier this project). Sequencing TBD — may land inside that grouping work,
 or be tested standalone first.
 
-**Status:** logged
+**Status:** `coded`, `pushed` (2026-10-10, commit 86df8a3) — a shadow flag
+on any 1H opposing-side (CONTROL BOTH) trade that entered on a later
+calendar day than its zone's own impact. Observational only so far, no
+real net-R verdict computed yet from a full year's data.
 
 ---
 
@@ -77,7 +80,10 @@ before this can be coded.
 inside that same POI (post-entry) is believed to be a significant
 optimization signal — likely an early-warning / management rule.
 
-**Status:** logged
+**Status:** `coded`, `pushed` (2026-10-10, commit 86df8a3) — a shadow note
+when the originating POI's own timeframe candle body-closes back inside
+the zone after entry. 16 trades flagged in the 2025 full year, all 16 were
+losses (-16R combined) — a real, if small-sample, signal worth more data.
 
 ---
 
@@ -87,7 +93,18 @@ optimization signal — likely an early-warning / management rule.
 less, then go directly to SL with no favorable excursion. Identifying this
 pattern early (or filtering it out) could save a meaningful number of losses.
 
-**Status:** logged
+**Status:** `coded`, `pushed`, but the FIRST implementation (2026-10-10,
+commit 86df8a3) measured the wrong thing — entry-minute overshoot past the
+trigger level, not post-entry favorable excursion (MFE). Confirmed wrong
+by directly comparing TP and SL trades: both show the same tiny overshoot
+magnitude, so overshoot-at-entry is universal and meaningless as a signal,
+not a sign of trouble. User caught this. The REAL concept ("no favorable
+excursion before SL") needs MFE, not overshoot — `mfe_pips` is already
+computed internally but not yet in the trades CSV or checked properly.
+One real spot-check (Jan 2025, 10 trades): 1 trade had MFE <=1 pip before
+SL (the described pattern), 1 more at 1.2 pips (borderline). Full-year
+check not yet done. STATUS: concept confirmed real and distinct from what
+was coded; needs a corrected re-implementation before any net-R claim.
 
 ---
 
@@ -134,7 +151,11 @@ connects this to Note 1 (impact-day-only opposing 1H trades): sequencing is
 **Note 1 first**, collect data, THEN investigate free 1H trading in whichever
 direction currently controls.
 
-**Status:** logged — sequenced after Note 1
+**Status:** `coded`, `pushed` (2026-10-10, commit fad3942) — a visibility
+flag on any 1H trade whose search window was actually restricted by the
+PDH/PDL abandonment chain, with the abandon timestamp. 6 trades flagged
+in the 2025 full year. Pure visibility only — no net-R verdict yet,
+sequenced after item 1's own result per the user's instruction.
 
 ---
 
@@ -226,7 +247,11 @@ the opposite direction)? Open question: should this apply always in BOTH
 state, or only specifically when we are in the trade AGAINST the prevailing
 trend and price hits a setup FOR the trend-aligned side?
 
-**Status:** logged
+**Status:** `coded`, `pushed` (2026-10-10, commit fad3942) — flags an
+entered trade when an opposing-side zone impacted during its own lifetime
+while CONTROL was BOTH. Only 1 trade flagged in the 2025 full year — too
+rare so far to conclude anything. No BE-exit resimulation yet (a bigger
+follow-up piece); this only flags which trades qualify and when.
 
 ---
 
@@ -239,7 +264,11 @@ collect data for BOTH 1H OBs and 1H RBs under this "open-inside-POI" rule,
 expecting OBs specifically to show good results if the rule is relaxed or
 removed for them.
 
-**Status:** logged
+**Status:** `coded`, `pushed` (2026-10-10, commit d4151d1) — for every 1H
+OB/RB rejected by this rule, runs the same opposing-swing/premium/entry
+search it would have gotten if not rejected, logged as a separate
+ITEM16_SHADOW_WOULD_ENTER ledger row. Never a real trade, never affects
+the real result. Not yet analyzed from a full year's run.
 
 ---
 

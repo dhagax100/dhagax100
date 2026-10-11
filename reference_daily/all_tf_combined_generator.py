@@ -2473,6 +2473,7 @@ def compute_5m_trades(h4_engine, h1_engine, e5, minutes, window_start, window_en
             instant_stop_pips=first.get("instant_stop_pips"), instant_stop=bool(first.get("instant_stop")),
             prior_4h_taken_at=first.get("prior_4h_taken_at"),
             mechanism=first.get("mechanism", ""),
+            entry_overshoot_pips=first.get("entry_overshoot_pips"),
         ))
 
         ledger_rows.append(dict(
