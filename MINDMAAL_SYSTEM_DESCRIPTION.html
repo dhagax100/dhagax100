@@ -1,0 +1,287 @@
+<title>MindMaal System Description</title>
+<style>
+/* layout: a single-column reference document -- overview, shared mechanics defined once, then all 8 grades as consistent spec cards, then a comparison table */
+:root{
+  --bg:#f6f4ef; --panel:#ffffff; --ink:#1b2430; --sub:#5a6072; --line:#e1dcd0;
+  --up:#1f8a5f; --down:#c4432f; --accent:#d98b2b; --fav:#2f6fed; --opp:#b06bd6;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#13161c; --panel:#1b1f29; --ink:#eceef3; --sub:#9aa1b4; --line:#2a2f3b;
+    --up:#3fc987; --down:#e2695a; --accent:#e7a94c; --fav:#6ea2ff; --opp:#d59bf0; color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#13161c; --panel:#1b1f29; --ink:#eceef3; --sub:#9aa1b4; --line:#2a2f3b;
+  --up:#3fc987; --down:#e2695a; --accent:#e7a94c; --fav:#6ea2ff; --opp:#d59bf0; color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{background:var(--bg); color:var(--ink); font-family:"Source Sans 3",system-ui,sans-serif; margin:0; padding-inline:18px; padding-block:30px 70px;}
+.wrap{max-width:860px; margin-inline:auto;}
+h1{font-family:"Fraunces",Georgia,serif; font-weight:600; font-size:clamp(1.7rem,4vw,2.3rem); margin:0 0 4px; text-wrap:balance;}
+.subtitle{color:var(--sub); font-size:1rem; margin:0 0 30px; max-width:68ch; line-height:1.55;}
+h2{font-family:"Fraunces",Georgia,serif; font-weight:600; font-size:1.4rem; margin:44px 0 12px; padding-top:10px; border-top:1px solid var(--line);}
+h3{font-size:1.05rem; font-weight:700; margin:22px 0 6px;}
+p{line-height:1.65; margin:0 0 12px; max-width:70ch;}
+ul,ol{line-height:1.65; margin:0 0 14px; padding-left:22px;}
+li{margin-bottom:4px;}
+b{font-weight:700}
+.panel{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:18px 20px; margin:14px 0;}
+code{font-family:"JetBrains Mono",monospace; font-size:.88em; background:color-mix(in srgb, var(--ink) 8%, transparent); padding:1px 5px; border-radius:4px;}
+table{border-collapse:collapse; width:100%; font-size:.86rem; margin:14px 0;}
+th,td{border:1px solid var(--line); padding:7px 9px; text-align:left; vertical-align:top;}
+th{background:color-mix(in srgb, var(--ink) 5%, transparent); font-weight:700;}
+.gradecard{background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:20px 22px; margin:18px 0;}
+.gradecard h3{margin-top:0; font-family:"JetBrains Mono",monospace; font-size:1.2rem; display:inline-block; margin-right:10px;}
+.tag{display:inline-block; font-size:.72rem; letter-spacing:.03em; text-transform:uppercase; padding:3px 9px; border-radius:999px; border:1px solid var(--line); color:var(--sub); vertical-align:middle;}
+.tag.fav{color:var(--fav); border-color:var(--fav); background:color-mix(in srgb, var(--fav) 12%, transparent);}
+.tag.opp{color:var(--opp); border-color:var(--opp); background:color-mix(in srgb, var(--opp) 12%, transparent);}
+.desc{color:var(--sub); font-size:.92rem; margin:2px 0 14px;}
+.toc{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px 20px;}
+.toc a{color:var(--ink); text-decoration:none; font-size:.92rem;}
+.toc a:hover{color:var(--accent);}
+.toc ul{columns:2; column-gap:24px; margin:0; padding-left:18px;}
+@media (max-width:560px){ .toc ul{columns:1;} }
+footer{color:var(--sub); font-size:.84rem; margin-top:60px; border-top:1px solid var(--line); padding-top:18px;}
+</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Source+Sans+3:wght@400;600;700&family=JetBrains+Mono:wght@500&display=swap">
+
+<div class="wrap">
+<h1>MindMaal (MM) -- System Description</h1>
+<p class="subtitle">The full specification of the MindMaal grading system: eight trade grades built on the same core mechanics already proven in Dhagax Dailies, organized by trend alignment, timing, and setup timeframe.</p>
+
+<div class="toc">
+<ul>
+<li><a href="#overview">1. What MindMaal is</a></li>
+<li><a href="#mechanics">2. Shared mechanics (apply to every grade)</a></li>
+<li><a href="#grading">3. The grading logic</a></li>
+<li><a href="#aplus">4. Grade A+</a></li>
+<li><a href="#a">5. Grade A</a></li>
+<li><a href="#bplus">6. Grade B+</a></li>
+<li><a href="#b">7. Grade B</a></li>
+<li><a href="#ab">8. Grade AB</a></li>
+<li><a href="#ba">9. Grade BA</a></li>
+<li><a href="#abplus">10. Grade AB+</a></li>
+<li><a href="#baplus">11. Grade BA+</a></li>
+<li><a href="#table">12. Quick-reference table</a></li>
+<li><a href="#risk">13. Risk policy</a></li>
+<li><a href="#recording">14. What must be recorded</a></li>
+<li><a href="#dataintegrity">15. Data handling</a></li>
+<li><a href="#fixinglist">16. The Fixing List</a></li>
+<li><a href="#optlist">17. The Optimization List</a></li>
+</ul>
+</div>
+
+<h2 id="overview">1. What MindMaal is</h2>
+<p>MindMaal (MM) is not a new engine -- it is a grading layer built on top of the same core mechanics already proven in Dhagax Dailies: daily trend and bias, point-of-interest (POI) zones (order blocks, fair value gaps, rejection blocks), the session liquidity sweep rule, the premium/discount 50% gate, and the 5-minute stop-entry trigger. Dhagax Dailies treated a trade as pass/fail -- it either qualified under CONTROL or it didn't. MindMaal keeps every one of those building blocks and adds a classification layer on top: every real trade is graded into one of eight tiers based on three independent properties --</p>
+<ul>
+<li><b>Trend alignment</b> -- is the trade with the daily trend, or against it?</li>
+<li><b>Timing</b> -- is it taken on the day price actually impacts the zone, or on a later continuation day?</li>
+<li><b>Setup timeframe</b> -- is the reacting POI on the 1-hour chart, or the 4-hour chart?</li>
+</ul>
+<p>These three properties combine into eight grades: <b>A+, A, B+, B, AB, BA, AB+, BA+</b>. For now, every grade is risked identically -- grading is a classification and analysis layer only. Differentiated position sizing per grade is a future decision, made only once backtest data earns it (see Section 13).</p>
+
+<h2 id="mechanics">2. Shared mechanics (apply to every grade)</h2>
+<p>These five mechanics are identical across all eight grades. They are defined once here rather than repeated in every grade's own section.</p>
+
+<h3>2.1 Session liquidity sweep</h3>
+<p>No entry can trigger in London or New York until the prior session's own liquidity has already been taken:</p>
+<ul>
+<li>Trading in <b>London</b> requires the <b>Asian session's</b> high (for a sell) or low (for a buy) to already be swept.</li>
+<li>Trading in <b>New York</b> requires <b>London's own</b> high/low to already be swept -- unless the Asian sweep already happened at any point before London's own close, in which case that one sweep covers both sessions.</li>
+</ul>
+<p>In the grade specs below this appears as "AL/LL taken" (Asian Low / London Low, for a buy) or "AH/LH taken" (for a sell).</p>
+
+<h3>2.2 Premium/discount 50% gate</h3>
+<p>Before any entry search begins, price must reach the midpoint between the setup zone's protect level and the last opposing confirmed swing -- a buy reacts from the discount half, a sell from the premium half. This check applies to the setup-timeframe POI in every grade, whether or not the grade requires the trade to happen on the daily impact day.</p>
+
+<h3>2.3 5-minute stop-entry trigger</h3>
+<p>Once the setup POI has reacted and premium/discount is satisfied, a 5-minute swing high (for a sell) or swing low (for a buy) candidate is marked as the stop-entry trigger level. The trade is only live once price exceeds that level and the order fills.</p>
+
+<h3>2.4 Session timing window</h3>
+<p>Entry can only trigger in the <b>first two hours</b> of London or New York:</p>
+<table>
+<tr><th>Session</th><th>Summer (DST)</th><th>Winter</th></tr>
+<tr><td>London</td><td>10:00-12:00 Riyadh</td><td>11:00-13:00 Riyadh</td></tr>
+<tr><td>New York</td><td>15:00-17:00 Riyadh</td><td>16:00-18:00 Riyadh</td></tr>
+</table>
+
+<h3>2.5 Structural invalidation</h3>
+<p>A zone dies the moment a candle's <b>body</b> closes through it, or its anchor level breaks -- at any point before entry, not only at formation. A dead zone cannot be traded regardless of which grade it would otherwise qualify for.</p>
+
+<h3>2.6 SL placement (mandatory, carried from Dhagax Dailies item 1)</h3>
+<p>SL always sits behind the <b>raw 1-minute price extreme</b> from the zone's real impact_time through the entry minute -- never a confirmed 5-minute swing pivot, and never clamped to the trading-window open. This must be the only SL logic in MM's code, for every grade.</p>
+
+<h3>2.7 Pre-session premium/discount marking (mandatory, carried from Dhagax Dailies items 9/10/11b)</h3>
+<p>If a daily POI is impacted before the trading session opens, and the pre-session move is <b>bigger than 15 pips</b>, standard same-session premium/discount does not apply. Instead:</p>
+<ul>
+<li>Mark the extreme price reached pre-session as the premium (sell) / discount (buy) boundary.</li>
+<li>Wait for price to return into that marked area before searching for entry.</li>
+<li>If price keeps moving further away before returning, <b>the mark keeps extending</b> to the new extreme -- it is never fixed at the first pre-session reading.</li>
+<li>While waiting, watch for two separate invalidation checks running in parallel: the ordinary <b>anchor break</b> (Section 2.5), and a distinct <b>swing-confirmation violation</b> -- if price takes out the previous 1H candle's low/high (mirrored for a 4H setup) before entry, the setup is discredited outright, not just noted.</li>
+</ul>
+<p>Below the 15-pip threshold, this mechanism does not engage -- treat the impact as an ordinary same-session reaction.</p>
+
+<h3>2.8 Aggressive-POI eligibility (mandatory, carried from Dhagax Dailies item 14)</h3>
+<p>An aggressive RB and an aggressive OB use <b>identical eligibility logic</b> -- same trigger conditions, same impact rules, on both the 1H and 4H setup timeframes. There is no separate rule for one zone type over the other.</p>
+
+<h3>2.9 Backtest window padding (mandatory, carried from Dhagax Dailies item 22)</h3>
+<p>Every MM backtest run extends its data window past the period's own end date so trailing open trades can actually resolve, instead of being reported as "still open" purely because the run cut off too early.</p>
+
+<h2 id="grading">3. The grading logic</h2>
+<p>Three properties, each binary, determine a grade:</p>
+<table>
+<tr><th>Property</th><th>Option A</th><th>Option B</th></tr>
+<tr><td>Trend alignment</td><td>With-trend (in-favor POI)</td><td>Counter-trend (opposing POI)</td></tr>
+<tr><td>Timing</td><td>Impact day only</td><td>Continuation day (price action, not impact)</td></tr>
+<tr><td>Setup timeframe</td><td>1-hour</td><td>4-hour</td></tr>
+</table>
+<p>A+ and A are the 1-hour, impact-day grades (with-trend and counter-trend respectively). B+ and B are their 4-hour, continuation-day counterparts. AB and BA are the 4-hour versions of A+ and A -- either the impact day itself on 4H, or a next-day continuation confirmed by a <b>wick</b> close rather than a body close. AB+ and BA+ are not separately designed grades -- they are the natural overlap case where a single 4H trade satisfies both its B-side condition (body close) and its A-side condition (wick close) on the same day, discovered while working through the spec rather than invented in advance.</p>
+
+<h2 id="aplus">4. Grade A+</h2>
+<div class="gradecard">
+<h3>A+</h3><span class="tag fav">with-trend</span><span class="tag">1H setup</span><span class="tag">impact day only</span>
+<p class="desc">The cleanest grade: trend, timeframe, and timing all aligned in the trade's favor.</p>
+<ul>
+<li><b>Trend:</b> daily market must be trending; we only trade with it (buy in an uptrend, sell in a downtrend).</li>
+<li><b>Daily POI:</b> any in-favor POI type -- OB, FVG, or RB -- impacted <b>today</b> (the impact day itself, no later).</li>
+<li><b>Daily liquidity:</b> PDL (buy) or PDH (sell) must be taken.</li>
+<li><b>Structure confirmation:</b> either a 1H MSS shift into the trade's direction (price came into the buying POI from a 1H downtrend and shifted up), <b>or</b> an aggressive 1H POI formed on the last pullback leg of the opposing 1H trend.</li>
+<li><b>Premium/discount:</b> price must react to the 1H POI from the discount (buy) or premium (sell) half.</li>
+<li><b>Entry:</b> 5m stop-entry trigger, fired in the session's first two hours only.</li>
+<li><b>Permitted:</b> the daily POI can be any of OB/FVG/RB as long as in-favor. The 1H POI can be in-favor or aggressive. An impact candle opening <i>inside</i> the 1H POI is allowed -- but must be flagged in the backtest output, not treated as a disqualifying bug.</li>
+</ul>
+</div>
+
+<h2 id="a">5. Grade A</h2>
+<div class="gradecard">
+<h3>A</h3><span class="tag opp">counter-trend</span><span class="tag">1H setup</span><span class="tag">impact day or later</span>
+<p class="desc">Everything A+ requires, except the daily POI is opposing (counter-trend) and the trade doesn't have to happen on the impact day itself.</p>
+<ul>
+<li><b>Trend:</b> daily market trending one way; we trade against it, from the opposing POI (aggressive or already-formed).</li>
+<li><b>Timing:</b> impact day, or any later day, as long as the daily POI has not been structurally violated (Section 2.5) and PDL/PDH is still taken on the actual day of the trade.</li>
+<li>All other mechanics (1H structure confirmation, premium/discount, entry, impact-inside-zone allowance) are identical to A+.</li>
+</ul>
+</div>
+
+<h2 id="bplus">6. Grade B+</h2>
+<div class="gradecard">
+<h3>B+</h3><span class="tag fav">with-trend</span><span class="tag">4H setup</span><span class="tag">continuation day</span>
+<p class="desc">Trades trend continuation without requiring the daily impact day or a daily POI reaction at all.</p>
+<ul>
+<li><b>Trend:</b> with-trend only.</li>
+<li><b>Continuation day:</b> yesterday's candle <b>body</b> closed beyond the day before yesterday's candle, in the trend's direction. This is the day's qualifying condition -- it replaces the impact-day/PDL requirement entirely.</li>
+<li><b>Setup:</b> a 4H POI, in-favor or aggressive (same logic as 1H's structure confirmation, one timeframe up).</li>
+<li><b>Premium/discount:</b> still required on the 4H POI, just not tied to a specific impact day -- in a strong trend, price can run for days before the check is satisfied.</li>
+<li>Session liquidity, timing window, and 5m entry mechanics unchanged from A+/A.</li>
+<li>Impact candle opening inside the 4H POI is allowed, and must be recorded.</li>
+</ul>
+</div>
+
+<h2 id="b">7. Grade B</h2>
+<div class="gradecard">
+<h3>B</h3><span class="tag opp">counter-trend</span><span class="tag">4H setup</span><span class="tag">continuation (reversal) day</span>
+<p class="desc">B+'s mirror: a reversal signal against the prevailing daily trend.</p>
+<ul>
+<li><b>Continuation day:</b> yesterday's body closed <i>against</i> the overall daily trend relative to the day before -- e.g. market is up, but yesterday closed below the day before yesterday.</li>
+<li><b>Setup:</b> 4H opposing POI, selling into an uptrend or buying into a downtrend.</li>
+<li>All other mechanics identical to B+.</li>
+</ul>
+</div>
+
+<h2 id="ab">8. Grade AB</h2>
+<div class="gradecard">
+<h3>AB</h3><span class="tag fav">with-trend</span><span class="tag">4H setup</span><span class="tag">two paths</span>
+<p class="desc">The 4H version of A+. Reached by either of two paths.</p>
+<ul>
+<li><b>Path 1 -- same-day:</b> A+'s full criteria, but the setup is 4H instead of 1H.</li>
+<li><b>Path 2 -- next-day continuation:</b> an A+ zone existed yesterday (whether or not it was actually traded), survived the day structurally alive, and yesterday's candle <b>wick</b> (not necessarily the body) closed beyond the day before yesterday's candle. Today, that same direction is traded with a 4H setup.</li>
+</ul>
+</div>
+
+<h2 id="ba">9. Grade BA</h2>
+<div class="gradecard">
+<h3>BA</h3><span class="tag opp">counter-trend</span><span class="tag">4H setup</span><span class="tag">two paths</span>
+<p class="desc">The 4H version of A -- same relationship AB has to A+.</p>
+<ul>
+<li><b>Path 1 -- same-day:</b> A's full criteria (counter-trend, opposing POI, PDL/PDH taken today), 4H setup instead of 1H.</li>
+<li><b>Path 2 -- next-day continuation:</b> an A zone from yesterday survived, with a wick-close beyond the day before -- traded today with a 4H setup.</li>
+</ul>
+</div>
+
+<h2 id="abplus">10. Grade AB+</h2>
+<div class="gradecard">
+<h3>AB+</h3><span class="tag fav">with-trend</span><span class="tag">4H setup</span><span class="tag">overlap</span>
+<p class="desc">The case where B+ and AB are both true on the same day for the same trade.</p>
+<ul>
+<li>Yesterday's candle <b>body</b> closed beyond the day before (B+'s own trigger).</li>
+<li><b>And</b> a surviving A+ zone from yesterday also had its wick close beyond the day before (AB's own trigger) -- since a body-close-beyond always implies the wick reached at least as far, this overlap happens whenever an A+ zone happens to exist on a B+-qualifying day.</li>
+<li>Traded today with a 4H setup, same mechanics as both parent grades.</li>
+</ul>
+</div>
+
+<h2 id="baplus">11. Grade BA+</h2>
+<div class="gradecard">
+<h3>BA+</h3><span class="tag opp">counter-trend</span><span class="tag">4H setup</span><span class="tag">overlap</span>
+<p class="desc">BA+'s counter-trend mirror: B and BA both true on the same day.</p>
+<ul>
+<li>Yesterday's body closed against the overall daily trend (B's trigger).</li>
+<li><b>And</b> a surviving A zone from yesterday also had its wick close beyond the day before (BA's trigger).</li>
+<li>Traded today with a 4H setup.</li>
+</ul>
+</div>
+
+<h2 id="table">12. Quick-reference table</h2>
+<table>
+<tr><th>Grade</th><th>Trend</th><th>Timeframe</th><th>Timing trigger</th><th>Requires impact day</th></tr>
+<tr><td><b>A+</b></td><td>With-trend</td><td>1H</td><td>Daily POI impact</td><td>Yes, today only</td></tr>
+<tr><td><b>A</b></td><td>Counter-trend</td><td>1H</td><td>Daily POI impact</td><td>Impact day or any later day (zone alive)</td></tr>
+<tr><td><b>B+</b></td><td>With-trend</td><td>4H</td><td>Body-close continuation</td><td>No</td></tr>
+<tr><td><b>B</b></td><td>Counter-trend</td><td>4H</td><td>Body-close reversal</td><td>No</td></tr>
+<tr><td><b>AB</b></td><td>With-trend</td><td>4H</td><td>Impact day, or wick-close continuation</td><td>Path-dependent</td></tr>
+<tr><td><b>BA</b></td><td>Counter-trend</td><td>4H</td><td>Impact day, or wick-close continuation</td><td>Path-dependent</td></tr>
+<tr><td><b>AB+</b></td><td>With-trend</td><td>4H</td><td>Body-close AND wick-close both true</td><td>No</td></tr>
+<tr><td><b>BA+</b></td><td>Counter-trend</td><td>4H</td><td>Body-close AND wick-close both true</td><td>No</td></tr>
+</table>
+
+<h2 id="risk">13. Risk policy</h2>
+<p>Every grade is risked identically for now. No grade gets a larger or smaller position size, and no grade is prioritized over another in execution. Differentiated risk per grade is only introduced later, and only once enough backtest data across all eight grades shows a real, evidenced performance difference that justifies it -- not before.</p>
+
+<h2 id="recording">14. What must be recorded</h2>
+<p>The backtest output must flag, for every trade, whether the entry's impact candle opened <b>inside</b> its setup-timeframe POI (1H for A+/A, 4H for everything else). This is a permitted condition, not a bug or a disqualification -- it must simply be visible in the output so it can be reviewed later.</p>
+<p>Two further fields are <b>mandatory</b> in every MM trade row, carried from Dhagax Dailies item 25, with no exceptions:</p>
+<ul>
+<li><b>MFE &le; 1 pip flag</b> -- any trade where price never moved more than 1 pip in our favor before resolving.</li>
+<li><b>SL overshoot &le; 1 pip flag</b> -- any losing trade where price exceeded the SL level by 1 pip or less.</li>
+</ul>
+<p>Both must exist as real columns from MM's very first run, not added retroactively.</p>
+
+<h2 id="dataintegrity">15. Data handling (mandatory, carried from Dhagax Dailies item 4)</h2>
+<p>Raw price data must not be stripped at the week-open/week-close boundary in a way that discards real trading. The week closes exactly where the Daily engine's own NY-anchored "Friday" candle closes (01:00 Riyadh Saturday winter / 00:00 summer) -- real tick data genuinely continues into that window and must be kept, not blanket-deleted the way a naive weekend filter would.</p>
+
+<h2 id="fixinglist">16. The Fixing List -- carried from the 27-item Dhagax Dailies fix review</h2>
+<p>Pulled from the original 27-item Dhagax Dailies fix list, reviewed one by one for MM's first run. Everything else on that list was either specific to Dhagax Dailies' CONTROL state machine (which MM does not use) or an unverified historical claim with no settled fix -- neither carries over. These six are mandatory, must be in the actual code, and must each surface in their relevant place (execution logic or output columns), not just this document:</p>
+<table>
+<tr><th>#</th><th>What</th><th>Where it lives</th></tr>
+<tr><td>1</td><td>SL placement: raw 1-minute extreme since impact_time</td><td>Execution -- Section 2.6</td>
+<tr><td>4</td><td>Week-close data boundary not stripped</td><td>Data handling -- Section 15</td></tr>
+<tr><td>9/10/11b</td><td>Pre-session premium/discount marking (15-pip threshold, extending mark, swing-confirmation watch)</td><td>Execution -- Section 2.7</td></tr>
+<tr><td>14</td><td>Aggressive RB = aggressive OB eligibility</td><td>Execution -- Section 2.8</td></tr>
+<tr><td>22</td><td>Backtest window padding past period end</td><td>Execution/runner -- Section 2.9</td></tr>
+<tr><td>25</td><td>Mandatory MFE&le;1pip and SL-overshoot&le;1pip output flags</td><td>Output -- Section 14</td></tr>
+</table>
+
+<h2 id="optlist">17. The Optimization List -- carried from the 20-item Dhagax Dailies tuning log</h2>
+<p>Pulled from the 20-item Dhagax Dailies optimization/tuning log, reviewed one by one for MM. Most items were either CONTROL-specific (not applicable), already superseded by a cleaner MM rule, or pure post-hoc analysis tasks needing no new output field (computable later from timestamps/prices already mandatory). These five require a <b>new, dedicated output flag</b> in every MM trade row:</p>
+<table>
+<tr><th>#</th><th>What</th><th>Recorded as</th></tr>
+<tr><td>2</td><td>Post-entry: price exceeds the setup's originating swing point (for a future BE-rule dataset: loss-anyway vs. would-be-saved vs. winner-cut-short)</td><td>New output flag</td></tr>
+<tr><td>4</td><td>Post-entry: originating POI's own setup-timeframe candle body-closes back inside the zone</td><td>New output flag</td></tr>
+<tr><td>10</td><td>In-favor OB/RB eligibility path: quick (any post-formation return candle) or formal (prior candle's high/low taken) -- whichever happens first, plus timeframe (1H/4H) and zone type (OB/RB)</td><td>New output flag, 4 fields</td></tr>
+<tr><td>12</td><td>Multiple trades off the same POI within the same session/hour/day (clustering risk)</td><td>New output flag</td></tr>
+<tr><td>13</td><td>Re-entry on the same POI after it already hit TP once (now allowed, must be visible)</td><td>New output flag</td></tr>
+</table>
+<p>Items 8, 14, 18, and 20 need no new field -- they're answerable directly from entry/exit timestamps and prices already required elsewhere in this document, once MM has real trade data to analyze. Items 3, 7, 17, and 19 are explicitly deferred to a later stage. Items 1, 9, 11, 15, 16 do not apply to MM (CONTROL-specific or already superseded by an MM rule defined earlier in this document). Item 6 is skipped for now (OHLC-granularity limitation, same as Fixing List item 27).</p>
+
+<footer>MindMaal (MM) -- branch <code>MindMaal</code>, built on the Dhagax Dailies engine. This document reflects the system as specified through this session; it will be extended as further detail is defined.</footer>
+</div>
