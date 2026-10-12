@@ -210,10 +210,25 @@ class WeeklyCombinedEngine:
     # in weekly_ob_generator.py first, then re-copy here.
     # =====================================================================
 
-    def event_time(self, kind: int, k: int) -> Optional[datetime]:
+    def event_time(self, kind: int, k: int, swing: int = -1) -> Optional[datetime]:
+        """MM fix (2026-10-12, user-caught via real trade RB#416/OB#321,
+        2026-01-02): when the swing's own bar (`swing`) is the SAME bar as
+        the one confirming it (`k`), that bar's extreme (used as the
+        swing's price) is only final once the bar itself closes -- using
+        an earlier intra-bar minute as the confirmation time is look-ahead,
+        claiming a value the bar hadn't actually produced yet at that
+        clock time. Real case: candle 16's own low (1.17178) wasn't
+        reached until 16:54, but the old code dated its confirmation
+        16:23 (when a DIFFERENT condition -- breaking the prior bar's
+        high -- happened to be satisfied). Fix: for a same-bar swing,
+        confirmation time is the bar's own close, never earlier. Every
+        other case (the swing's bar is an earlier, already-closed bar --
+        the overwhelming majority) is completely unchanged."""
         if k <= 0:
             return None
         wk = self.w[k]
+        if swing == k:
+            return wk.end
         threshold = self.w[k - 1].l if kind == 0 else self.w[k - 1].h
         for m in self.m[wk.first:wk.last]:
             if (m.l < threshold) if kind == 0 else (m.h > threshold):
@@ -255,7 +270,7 @@ class WeeklyCombinedEngine:
         return wk.c < wk.o
 
     def add_event(self, confirm: int, kind: int, swing: int, price: float) -> None:
-        self.events.append(wob.Event(confirm, kind, swing, price, self.event_time(kind, confirm)))
+        self.events.append(wob.Event(confirm, kind, swing, price, self.event_time(kind, confirm, swing)))
         dest = self.sw_highs if kind == 0 else self.sw_lows
         if not dest or dest[-1] != swing:
             dest.append(swing)
@@ -1283,6 +1298,13 @@ class WeeklyCombinedEngine:
         previous_dual = n >= 2 and self.events[-1].kind != self.events[-2].kind and self.events[-1].confirm == self.events[-2].confirm == k - 1
         pairs = {(self.events[-1].kind, self.events[-1].swing), (self.events[-2].kind, self.events[-2].swing)} if previous_dual else set()
         before = len(self.events)
+
+        # MM note (2026-10-12): dual-break event firing reverted to
+        # original (both h_action/l_action fire normally, same as before)
+        # -- the polarity-based one-event suppression tried here was
+        # superseded by a more precise revocation mechanism, applied at
+        # swing_spent's own consumption point in structural_invalid_at(),
+        # not at event-firing time. See that function's own docstring.
 
         def h_action():
             if self.w[k].h > self.w[self.peak].h:

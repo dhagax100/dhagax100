@@ -891,12 +891,62 @@ def structural_invalid_at(z, it: "datetime", bars: list, bar_starts: list,
     # itself (or later) still counts.
     impact_bar_idx = max(0, bisect_right(bar_starts, it) - 1)
 
+    # swing_spent REVOCATION (2026-10-12, user-taught via real trade
+    # RB#351/OB#290, 2026-01-02 16:00 1H candle): a swing_spent trigger
+    # whose own swing bar is the SAME bar that confirms it (a dual-break/
+    # oscillating candle) can be a false alarm -- it only reflects where
+    # price happened to be at the mid-bar moment the opposing threshold
+    # got crossed, not the bar's own final, settled story. Real case:
+    # candle breaks the prior bar's low at :10 (impacting this zone),
+    # then breaks the prior bar's high at :23 (the swing_spent trigger,
+    # using a LOW price of whatever the bar's running low was at that
+    # moment) -- but the SAME candle then falls BELOW that running low
+    # again before closing, and closes bearish, confirming the bar's real
+    # story was down all along, not the brief high poke. Rule: if, after
+    # a same-bar swing_spent trigger, that bar's price later moves BEYOND
+    # the running extreme that was known at the trigger moment (not the
+    # bar's eventual true extreme -- the provisional one, known live, at
+    # that exact minute), AND the bar's own close ends up on that same
+    # (invalidating) side, the trigger is REVOKED -- treated as if it
+    # never happened. Otherwise it stands, but only confirmed once the
+    # bar actually CLOSES (never mid-bar -- the verdict isn't knowable
+    # until then either way). A swing confirmed on an EARLIER, already-
+    # closed bar (the overwhelming majority) is entirely unaffected --
+    # this only ever applies to swing==confirm (same-bar) cases.
+    def _swing_spent_effective_at(e):
+        if e.swing != e.confirm or not (0 <= e.swing < len(bars)):
+            return e.at
+        swing_bar = bars[e.swing]
+        if e.swing == 0:
+            return e.at
+        prior_bar = bars[e.swing - 1]
+        threshold = prior_bar.l if bull else prior_bar.h
+        idx0 = bisect_left(mt, swing_bar.start)
+        idx_end = bisect_left(mt, swing_bar.end)
+        trigger_idx = None
+        for i in range(idx0, idx_end):
+            m = minutes[i]
+            if (m.h > threshold) if bull else (m.l < threshold):
+                trigger_idx = i
+                break
+        if trigger_idx is None:
+            return e.at
+        prov_extreme = (min(m.l for m in minutes[idx0:trigger_idx + 1]) if bull
+                         else max(m.h for m in minutes[idx0:trigger_idx + 1]))
+        rest = minutes[trigger_idx + 1:idx_end]
+        extended_further = any((m.l < prov_extreme) for m in rest) if bull else any((m.h > prov_extreme) for m in rest)
+        closed_matching = (swing_bar.c < swing_bar.o) if bull else (swing_bar.c > swing_bar.o)
+        if extended_further and closed_matching:
+            return None  # revoked
+        return swing_bar.end  # stands, but only confirmed once the bar closes
+
     swing_spent_at = None
     if events:
         sl_anchor_kind = 0 if not bull else 1  # a HIGH (0) protects a SELL zone, a LOW (1) protects a BUY zone
-        spent_candidates = [e.at for e in events
-                             if e.kind == sl_anchor_kind and e.at is not None
-                             and e.swing >= impact_bar_idx]
+        spent_candidates = [t for t in (
+            _swing_spent_effective_at(e) for e in events
+            if e.kind == sl_anchor_kind and e.at is not None and e.swing >= impact_bar_idx
+        ) if t is not None]
         if spent_candidates:
             swing_spent_at = min(spent_candidates)
 
@@ -922,16 +972,51 @@ def structural_invalid_at(z, it: "datetime", bars: list, bar_starts: list,
     # the exact same invalidated_at mechanism every other trigger here
     # already uses -- universal, every timeframe, every zone type, no
     # special-casing.
+    # Same dual-break look-ahead issue as swing_spent above, applied here
+    # (2026-10-12, user-caught, RB#351/OB#290 again): the minute that
+    # first takes prior_level can itself be a mid-bar poke inside a still-
+    # forming candle that goes on to retreat back across prior_level and
+    # close on the non-taking side -- e.g. price takes the prior candle's
+    # high at :23, but that same candle later falls back below that exact
+    # level again and closes bearish, meaning the "take" never held.
+    # Mirror the swing_spent fix exactly: find the bar containing the raw
+    # trigger minute; if that bar's price later moves back across
+    # prior_level (the fixed level itself, not a provisional running
+    # value -- there is no swing-extreme analog here) AND the bar's own
+    # close ends up back on the non-taking side, REVOKE the trigger and
+    # keep scanning past that bar for a later, real take. Otherwise the
+    # trigger stands, but only takes effect once that bar closes (never
+    # mid-bar). A take confirmed on an already-closed bar (bar.end <= the
+    # trigger minute's own next-bar boundary) is unaffected either way,
+    # since by the time we'd check it the bar's close is already known.
     prior_candle_taken_at = None
     prior_idx = impact_bar_idx - 1
     if prior_idx >= 0:
         prior_bar = bars[prior_idx]
         prior_level = prior_bar.h if bull else prior_bar.l
         idx_p = bisect_left(mt, it)
-        for m in minutes[idx_p:]:
-            if (m.h >= prior_level) if bull else (m.l <= prior_level):
-                prior_candle_taken_at = m.t
+        scan_from = idx_p
+        while True:
+            trigger_i = None
+            for i in range(scan_from, len(minutes)):
+                m = minutes[i]
+                if (m.h >= prior_level) if bull else (m.l <= prior_level):
+                    trigger_i = i
+                    break
+            if trigger_i is None:
                 break
+            trigger_t = minutes[trigger_i].t
+            bidx = max(0, bisect_right(bar_starts, trigger_t) - 1)
+            take_bar = bars[bidx]
+            idx_end = bisect_left(mt, take_bar.end)
+            rest = minutes[trigger_i + 1:idx_end]
+            retreated = any((m.l < prior_level) for m in rest) if bull else any((m.h > prior_level) for m in rest)
+            closed_non_taking = (take_bar.c < prior_level) if bull else (take_bar.c > prior_level)
+            if retreated and closed_non_taking:
+                scan_from = idx_end
+                continue
+            prior_candle_taken_at = take_bar.end
+            break
 
     candidates = [(t, r) for t, r in (
         (body_close_invalid_at, "body_close"),
