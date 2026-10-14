@@ -818,6 +818,108 @@ def structural_hard_death_between(z, start_t: "datetime", end_t: "datetime",
     return min(candidates, key=lambda tr: tr[0])
 
 
+def resolve_dual_break_anchor(bars: list, minutes, mt: list, bar_idx: int,
+                               bull: bool, true_prior_anchor_price: float,
+                               true_prior_anchor_at: "datetime"):
+    """ISOLATED per-zone fix (2026-10-14, user-dictated via RB#416/candle
+    16, 2026-01-02) for a dual-break bar (one that breaks BOTH its prior
+    bar's high AND low) wrongly getting credited as its own swing low (for
+    a bullish zone) or swing high (for a bearish zone). Three attempts
+    today to fix this inside weekly_combined_generator.py's shared swing
+    engine all corrupted OTHER zones on OTHER days, because that engine's
+    self.trough/self.peak/event list are sequential and shared by every
+    zone ever formed. This function changes NOTHING there -- it is a
+    standalone replay of ONE bar's own 1-minute data, called only for the
+    specific zone that needs it, with zero effect on anything else.
+
+    The user's live-trading model (not "wait for the bar to close before
+    doing anything" -- a trader can't know in advance how the bar will
+    close):
+      1. The bar's FIRST break of the prior bar's low (bull case; mirror
+         for bear) is a real, live event -- it confirms the PRIOR bar's
+         high as a swing high (unaffected, handled by the engine already)
+         and provisionally marks the bar's own low-so-far as a live swing
+         low / anchor. Trade search can and should happen against this
+         anchor immediately -- "we never know this would be the rally
+         move."
+      2. If price later, still within the SAME bar, breaks back below that
+         provisional anchor, the provisional anchor is retired and this
+         moment becomes a fresh, second impact -- trade search resumes
+         fresh from here, against the new (lower) running anchor.
+      3. Once the bar actually closes: a BEARISH close means the bar's
+         real story was "up first, then down" -- there was never a
+         genuine swing low on this bar at all; the TRUE anchor reverts to
+         whatever the real, older swing low was before this bar (passed
+         in as true_prior_anchor_price/at). A BULLISH close means the
+         anchor stands, final value = the bar's own lowest point reached
+         (whichever of provisional/second/later lows was most extreme),
+         timestamped at the minute that low was reached.
+
+    Returns a dict: {
+      'first_impact_at': datetime,        # step 1's moment
+      'first_anchor_price': float,        # provisional anchor at step 1
+      'second_impact_at': datetime|None,  # step 2's moment, if it happens
+      'final_anchor_price': float,        # the TRUE anchor after the bar's close
+      'final_anchor_at': datetime,        # when that final anchor is confirmed
+      'bar_is_bearish': bool,
+    }
+    bull=True means this is a BUY/RB-style zone (anchor = a low, prior
+    threshold = prior bar's low); bull=False mirrors it with highs."""
+    bar = bars[bar_idx]
+    prior = bars[bar_idx - 1]
+    threshold = prior.l if bull else prior.h
+    i0 = bisect_left(mt, bar.start)
+    i1 = bisect_left(mt, bar.end)
+    bar_minutes = minutes[i0:i1]
+
+    first_impact_at = None
+    first_anchor_price = None
+    for m in bar_minutes:
+        if (m.l < threshold) if bull else (m.h > threshold):
+            first_impact_at = m.t
+            first_anchor_price = m.l if bull else m.h
+            break
+
+    second_impact_at = None
+    final_running = first_anchor_price
+    if first_impact_at is not None:
+        past_first = False
+        for m in bar_minutes:
+            if not past_first:
+                if m.t == first_impact_at:
+                    past_first = True
+                continue
+            broke_anchor = (m.l < first_anchor_price) if bull else (m.h > first_anchor_price)
+            if broke_anchor and second_impact_at is None:
+                second_impact_at = m.t
+            if second_impact_at is not None:
+                final_running = min(final_running, m.l) if bull else max(final_running, m.h)
+
+    bearish = bar.c < bar.o
+    # bull (anchor = a low): bullish close -> this bar's own low genuinely
+    # stands as the anchor. Bearish close -> no real low was ever formed
+    # here; revert to the true, older anchor.
+    # bear/mirror (anchor = a high): bearish close -> this bar's own high
+    # stands. Bullish close -> revert to the true, older anchor.
+    use_bar_anchor = (not bearish) if bull else bearish
+
+    if use_bar_anchor:
+        final_anchor_price = final_running
+        final_anchor_at = bar.end
+    else:
+        final_anchor_price = true_prior_anchor_price
+        final_anchor_at = true_prior_anchor_at
+
+    return dict(
+        first_impact_at=first_impact_at,
+        first_anchor_price=first_anchor_price,
+        second_impact_at=second_impact_at,
+        final_anchor_price=final_anchor_price,
+        final_anchor_at=final_anchor_at,
+        bar_is_bearish=bearish,
+    )
+
+
 def structural_invalid_at(z, it: "datetime", bars: list, bar_starts: list,
                            minutes, mt: list, events: list | None = None) -> tuple:
     """Ported from five_bso_engine.py's structural_invalid_at() (SPEC.md

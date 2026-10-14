@@ -1215,7 +1215,37 @@ class WeeklyCombinedEngine:
             if candidates:
                 candidates.sort(key=lambda pair: pair[1])
                 reason, at = candidates[0]
-                if reason in ("STRAND", "STRUCTURAL_BREACH"):
+                # MM fix (2026-10-13, user-caught via FVG#49, 2026-01-07/08):
+                # CLOSE_THROUGH was sharing IMPACT's branch here, so a zone
+                # that was NEVER actually touched/reacted to -- price just
+                # closed straight through it -- still got z.impact_time
+                # stamped at the close-through moment, making it eligible
+                # for a grade/trade downstream exactly like a real impact.
+                #
+                # CORRECTED (same day, user's further correction): this is
+                # NOT the same kind of death as STRAND/STRUCTURAL_BREACH,
+                # which stay in fvg_active and can still be legitimately
+                # touched/impacted later (a zone merely stranded by a swing,
+                # or whose protect level broke, can still be reacted to
+                # after that). CLOSE_THROUGH means the body fully closed
+                # beyond the zone -- its story is over outright, full stop.
+                # "Khalas, it is dead" (user's words) -- no touch, ever
+                # again, should be able to revive it. So CLOSE_THROUGH gets
+                # its own terminal branch: state=3 (SPENT, pruned from
+                # fvg_active immediately, never re-checked) but
+                # z.impact_time is left None -- unlike every other state=3
+                # path, which always stamps impact_time. Every
+                # impact_time-gated consumer downstream (grading,
+                # structural_invalid_at, run_5m_chain) already treats
+                # impact_time=None as "never impacted," so this zone is
+                # fully and permanently excluded, exactly like one that was
+                # simply never touched at all.
+                if reason == "CLOSE_THROUGH":
+                    z.pre_spent_state = z.state
+                    z.state = 3
+                    z.stop = k
+                    z.stop_reason = reason
+                elif reason in ("STRAND", "STRUCTURAL_BREACH"):
                     z.state = 2
                     z.stop_reason = reason
                 else:
@@ -1294,6 +1324,20 @@ class WeeklyCombinedEngine:
         high_first = self.high_first(k)
         br_h, br_l = wh > self.w[k - 1].h, wl < self.w[k - 1].l
         dual = br_h and br_l
+        # MM fix attempted and REVERTED (2026-10-14): forcing processing
+        # order on dual-break bars by close polarity fixed the RB#416/
+        # candle-16 anchor bug, but (like both earlier attempts) it's a
+        # SHARED-engine change -- it altered the event sequence for every
+        # dual-break bar in the run, and that reshuffled zones on OTHER
+        # days too (confirmed: Day 5's zone set changed, a real zone
+        # (OB293) disappeared and new ones appeared). Superseded by an
+        # ISOLATED, per-zone fix instead (see
+        # reference_daily/all_tf_combined_generator.py's
+        # dual_break_narrative-style override, applied only to the one
+        # zone that needs it, computed straight from 1-minute data,
+        # touching nothing here). h_action/l_action/process() are back to
+        # their original, fully unmodified form -- zero engine-wide
+        # changes remain from any of today's three attempts.
         n = len(self.events)
         previous_dual = n >= 2 and self.events[-1].kind != self.events[-2].kind and self.events[-1].confirm == self.events[-2].confirm == k - 1
         pairs = {(self.events[-1].kind, self.events[-1].swing), (self.events[-2].kind, self.events[-2].swing)} if previous_dual else set()
@@ -1305,6 +1349,34 @@ class WeeklyCombinedEngine:
         # superseded by a more precise revocation mechanism, applied at
         # swing_spent's own consumption point in structural_invalid_at(),
         # not at event-firing time. See that function's own docstring.
+        #
+        # MM fix attempted and REVERTED (2026-10-12/13): a same-bar
+        # self-reference suppression (skip firing when self.trough/
+        # self.peak == k) was tried here for the RB#416/candle-16 case,
+        # but A/B/C-tested against real chart data on 2026-01-07 and
+        # confirmed to silently delete legitimate zones elsewhere (the
+        # 01:00 and 05:00 4H bearish zones that day vanished, and a
+        # bullish zone that was never real appeared at 09:00) -- it
+        # suppressed far more same-bar swing confirmations than just the
+        # one pathological case it was built for. First attempt reverted.
+        #
+        # MM fix v2 attempted and REVERTED (2026-10-14): narrowed the
+        # suppression to fire only on a genuine dual-break bar (`dual`).
+        # None of the Jan-7 bars the v1 fix wrongly killed (01:00, 05:00,
+        # 09:00) are themselves dual-break bars -- but dual-break bars are
+        # NOT rare (61 of them across just this 2.5-month stretch, roughly
+        # one every 3-4 trading days), and self.trough/self.peak/the event
+        # history are sequential: suppressing an event at ANY dual-break
+        # bar earlier in the run (there are plenty before Jan 7) ripples
+        # forward through every zone formed afterward via mid_arm/
+        # consume_break, however far downstream. Re-tested against Jan 7
+        # and it broke the same zones again, just via a different, earlier
+        # dual-break bar upstream. A truly safe fix needs to be scoped to
+        # the CONSUMPTION point (protect_level selection itself), not
+        # event-firing time, since event-firing changes cannot be
+        # contained to the one case they're meant for. Reverted in full;
+        # h_action/l_action are back to their original, unmodified form.
+        # Day 2's protect_level anchor issue remains open and unresolved.
 
         def h_action():
             if self.w[k].h > self.w[self.peak].h:
