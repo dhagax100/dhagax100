@@ -117,6 +117,17 @@ Not narrowing to countries — pursuing every real, apply-ready match at once, p
 
 **Correction logged:** user does not want "avoid academic," only "prefer industry over academic" — IDCORE stays fully in play. Also corrected: don't manufacture soft gaps (e.g. UK driving licence) as disqualifiers in cover letters — only real, hard-blocking requirements (like AirTrunk's 8-year minimum) should exclude a role.
 
+## 6a. LinkedIn & Portfolio Plan (from outside AI advice, reviewed 2026-10-14)
+
+Goal: get surfaced in recruiter keyword searches (Worley, Wood, Baker Hughes, etc.) by pairing an accurate LinkedIn profile with one real, documented portfolio project.
+
+- **Headline/About rewrite:** accurate to real background (ANSYS Fluent, HOMER, SAM genuinely used — thesis + Jizan desalination study) — approved, not inflated.
+- **Pick one project (2–3 weeks):**
+  - Option A — HOMER Pro: off-grid solar/wind/battery system for a remote Aramco-style monitoring station, Dhahran/Rub' al Khali weather data, vs. diesel baseline.
+  - Option B — ANSYS Fluent: flow/heat-loss simulation through a jacketed pipe or shell-and-tube heat exchanger, k-epsilon turbulence, spot dead zones/erosion risk.
+- **Post the real result, not a scripted one.** The original advice pre-wrote a specific outcome ("42% cost reduction, 60 tons CO2/yr") before any model was run — flagged and rejected. Whatever the actual HOMER/Fluent output is once built, post that number, even if less dramatic. A defensible real result beats an invented impressive one the moment anyone asks about methodology.
+- **Status:** not yet started — user to choose Option A or B.
+
 ## 7. Next Actions
 
 - [ ] **⭐ PRIORITY — Submit the University of Calgary hypersonic PhD application** (CV + cover letter + transcripts + English test) by email to artem.korobenko@ucalgary.ca — documents ready and sent to user on 2026-08-10, not yet confirmed submitted. Remind user every check-in until confirmed sent.
