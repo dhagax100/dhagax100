@@ -69,6 +69,9 @@ footer{color:var(--sub); font-size:.84rem; margin-top:60px; border-top:1px solid
 <li><a href="#dataintegrity">15. Data handling</a></li>
 <li><a href="#fixinglist">16. The Fixing List</a></li>
 <li><a href="#optlist">17. The Optimization List</a></li>
+<li><a href="#candidate-rules">18. Candidate rule under review</a></li>
+<li><a href="#dualbreak">19. Dual-break-candle anchor correction</a></li>
+<li><a href="#eligpath">20. Eligibility path: quick or formal</a></li>
 </ul>
 </div>
 
@@ -306,6 +309,15 @@ footer{color:var(--sub); font-size:.84rem; margin-top:60px; border-top:1px solid
 <li><b>Worked example (RB#416, candle 16, 2026-01-02, bearish close):</b> first impact at 16:10 (provisional anchor 1.17199) -- blocked from entry by premium/discount (1.17199 sits in the zone's premium half, 1.17128-1.17207 range, midline 1.171675). Second impact at 16:30 when price broke back below 1.17199 -- blocked by no session sweep (NY requires London's own session low swept first; it never was). Candle 16 closed bearish, so the true, final anchor reverts to 1.17128 (candle 13:00's real swing low, confirmed 15:02) -- matching what the isolated fix now computes. Net result: no trade either way, but for the correct reason.</li>
 <li><b>If this pattern is seen again</b> (a zone's protect level or impact time looks wrong on a dual-break candle), raise it specifically and apply <code>resolve_dual_break_anchor</code> to that zone -- do not attempt another shared-engine fix without first proving (across the full dataset, not just the day in question) that it changes nothing else.</li>
 </ul>
+
+<h2 id="eligpath">20. Eligibility path: quick or formal (Optimization item #10)</h2>
+<p>Implemented 2026-10-14. A 1H/4H OB or RB becomes tradeable-eligible via EITHER of two independent paths, whichever happens first -- not formal-only, the way the shared engine's own <code>z.eligible</code> works:</p>
+<ul>
+<li><b>Formal:</b> the shared engine's own path -- a confirmed swing in the zone's favor, which requires the prior candle's high/low to actually be taken.</li>
+<li><b>Quick:</b> price simply returns into the zone's own [zb, zt] range at any point after the zone is triggered -- no prior-candle break required at all.</li>
+</ul>
+<p>Implemented as an ISOLATED, READ-ONLY function (<code>quick_or_formal_eligible_at</code> in <code>all_tf_combined_generator.py</code>), not as a change to the shared swing engine -- the same lesson as Section 19: the shared engine's event/eligibility machinery is sequential and shared by every zone ever formed, so a direct change there risks the same cross-day corruption three earlier attempts caused this session. This function instead recomputes an effective impact time for MM's own analysis layer by replaying <code>first_touch()</code>'s own logic from whichever of the two paths arms earliest, writing nothing back to the zone or the engine.</p>
+<p><b>Tested against every zone examined in the Jan 2-9, 2026 backtest:</b> several zones do get an earlier effective impact time via the quick path, but none of them produce a new entry -- every one still dies structurally (body_close, swing_break, or prior_candle_taken) before reaching a real trigger. Net effect on that week's trade count: none. The mechanism is correctly implemented and ready; this week simply didn't contain a case where quick-vs-formal changed the outcome.</p>
 
 <footer>MindMaal (MM) -- branch <code>MindMaal</code>, built on the Dhagax Dailies engine. This document reflects the system as specified through this session; it will be extended as further detail is defined.</footer>
 </div>

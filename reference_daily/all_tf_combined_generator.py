@@ -818,6 +818,60 @@ def structural_hard_death_between(z, start_t: "datetime", end_t: "datetime",
     return min(candidates, key=lambda tr: tr[0])
 
 
+def quick_or_formal_eligible_at(z, bars: list, bar_starts: list, minutes, mt: list):
+    """Optimization item #10 (2026-10-14, user-dictated): a zone becomes
+    tradeable-eligible via EITHER of two paths, whichever happens first:
+      - 'formal': the shared engine's own z.eligible_time -- a confirmed
+        swing in the zone's favor, after the zone's own trigger bar
+        (requires the prior candle's high/low to be taken).
+      - 'quick': price simply returns into the zone's own [zb, zt] range
+        at any point after the origin candle closes -- no swing
+        confirmation, no prior-candle break required at all.
+    This is an ISOLATED, READ-ONLY computation -- it does not touch
+    z.eligible, z.impact_time, or any shared engine state (three
+    attempts earlier today to change the shared swing/eligibility
+    engine directly each corrupted unrelated zones on other days; this
+    sidesteps that entirely by never writing to the engine). It instead
+    recomputes an EFFECTIVE impact time for MM's own analysis layer,
+    exactly mirroring first_touch()'s own logic (first minute price
+    re-enters the zone from the correct side) but starting the scan from
+    whichever of quick/formal eligibility came first, rather than only
+    ever starting from the formal one the way the shared engine does.
+
+    Returns (effective_impact_at, path) -- path is 'quick' or 'formal'
+    (whichever one's own scan produced the earlier real touch), or
+    (None, None) if the zone is never touched at all in the data given.
+    Falls back cleanly to z.impact_time/'formal' when z.eligible was
+    never set formally and no quick return ever happens either -- i.e.
+    when neither path exists, behavior is identical to today's code."""
+    bull = z.bullish
+    trigger_idx = getattr(z, "trigger", None)
+    origin_idx = getattr(z, "candle", None)
+    if origin_idx is None:
+        origin_idx = z.left
+    base_idx = trigger_idx if trigger_idx is not None and trigger_idx >= 0 else origin_idx
+    if base_idx is None or not (0 <= base_idx < len(bars)):
+        return z.impact_time, ("formal" if z.impact_time is not None else None)
+    trigger_bar = bars[base_idx]
+
+    def first_touch_from(start_t):
+        if start_t is None:
+            return None
+        idx = bisect_left(mt, start_t)
+        for m in minutes[idx:]:
+            if (m.l < z.zt) if bull else (m.h > z.zb):
+                return m.t
+        return None
+
+    quick_touch_at = first_touch_from(trigger_bar.end)
+    formal_touch_at = first_touch_from(z.eligible_time) if z.eligible_time is not None else None
+
+    candidates = [(t, p) for t, p in ((quick_touch_at, "quick"), (formal_touch_at, "formal")) if t is not None]
+    if not candidates:
+        return None, None
+    return min(candidates, key=lambda tp: tp[0])
+
+
 def resolve_dual_break_anchor(bars: list, minutes, mt: list, bar_idx: int,
                                bull: bool, true_prior_anchor_price: float,
                                true_prior_anchor_at: "datetime"):
