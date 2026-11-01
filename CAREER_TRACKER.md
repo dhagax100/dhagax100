@@ -100,6 +100,15 @@ Full comparison dashboard (money, tax, citizenship speed, weather, visa ease, sp
 
 No team size, revenue, or growth figures on record yet — CVs describe scope/responsibilities honestly without invented metrics. Add real numbers here if/when user provides them, so future documents can cite them consistently.
 
+## 5b. Credentials & Publications Status (keep current — CVs must match)
+
+| Item | Status | Last updated |
+|---|---|---|
+| AWS/Udacity AI/ML Nanodegree | **Completed** (graduated end of Oct 2026) — previously listed as "in progress" on all CVs issued before 2026-11-01; any new/reissued CV must say "Completed," not "in progress" | 2026-11-01 |
+| "Techno-Economic Analysis of a Hybrid Solar-Wind-Geothermal Power System for RO Desalination, Jizan, Saudi Arabia" | **Accepted**, expected to publish within ~2 weeks (by ~mid-Nov 2026) — previously listed as "manuscript in preparation" on all CVs issued before 2026-11-01; update to "Accepted" now, and to a full citation once it actually publishes | 2026-11-01 |
+
+**Action:** CVs already sent out (Calgary, LiU, Western, Paul Wurth, Membrology, DVF, etc.) still say the old status — not worth re-sending just for this, but any CV built from now on must use the updated status, and if the user is still mid-conversation with any of those contacts, mentioning the acceptance/completion as a follow-up update is a reasonable, honest touch-point.
+
 ## 6. Application Files Prepared (2026-08-09)
 
 Not narrowing to countries — pursuing every real, apply-ready match at once, per user decision. Graduation confirmed: December 2026.
