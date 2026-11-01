@@ -113,6 +113,8 @@ No team size, revenue, or growth figures on record yet — CVs describe scope/re
 
 Not narrowing to countries — pursuing every real, apply-ready match at once, per user decision. Graduation confirmed: December 2026.
 
+**2026-11-01 correction:** user caught that the NTT entry below had never been checked against a real, open, eligibility-matched vacancy or a confirmed visa-sponsorship policy (see corrected row) — same category of error as the AirTrunk mistake, just softer-worded ("several years" vs. a hard "8 years"). Equinix and Verne Global rows were built the same way back in August and have **not been re-verified since** — treat their "Ready to submit" status as stale until each is actually re-checked against a live, currently-open posting (role still listed, requirements re-read word-by-word, sponsorship confirmed) rather than resubmitted on trust.
+
 | Target | Docs prepared | Status |
 |---|---|---|
 | **Dhahran Venture Founders Program (DVF)** — 9-week founder program at KFUPM, Sept–Dec, weekly founder talks + workshops + "Idea Spotlight" pitch nights | CV rebuilt around founder identity, leading with entrepreneurship section | Ready — apply at dhahranvf.org/apply/start. **Open to all KFUPM students, no prior experience required** — this is not a competitive-experience filter, so nothing here needed inflating. |
@@ -120,7 +122,7 @@ Not narrowing to countries — pursuing every real, apply-ready match at once, p
 | Equinix — Slough, UK (Electrical & Mechanical Facilities Engineer) | Master CV + tailored cover letter | Ready to submit via careers.equinix.com |
 | Equinix — Manchester, UK (same role type) | Master CV + tailored cover letter | Ready to submit via careers.equinix.com |
 | Verne Global — Keflavík, Iceland | Master CV + tailored cover letter (generic — exact open role title unconfirmed, user must check careers.letsverne.com/jobs) | Ready, pending role confirmation |
-| NTT Global Data Centers — DACH region (Frankfurt/Munich/Zurich) | Master CV + tailored cover letter (raises the German-language question directly) | Ready to submit |
+| NTT Global Data Centers — DACH region (Frankfurt/Munich/Zurich) | Master CV + tailored cover letter | **NOT verified — do not submit yet.** Built in Aug 2026 without a confirmed, open, eligibility-matched vacancy. Checked 2026-11-01: the only matching DACH mechanical role found asks for "several years" mission-critical/data-center experience user does not have; other NTT mechanical postings are either senior (10+ yrs) or a German-speaking technician trade role, neither a fit. No confirmed German work-visa/EU Blue Card sponsorship policy found for this NTT entity (only found UK sponsor licence, a different entity). No verified official/current posting link. Needs real verification (official NTT Workday careers page, confirmed open + eligible role, confirmed sponsorship) before any document gets sent. |
 | IDCORE EngD, Offshore Renewable Energy — Edinburgh | Statement of Purpose | Ready — apply via Edinburgh degree finder; note: UK doctorates start Sept, not Jan |
 | AirTrunk — Sydney/Melbourne | **Dropped** — role requires 8 yrs experience (5 in data centres), a hard structural mismatch, not a fit role | Not pursuing; keep as a future target company only |
 
