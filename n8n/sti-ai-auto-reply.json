@@ -1,0 +1,226 @@
+{
+ "name": "STI - AI Comment/DM Auto-Reply",
+ "nodes": [
+  {
+   "id": "b1",
+   "name": "Message Webhook",
+   "type": "n8n-nodes-base.webhook",
+   "typeVersion": 2,
+   "position": [
+    0,
+    0
+   ],
+   "parameters": {
+    "httpMethod": "POST",
+    "path": "sti-message",
+    "responseMode": "responseNode"
+   },
+   "webhookId": "sti-message"
+  },
+  {
+   "id": "b2",
+   "name": "Ask Claude",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4.2,
+   "position": [
+    220,
+    0
+   ],
+   "parameters": {
+    "method": "POST",
+    "url": "https://api.anthropic.com/v1/messages",
+    "authentication": "genericCredentialType",
+    "genericAuthType": "httpHeaderAuth",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "anthropic-version",
+       "value": "2023-06-01"
+      },
+      {
+       "name": "content-type",
+       "value": "application/json"
+      }
+     ]
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{ JSON.stringify({model:'claude-haiku-5-5',max_tokens:400,system:\"You are the assistant of Somali Technical Institute (STI). Reply in the same language as the user (Somali or English). Be short, warm, and clear (max 3 sentences). Use ONLY the facts below. If unsure, say staff will follow up and set needs_human true.\\nFACTS (EDIT THESE): Courses: Computer Skills, Networking, Graphic Design, Web Development. Fees: contact staff for exact price. Location: REPLACE. Phone/WhatsApp: REPLACE. Register: REPLACE_FORM_LINK.\\nReturn ONLY JSON: {\\\"intent\\\":\\\"interested|question|complaint|spam\\\",\\\"reply\\\":\\\"...\\\",\\\"needs_human\\\":true|false}. If intent is interested, include the register link in the reply.\",messages:[{role:'user',content:$json.body.text}]}) }}",
+    "options": {}
+   },
+   "credentials": {
+    "httpHeaderAuth": {
+     "id": "",
+     "name": "Anthropic (x-api-key)"
+    }
+   }
+  },
+  {
+   "id": "b3",
+   "name": "Parse Reply",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    440,
+    0
+   ],
+   "parameters": {
+    "jsCode": "const raw = $input.first().json.content[0].text;\nlet out;\ntry { out = JSON.parse(raw.match(/\\{[\\s\\S]*\\}/)[0]); }\ncatch(e){ out = {intent:'question', reply:'Thanks for your message! Our staff will reply shortly.', needs_human:true}; }\nconst src = $('Message Webhook').first().json.body;\nreturn [{json:{...out, Name:src.sender_name||'', Source:src.platform||'', SenderId:src.sender_id||'', Message:src.text||'', Status:'Commenter', Created:new Date().toISOString()}}];"
+   }
+  },
+  {
+   "id": "b4",
+   "name": "Interested?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 2.2,
+   "position": [
+    660,
+    0
+   ],
+   "parameters": {
+    "conditions": {
+     "options": {
+      "caseSensitive": true,
+      "typeValidation": "loose"
+     },
+     "combinator": "and",
+     "conditions": [
+      {
+       "id": "c1",
+       "leftValue": "={{ $json.intent }}",
+       "rightValue": "interested",
+       "operator": {
+        "type": "string",
+        "operation": "equals"
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "b5",
+   "name": "Save Commenter",
+   "type": "n8n-nodes-base.googleSheets",
+   "typeVersion": 4.5,
+   "position": [
+    880,
+    -100
+   ],
+   "parameters": {
+    "operation": "append",
+    "documentId": {
+     "__rl": true,
+     "value": "REPLACE_WITH_SHEET_ID",
+     "mode": "id"
+    },
+    "sheetName": {
+     "__rl": true,
+     "value": "Leads",
+     "mode": "name"
+    },
+    "columns": {
+     "mappingMode": "defineBelow",
+     "value": {
+      "Name": "={{ $json.Name }}",
+      "Source": "={{ $json.Source }}",
+      "Status": "={{ $json.Status }}",
+      "Created": "={{ $json.Created }}",
+      "Notes": "={{ $json.Message }}"
+     },
+     "matchingColumns": [],
+     "schema": []
+    },
+    "options": {}
+   },
+   "credentials": {
+    "googleSheetsOAuth2Api": {
+     "id": "",
+     "name": "Google Sheets account"
+    }
+   }
+  },
+  {
+   "id": "b6",
+   "name": "Send Reply",
+   "type": "n8n-nodes-base.respondToWebhook",
+   "typeVersion": 1.1,
+   "position": [
+    1100,
+    0
+   ],
+   "parameters": {
+    "respondWith": "json",
+    "responseBody": "={{ {reply:$('Parse Reply').item.json.reply, intent:$('Parse Reply').item.json.intent, needs_human:$('Parse Reply').item.json.needs_human} }}"
+   }
+  }
+ ],
+ "connections": {
+  "Message Webhook": {
+   "main": [
+    [
+     {
+      "node": "Ask Claude",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Ask Claude": {
+   "main": [
+    [
+     {
+      "node": "Parse Reply",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Parse Reply": {
+   "main": [
+    [
+     {
+      "node": "Interested?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Interested?": {
+   "main": [
+    [
+     {
+      "node": "Save Commenter",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "Send Reply",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Save Commenter": {
+   "main": [
+    [
+     {
+      "node": "Send Reply",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ },
+ "settings": {
+  "executionOrder": "v1"
+ }
+}

@@ -1,0 +1,162 @@
+{
+ "name": "STI - Lead Capture (Form Webhook)",
+ "nodes": [
+  {
+   "id": "a1",
+   "name": "Form Webhook",
+   "type": "n8n-nodes-base.webhook",
+   "typeVersion": 2,
+   "position": [
+    0,
+    0
+   ],
+   "parameters": {
+    "httpMethod": "POST",
+    "path": "sti-lead",
+    "responseMode": "responseNode"
+   },
+   "webhookId": "sti-lead"
+  },
+  {
+   "id": "a2",
+   "name": "Clean Data",
+   "type": "n8n-nodes-base.set",
+   "typeVersion": 3.4,
+   "position": [
+    220,
+    0
+   ],
+   "parameters": {
+    "assignments": {
+     "assignments": [
+      {
+       "id": "1",
+       "name": "Name",
+       "type": "string",
+       "value": "={{ $json.body.name }}"
+      },
+      {
+       "id": "2",
+       "name": "Phone",
+       "type": "string",
+       "value": "={{ String($json.body.phone || '').replace(/[^0-9+]/g,'') }}"
+      },
+      {
+       "id": "3",
+       "name": "Course",
+       "type": "string",
+       "value": "={{ $json.body.course || '' }}"
+      },
+      {
+       "id": "4",
+       "name": "Source",
+       "type": "string",
+       "value": "={{ $json.body.source || 'form' }}"
+      },
+      {
+       "id": "5",
+       "name": "Status",
+       "type": "string",
+       "value": "Lead"
+      },
+      {
+       "id": "6",
+       "name": "Created",
+       "type": "string",
+       "value": "={{ $now.toISO() }}"
+      }
+     ]
+    },
+    "options": {}
+   }
+  },
+  {
+   "id": "a3",
+   "name": "Save to Leads Sheet",
+   "type": "n8n-nodes-base.googleSheets",
+   "typeVersion": 4.5,
+   "position": [
+    440,
+    0
+   ],
+   "parameters": {
+    "operation": "append",
+    "documentId": {
+     "__rl": true,
+     "value": "REPLACE_WITH_SHEET_ID",
+     "mode": "id"
+    },
+    "sheetName": {
+     "__rl": true,
+     "value": "Leads",
+     "mode": "name"
+    },
+    "columns": {
+     "mappingMode": "autoMapInputData",
+     "value": {},
+     "matchingColumns": [],
+     "schema": []
+    },
+    "options": {}
+   },
+   "credentials": {
+    "googleSheetsOAuth2Api": {
+     "id": "",
+     "name": "Google Sheets account"
+    }
+   }
+  },
+  {
+   "id": "a4",
+   "name": "Reply OK",
+   "type": "n8n-nodes-base.respondToWebhook",
+   "typeVersion": 1.1,
+   "position": [
+    660,
+    0
+   ],
+   "parameters": {
+    "respondWith": "json",
+    "responseBody": "={{ {ok:true, message:'Thanks '+$('Clean Data').item.json.Name+'! We will contact you soon.'} }}"
+   }
+  }
+ ],
+ "connections": {
+  "Form Webhook": {
+   "main": [
+    [
+     {
+      "node": "Clean Data",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Clean Data": {
+   "main": [
+    [
+     {
+      "node": "Save to Leads Sheet",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Save to Leads Sheet": {
+   "main": [
+    [
+     {
+      "node": "Reply OK",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ },
+ "settings": {
+  "executionOrder": "v1"
+ }
+}
