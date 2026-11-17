@@ -17,19 +17,21 @@ Status key:
 |---|---|---|---|
 | 1 | 200Pt @ 5K | OK | Confirmed flat, converged by ~it.300 |
 | 2 | 200Pt @ 10K | OK | Confirmed flat, converged by ~it.300 |
-| 3 | 200Pt @ 15K | TBD | |
-| 4 | 200Pt @ 20K | TBD | |
-| 5 | 200Pt @ 25K | TBD | |
-| 6 | 200Pt @ 30K | TBD | |
-| 7 | 300Pt @ 5K | TBD | |
-| 8 | 300Pt @ 10K | TBD | |
-| 9 | 300Pt @ 15K | TBD | |
-| 10 | 300Pt @ 20K | TBD | |
-| 11 | 300Pt @ 25K | TBD | |
-| 12 | 300Pt @ 30K | TBD | |
-| 13 | 400Pt @ 5K | TBD | |
-| 14 | 400Pt @ 10K | TBD | |
-| 15 | 400Pt @ 15K | TBD | |
-| 16 | 400Pt @ 20K | TBD | |
-| 17 | 400Pt @ 25K | TBD | |
-| 18 | 400Pt @ 30K | TBD | |
+| 3 | 200Pt @ 15K | OK | Confirmed by Nuradin |
+| 4 | 200Pt @ 20K | OK | Confirmed by Nuradin |
+| 5 | 200Pt @ 25K | OK | Confirmed by Nuradin |
+| 6 | 200Pt @ 30K | OK | Confirmed by Nuradin |
+| 7 | 300Pt @ 5K | OK | Confirmed by Nuradin |
+| 8 | 300Pt @ 10K | OK | Confirmed by Nuradin |
+| 9 | 300Pt @ 15K | OK | Confirmed by Nuradin |
+| 10 | 300Pt @ 20K | OK | Confirmed by Nuradin |
+| 11 | 300Pt @ 25K | OK | Confirmed by Nuradin |
+| 12 | 300Pt @ 30K | OK | Confirmed by Nuradin |
+| 13 | 400Pt @ 5K | OK | Confirmed by Nuradin |
+| 14 | 400Pt @ 10K | OK | Confirmed by Nuradin |
+| 15 | 400Pt @ 15K | OK | Confirmed by Nuradin |
+| 16 | 400Pt @ 20K | OK | Confirmed by Nuradin |
+| 17 | 400Pt @ 25K | OK | Confirmed by Nuradin |
+| 18 | 400Pt @ 30K | OK | Confirmed by Nuradin |
+
+**TWIST PITCH SWEEP: ALL 18 RUNS CONFIRMED GOOD. Audit complete.**
