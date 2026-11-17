@@ -16,7 +16,7 @@ Status key:
 | # | Label | Status | Notes |
 |---|---|---|---|
 | 1 | 200Pt @ 5K | OK | Confirmed flat, converged by ~it.300 |
-| 2 | 200Pt @ 10K | TBD | |
+| 2 | 200Pt @ 10K | OK | Confirmed flat, converged by ~it.300 |
 | 3 | 200Pt @ 15K | TBD | |
 | 4 | 200Pt @ 20K | TBD | |
 | 5 | 200Pt @ 25K | TBD | |
