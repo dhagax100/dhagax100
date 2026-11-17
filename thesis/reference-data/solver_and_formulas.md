@@ -217,6 +217,17 @@ Eqs 3.26/3.27/3.30 use separate volume fractions per particle type (φp1, φp2) 
 | Silicon carbide (SiC) | 3160 | 117.56 | — | 723 |
 | Titanium dioxide (TiO₂) | 4250 | 8.9538 | — | 686.2 |
 
+### Ag-MgO/Syltherm 800 final mixture properties — LOCKED, confirmed by Nuradin directly in Fluent's Materials panel (2026-11-17), do not recompute or alter
+50:50 φp1/φp2 split. Values entered directly as `constant` in Fluent, per-run (Tin and φ fixed per run, same convention as the rest of this table).
+
+| Concentration | ρ_hnf (kg/m³) | Cp_hnf (J/kg·K) | k_hnf (W/m·K) | μ_hnf (Pa·s) |
+|---|---|---|---|---|
+| 0.5% | 778.76 (from earlier UDF header) | 1892.68 (from earlier UDF header) | 0.09772 | TBD — awaiting confirmed value |
+| 1.0% | 810.13 (from earlier UDF header) | 1828.07 (from earlier UDF header) | 0.09934 | TBD — awaiting confirmed value |
+| 2.0% | **873.06** | **1713.01** | **0.10198** | **0.0008835** |
+
+**Note on viscosity at 2%:** 0.0008835 Pa·s is close to the base-fluid value and does not match the shape-based Eq 3.30 prediction (~0.00179) computed earlier in this conversation from the mixing formula above. Source of the confirmed value: Fluent's own `ag-mgo` database entry, per Nuradin's screenshot. This discrepancy should be flagged/reconciled in the methodology chapter rather than silently resolved either way.
+
 (Al₂O₃, MWCNT, Ag, MgO property data — not in Mohammed et al. 2022 at all, since that paper doesn't use those nanoparticles. Still needs its own literature search, as already logged in `decision_log.md`.)
 
 ### How these get entered into Fluent (per the real paper's own method)
