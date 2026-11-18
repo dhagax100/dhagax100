@@ -47,8 +47,8 @@ CFD-based thesis: heat transfer enhancement in a parabolic trough solar collecto
 All nanofluids use Syltherm 800 as base fluid. Brick-shaped nanoparticles, 50 nm diameter.
 
 ### Operating Conditions
-- Re: 5,000–100,000 (turbulent)
-- Tin: 400–650 K
+- Re: 5,000–30,000 (turbulent) — CORRECTED Nov 2026: actual executed runs (all FFF design points, all nanofluid sweeps) used Re 5K/10K/15K/20K/25K/30K, never the wider 100,000 ceiling the early proposal stated.
+- Tin: 500 K, fixed — CORRECTED Nov 2026: every executed run used Tin=500K; the proposal's 400–650K range was never actually used.
 - DNI: 1000 W/m²
 - Ambient: 300 K
 
