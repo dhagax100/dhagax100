@@ -182,21 +182,29 @@ DNI = 1000 W/m²
 (Cp)_hnf = [(1-φp)·ρ_bf·Cp,bf + φp1·ρp1·Cp1 + φp2·ρp2·Cp2] / ρ_hnf
 ```
 
-### Hybrid nanofluid thermal conductivity (Eq 3.29 — NOT the Maxwell model):
+### Hybrid nanofluid thermal conductivity — CORRECTED 2026-11-19: actual simulations used the classical Maxwell model, NOT Eq 3.29/Ck
+Nuradin confirmed directly (2026-11-19) that the executed Fluent simulations used the classical Maxwell model for thermal conductivity, not the shape-dependent Eq 3.29 below. The thesis methodology chapter has been updated accordingly. Advisor to be informed of this departure from the originally planned shape-based model.
+```
+k_hnf = k_f × [(k_hnp + 2k_f − 2φ(k_f − k_hnp)) / (k_hnp + 2k_f + φ(k_f − k_hnp))]
+```
+
+Eq 3.29 (shape-based, NOT what was actually used — kept here only for reference/history):
 ```
 k_hnf = k_bf · (1 + Ck·φ)
 ```
-Ck = thermal-conductivity shape coefficient.
+Ck = thermal-conductivity shape coefficient. For brick-shaped nanoparticles, Ck = 3.37, read directly from Table 7 of the real, published Mohammed et al. (2022) paper (Platelets 2.61, Blades 2.74, Cylindrical 3.95, Bricks 3.37). The proposal draft had stated Ck = 6.0, a transcription error. This equation and value are NOT what the executed simulations used — see correction above.
 
-**CORRECTED 2026-08-18: For brick-shaped nanoparticles, Ck = 3.37** — read directly from Table 7 of the real, published Mohammed et al. (2022) paper. The proposal draft stated Ck = 6.0, which does not match any row of the paper's own Table 7 (Platelets 2.61, Blades 2.74, Cylindrical 3.95, Bricks 3.37) — likely a transcription error in the proposal. The real paper is the authoritative source; use 3.37.
+### Hybrid nanofluid viscosity — CORRECTED 2026-11-19: actual simulations used the classical Brinkman model, NOT Eq 3.30/a,b
+Nuradin confirmed directly (2026-11-19) that the executed Fluent simulations used the classical Brinkman model for viscosity, not the shape-dependent Eq 3.30 below. The thesis methodology chapter has been updated accordingly.
+```
+μ_hnf = μ_f × (1 − φ)^(−2.5)
+```
 
-### Hybrid nanofluid viscosity (Eq 3.30 — NOT the Brinkman model):
+Eq 3.30 (shape-based, NOT what was actually used — kept here only for reference/history):
 ```
 μ_hnf = μ_bf · [(1 + a·φp1 + b·φp1²) + (1 + a·φp2 + b·φp2²)]
 ```
-a, b = morphology-dependent coefficients.
-
-**CORRECTED 2026-08-18: For brick-shaped nanoparticles, a = 1.9, b = 471.4** — read directly from Table 8 of the real paper. The proposal draft stated a = 14.9, b = 123.3, which is actually the **Blades** row (a=14.6, b=123.3), not Bricks — the proposal appears to have copied the wrong row and mislabeled it. Table 8 in full:
+a, b = morphology-dependent coefficients. For brick-shaped nanoparticles, a = 1.9, b = 471.4, read directly from Table 8 of the real paper. The proposal draft had stated a = 14.9, b = 123.3, which is actually the **Blades** row (a=14.6, b=123.3), not Bricks — a mislabeling error in the proposal. This equation and these values are NOT what the executed simulations used — see correction above. Table 8 in full:
 
 | Shape | a | b |
 |---|---|---|
