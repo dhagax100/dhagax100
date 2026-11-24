@@ -111,8 +111,51 @@ fits the physical pattern already discussed in section 4.2.3: a thicker wall
 shrinks the hollow core, forcing more flow through the annulus and sharpening
 the corner-induced vortices there).
 
-## Status
+## Final layout (two borderless tables, per Nuradin's instruction, 2026-11-24)
 
-Waiting on Nuradin's real plane-only Min/Max readings for all 15 images (5
-configs x 3 fields) before the shared ranges can be computed and the final
-exported images produced for insertion into the thesis.
+Not one combined figure like the mirror's single Figure 4-6. Two separate
+figures instead, each its own borderless table, plus a smooth-tube reference
+folded into the second one rather than given its own figure.
+
+**Figure A — Promoter size ratio effect** (dpo/dti = 0.15 / 0.20 / 0.25,
+tp/dpo = 0.05 fixed, Pt = 200 mm fixed):
+- Columns: dpo/dti = 0.15, 0.20, 0.25 (one per promoter-size configuration)
+- Row (a): TKE contours, one per column
+- Row (b): Velocity contours, one per column
+- Row (c): Temperature contours, one per column
+- Row-label cell at the start of each row ("TKE" / "Velocity" / "Temperature")
+- Shared legend for each field placed once (not repeated per cell)
+
+**Figure B — Wall thickness ratio effect** (tp/dpo = 0.05 / 0.10 / 0.15,
+dpo/dti = 0.25 fixed [the Figure A winner], Pt = 200 mm fixed), with the
+smooth tube reference appended:
+- Columns: tp/dpo = 0.05, 0.10, 0.15
+- Row (a): TKE, Row (b): Velocity, Row (c): Temperature, same as Figure A
+- One additional row after (c), centered across the table (not tied to any
+  column, since the smooth tube has no promoter-size/wall-thickness value):
+  the smooth tube's TKE, Velocity, and Temperature contours side by side
+
+This matches the mirror's approach in substance (same three fields, same
+promoter configurations, smooth-tube reference included) but split into two
+tables instead of one, with the smooth tube folded into the second rather
+than given a separate figure, per Nuradin's explicit instruction.
+
+## Naming convention for saved crops
+
+`thesis/production-runs/contours/<Field>_Pt200_dpo<value>_tp<value>.png` for
+promoter/wall-thickness configs (already in use), and
+`thesis/production-runs/contours/<Field>_Smooth.png` for the three smooth-tube
+contours. `<Field>` is `TKE`, `Velocity`, or `Temperature`.
+
+## Status (updated 2026-11-24)
+
+Shared ranges are locked (above). Images collected and cropped so far:
+- TKE, dpo=0.15/tp=0.05 (Figure A, col 1) — saved, correct shared range
+- TKE, dpo=0.20/tp=0.05 (Figure A, col 2) — saved, but still has the WRONG
+  (per-config auto-range) scale; needs re-export with the shared range and
+  re-crop before it can be used
+- Shared legends for all three fields (TKE, Velocity, Temperature) — saved
+
+Still needed: TKE dpo=0.25/tp=0.05 (shared with Figure B col 1); Velocity and
+Temperature for all 5 promoter/wall-thickness configs; TKE/Velocity/Temperature
+for the smooth tube. 13 images remain.
