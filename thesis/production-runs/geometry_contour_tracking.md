@@ -149,13 +149,15 @@ contours. `<Field>` is `TKE`, `Velocity`, or `Temperature`.
 
 ## Status (updated 2026-11-24)
 
-Shared ranges are locked (above). Images collected and cropped so far:
-- TKE, dpo=0.15/tp=0.05 (Figure A, col 1) — saved, correct shared range
-- TKE, dpo=0.20/tp=0.05 (Figure A, col 2) — saved, but still has the WRONG
-  (per-config auto-range) scale; needs re-export with the shared range and
-  re-crop before it can be used
-- Shared legends for all three fields (TKE, Velocity, Temperature) — saved
+All 18 images collected, cropped (circle only, no legend/logo), and saved at
+the correct shared range per field:
 
-Still needed: TKE dpo=0.25/tp=0.05 (shared with Figure B col 1); Velocity and
-Temperature for all 5 promoter/wall-thickness configs; TKE/Velocity/Temperature
-for the smooth tube. 13 images remain.
+- TKE: dpo=0.15/tp=0.05, dpo=0.20/tp=0.05, dpo=0.25/tp=0.05,
+  dpo=0.25/tp=0.10, dpo=0.25/tp=0.15 — all 5 done
+- Velocity: same 5 configs — all done
+- Temperature: same 5 configs — all done
+- Smooth tube: TKE, Velocity, Temperature — all 3 done
+- Shared legends for all three fields — saved
+
+Next step: build Figure A and Figure B as borderless tables per the layout
+above, using these saved crops and the shared legends.
