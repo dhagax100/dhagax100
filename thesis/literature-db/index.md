@@ -110,6 +110,13 @@ checked first to confirm it is not a review/survey.
 | P075 | 2021 | Xiao, Liu, Liu, Liu | Inclined Curved-Twisted Baffles (wall-temp-uniformity focus) | NEW | Logged |
 | P076 | 2021 | Peng, Li, Hu, Feng | Semi-Annular + Fin Metal Foam Hybrid (SAFM, companion to Entry 63) | NEW | Logged |
 
+| P077 | 2021 | Abed, Afgan, Iacovides, Cioncolini, Khurshid, Nasser | Straight Conical Strip Inserts + SiO2 Nanofluid | NEW | Logged |
+| P078 | 2021 | Al-Rashed, Alnaqi, Alsarraf | Finned Rod Turbulator + Hybrid Nanofluid (+ economic analysis) | NEW | Logged |
+| P079 | 2022 | Samiezadeh, Khodaverdian, Doranehgard, Chehrmonavari, Xiong | Porous + Finned Receiver + Cu-Al2O3 Hybrid Nanofluid | DUPLICATE of [63] | Logged |
+| P080 | 2022 | Aryan, Jannat Alipour, Siavashi, Norouzi | Rotating Absorber + Nanofluid + Porous Lines | NEW | Logged |
+
+**Not processed**: `b3a937f8-two_twisted_is_similar_to_previous_paper.pdf` is the identical paper already logged as Entry 69 (Alnaqi, Alsarraf, Al-Rashed 2021, SETA 47:101331, two twisted tape inserts) - confirmed via title/author/journal match, not re-logged (user's own filename flagged this).
+
 **Not processed**: `d57b9900-Experimental_not_PTC_should_be_deleted.pdf` was excluded from this batch per its own filename flag (not a PTC paper, marked for deletion) - not read or logged.
 
 **Not processed**: `c5ef5f0a-Cu_Fe3O4_Al2O3_TiO2.pdf` in this batch is a duplicate re-upload of the same paper already logged as Entry 35 (Hatami, Geng, Jing 2018) - not re-logged.
