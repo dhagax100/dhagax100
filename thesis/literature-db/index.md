@@ -19,4 +19,5 @@ extraction lives. Updated after every paper.
 
 | # | Year | Authors (short) | Title (short) | Duplicate check | Status |
 |---|------|------------------|----------------|------------------|--------|
-| — | — | — | — | — | No papers processed yet |
+| P001 | 2008 | Reddy, Ravi Kumar, Satyanarayana | Energy-Efficient Receiver for PTSC | DUPLICATE of [44] | Logged |
+| P002 | 2008 | Reddy, Satyanarayana | Porous Finned Receiver for PTSC | DUPLICATE of [43] | Logged |
