@@ -43,3 +43,8 @@ checked first to confirm it is not a review/survey.
 | P015 | 2016 | Bellos, Tzivanidis, Antonopoulos, Gkinis | Nanofluid + Converging-Diverging Tube | DUPLICATE of [58] | Logged |
 | P016 | 2015 | Rios-Iribe et al. | Non-Newtonian Fluid + Twisted Tape (NOT PTSC) | NEW | Logged |
 | P017 | 2015 | Huang, Yu, Li, Tao | Dimples vs Protrusions vs Helical Fins | DUPLICATE of [48] | Logged |
+| P018 | 2016 | Benabderrahmane, Aminallah, Laouedj, Benazza, Solano | Longitudinal Fins + Al2O3/Cu/SiC/C Nanofluids | DUPLICATE of [59] | Logged |
+| P019 | 2016 | Benabderrahmane, Benazza, Aminallah, Laouedj | Baffles + Fullerene/CNT Nanofluid | NEW | Logged |
+| P020 | 2017 | Nanan, Thianpong, Pimsarn, Chuwattanakul, Eiamsa-ard | Twisted Cross-Baffle Turbulators (NOT PTSC) | NEW | Logged |
+| P021 | 2016 | Jaramillo, Borunda, Velazquez-Lucho, Robles | Low-Enthalpy PTC + Twisted Tape | DUPLICATE of [39] | Logged |
+| P022 | 2016 | Mwesigye, Bello-Ochende, Meyer | Wall-Detached Twisted Tape Inserts | DUPLICATE of [35] | Logged |
