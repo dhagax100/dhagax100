@@ -38,3 +38,8 @@ checked first to confirm it is not a review/survey.
 | P010 | 2014 | Mwesigye, Bello-Ochende, Meyer | Centrally Placed Perforated Plate Inserts | DUPLICATE of [34] | Logged |
 | P011 | 2014 | Song, Dong, Gao, Diao, Zheng, Zhou | Nonuniform Heat Flux + Helical Screw-Tape | DUPLICATE of [36] | Logged |
 | P012 | 2014 | Xiao, Zhang, Shao, Li | V-Cavity Absorber with Rectangular Fins | NEW | Logged |
+| P013 | 2015 | Diwan, Soni | Wire-Coil Inserts | DUPLICATE of [51] | Logged |
+| P014 | 2015 | Nayak, Sinha, Kumar, Kumar | Nanofluid + Nail Twisted Tape (STPTCS) | NEW | Logged |
+| P015 | 2016 | Bellos, Tzivanidis, Antonopoulos, Gkinis | Nanofluid + Converging-Diverging Tube | DUPLICATE of [58] | Logged |
+| P016 | 2015 | Rios-Iribe et al. | Non-Newtonian Fluid + Twisted Tape (NOT PTSC) | NEW | Logged |
+| P017 | 2015 | Huang, Yu, Li, Tao | Dimples vs Protrusions vs Helical Fins | DUPLICATE of [48] | Logged |
