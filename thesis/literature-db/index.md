@@ -121,6 +121,9 @@ checked first to confirm it is not a review/survey.
 | P083 | 2023 | Pazarlioglu, Ekiciler, Arslan, Mohammed | Elliptical Dimpled Fins (EDF) + Hybrid Nanofluid | NEW | Logged |
 | P084 | 2023 | Abbasian Arani, Monfaredi | Acentric Absorber + Insulator Roof + SiC Nanofluid (SPM vs TPM comparison) | NEW | Logged |
 
+| P085 | 2023 | Rezaei Gorjaei, Haghighi Khoshkhoo, Joda, Majidi | Porous Foam, 6 Arrangements x 2 Materials (EuroTrough-150) | NEW | Logged |
+| P086 | 2024 | Priyanka, Kashyap, Kumar | V-Ribbed Receiver + 3 Hybrid Nanofluids Comparison | NEW | Logged |
+
 **Not processed**: `b3a937f8-two_twisted_is_similar_to_previous_paper.pdf` is the identical paper already logged as Entry 69 (Alnaqi, Alsarraf, Al-Rashed 2021, SETA 47:101331, two twisted tape inserts) - confirmed via title/author/journal match, not re-logged (user's own filename flagged this).
 
 **Not processed**: `d57b9900-Experimental_not_PTC_should_be_deleted.pdf` was excluded from this batch per its own filename flag (not a PTC paper, marked for deletion) - not read or logged.
