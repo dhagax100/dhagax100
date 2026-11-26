@@ -3,6 +3,13 @@
 Tracks every paper processed, its duplicate-check result, and where its
 extraction lives. Updated after every paper.
 
+## Standing rule (2026-11-26)
+Review papers are excluded from this database, period - never logged, never
+summarized, never counted toward the reference expansion. Only original
+research papers (experimental or numerical studies reporting new results)
+are processed. Before reading a new paper in full, its abstract/intro is
+checked first to confirm it is not a review/survey.
+
 ## Files in this system
 - `existing_74_refs.md` — baseline: the 74 references already live in `Thesis_draft_v1.docx`. Never edited; only checked against.
 - `Grand_Literature_Review.docx` — full narrative summary per paper, appended in order received. Template per entry:
@@ -22,3 +29,8 @@ extraction lives. Updated after every paper.
 | P001 | 2008 | Reddy, Ravi Kumar, Satyanarayana | Energy-Efficient Receiver for PTSC | DUPLICATE of [44] | Logged |
 | P002 | 2008 | Reddy, Satyanarayana | Porous Finned Receiver for PTSC | DUPLICATE of [43] | Logged |
 | P003 | 2009 | Ravi Kumar, Reddy | Porous Disc Receiver for Solar PTSC | NEW | Logged |
+| P004 | 2013 | de Risi, Milanese, Laforgia | Transparent PTC, Gas-Phase Nanofluids | NEW | Logged |
+| P005 | 2011 | Munoz, Abanades | Internal Helically Finned Tubes (CFD) | DUPLICATE of [45] | Logged |
+| P006 | 2012 | Cheng, He, Cui | Unilateral Longitudinal Vortex Generators | DUPLICATE of [46] | Logged |
+| P007 | 2013 | Wang, Liu, Xu | Metal Foams in DSG Receiver Tube | NEW | Logged |
+| P008 | 2013 | Ghasemi, Ranjbar, Ramiar | Porous Three Segmental Rings | NEW | Logged |
