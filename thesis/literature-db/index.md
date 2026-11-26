@@ -52,4 +52,10 @@ checked first to confirm it is not a review/survey.
 | P024 | 2016 | Basbous, Taqi, Janan | Al2O3/Cu/CuO/Ag Nanofluid Comparison | DUPLICATE of [52] | Logged |
 | P025 | 2016 | Zheng, Xu, He | Porous Insert Optimized via Genetic Algorithm + CFD | NEW | Logged |
 
+| P026 | 2017 | Kasaeian, Daneshazarian, Pourfayaz | Glass-Glass Absorber + Nanosilica/MWCNT | NEW | Logged |
+| P027 | 2017 | Rawani, Sharma, Singh | Serrated Twisted-Tape Inserts (analytical) | NEW | Logged |
+| P028 | 2016 | Toghyani, Baniasadi, Afshari | Integrated Rankine Cycle + Nanofluid PTC (system-level) | DUPLICATE of [53] | Logged |
+| P029 | 2017 | Bellos, Tzivanidis, Tsimpoukis | Internally Finned Absorbers (12 configs) | NEW | Logged |
+| P030 | 2017 | Gong, Wang, Wang, Tan, Lai, Han | Pin Fin Arrays (bottom periphery only) | NEW | Logged |
+
 **Not processed**: `1afdc7c8-A_Novel_Solution_Methodology...pdf` failed to read (corrupted/not a valid PDF file) - flagged to user, needs re-upload. `d454e451-Heat_transfer_enhancement...longitudinal_fins_and_nanofluids.pdf` in this batch is the same paper as Entry 18 (Benabderrahmane et al. 2016, JTS) - not re-logged.
