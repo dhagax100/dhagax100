@@ -58,4 +58,9 @@ checked first to confirm it is not a review/survey.
 | P029 | 2017 | Bellos, Tzivanidis, Tsimpoukis | Internally Finned Absorbers (12 configs) | NEW | Logged |
 | P030 | 2017 | Gong, Wang, Wang, Tan, Lai, Han | Pin Fin Arrays (bottom periphery only) | NEW | Logged |
 
-**Not processed**: `1afdc7c8-A_Novel_Solution_Methodology...pdf` failed to read (corrupted/not a valid PDF file) - flagged to user, needs re-upload. `d454e451-Heat_transfer_enhancement...longitudinal_fins_and_nanofluids.pdf` in this batch is the same paper as Entry 18 (Benabderrahmane et al. 2016, JTS) - not re-logged.
+| P031 | 2017 | Ghasemi, Ranjbar | Complete Porous Rings | NEW | Logged |
+| P032 | 2014 | Rajendran, Ganapathy Sundaram, Jawahar, Pachaiyappan, Naveenraj | SiC Porous Discs (line) + Ag Nanofluid (point focus) | NEW | Logged |
+| P033 | 2017 | Xu, Wang, Liu, Zhang, Hassan, Lu | Four-Head Ribbed Tube (NOT PTSC) | NEW | Logged |
+| P034 | 2017 | Zhu, Zhu, Zhao | Wavy-Tape Insert | DUPLICATE of [37] | Logged |
+
+**Not processed**: `1afdc7c8-A_Novel_Solution_Methodology...pdf` failed to read (corrupted/not a valid PDF file) - flagged to user, needs re-upload. `d454e451-Heat_transfer_enhancement...longitudinal_fins_and_nanofluids.pdf` in this batch is the same paper as Entry 18 (Benabderrahmane et al. 2016, JTS) - not re-logged. `5e61ec71-A_Novel_Solution_Methodology...pdf` (a second re-upload attempt of the same corrupted file) ALSO failed to read - still needs a working re-upload.
