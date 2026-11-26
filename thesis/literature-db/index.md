@@ -48,3 +48,8 @@ checked first to confirm it is not a review/survey.
 | P020 | 2017 | Nanan, Thianpong, Pimsarn, Chuwattanakul, Eiamsa-ard | Twisted Cross-Baffle Turbulators (NOT PTSC) | NEW | Logged |
 | P021 | 2016 | Jaramillo, Borunda, Velazquez-Lucho, Robles | Low-Enthalpy PTC + Twisted Tape | DUPLICATE of [39] | Logged |
 | P022 | 2016 | Mwesigye, Bello-Ochende, Meyer | Wall-Detached Twisted Tape Inserts | DUPLICATE of [35] | Logged |
+| P023 | 2016 | Menbari, Alemrajabi, Rezaei | CuO/Water Direct Absorption PTC (DAPTC) | NEW | Logged |
+| P024 | 2016 | Basbous, Taqi, Janan | Al2O3/Cu/CuO/Ag Nanofluid Comparison | DUPLICATE of [52] | Logged |
+| P025 | 2016 | Zheng, Xu, He | Porous Insert Optimized via Genetic Algorithm + CFD | NEW | Logged |
+
+**Not processed**: `1afdc7c8-A_Novel_Solution_Methodology...pdf` failed to read (corrupted/not a valid PDF file) - flagged to user, needs re-upload. `d454e451-Heat_transfer_enhancement...longitudinal_fins_and_nanofluids.pdf` in this batch is the same paper as Entry 18 (Benabderrahmane et al. 2016, JTS) - not re-logged.
