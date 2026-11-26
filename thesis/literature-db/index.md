@@ -90,6 +90,12 @@ checked first to confirm it is not a review/survey.
 | P057 | 2020 | Outokesh, Mousavi Ajarostaghi, Bozorgzadeh, Sedighi | Curved-Profile Twisted Tape in Pipe (NOT PTSC) | NEW | Logged |
 | P058 | 2020 | Ahmed, Natarajan | Toroidal Rings with Gaseous HTFs (companion to Entry 44) | NEW | Logged |
 
+| P059 | 2020 | Kumar, Reddy | Metal Foam Inserts, Lower-Half, DSG Absorber | NEW | Logged |
+| P060 | 2020 | Hosseinalipour, Rostami, Shahriari | Twisted Tape for Circumferential Temp-Difference Reduction (DSG) | NEW | Logged |
+| P061 | 2020 | Mahmoud, Abbas, Khudheyer | Internal Conical Pin Fins (lower circumference only) | NEW | Logged |
+| P062 | 2020 | Amani, Ebrahimpour, Akbarzadeh, Valipour | Conical Strip Inserts (related to existing ref [50]) | NEW | Logged |
+| P063 | 2020 | Peng, Li, Liang | Gradient Metal Foam (GMF), Dual-Layer Pore Density/Porosity | NEW | Logged |
+
 **Not processed**: `c5ef5f0a-Cu_Fe3O4_Al2O3_TiO2.pdf` in this batch is a duplicate re-upload of the same paper already logged as Entry 35 (Hatami, Geng, Jing 2018) - not re-logged.
 
 **Not processed**: `1afdc7c8-A_Novel_Solution_Methodology...pdf` failed to read (corrupted/not a valid PDF file) - flagged to user, needs re-upload. `d454e451-Heat_transfer_enhancement...longitudinal_fins_and_nanofluids.pdf` in this batch is the same paper as Entry 18 (Benabderrahmane et al. 2016, JTS) - not re-logged. `5e61ec71-A_Novel_Solution_Methodology...pdf` (a second re-upload attempt of the same corrupted file) ALSO failed to read - still needs a working re-upload.
