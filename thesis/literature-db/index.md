@@ -144,6 +144,12 @@ checked first to confirm it is not a review/survey.
 | P100 | 2025 | Sefiani, Bouzit, Elmeriah, Bouddou, Salau, alouache, Berrahi, Feraoun, Benaziza | Elliptical Absorber (2:1) + Al2O3 Nanofluid | NEW | Logged |
 | P101 | 2025 | Oumachtaq, Halimi, Ouhadou, El Hassouani, Hajjaj, Messaoudi | U/UU/Helical Internal Tube Exchangers (unconventional receiver architecture) | NEW | Logged |
 
+| P102 | 2025 | Boudjemline, Ali, Mehryan, Ismail, Mahariq, Ben Khedher | Flat Tube + Plus-Shaped Twisted Turbulator (PSTT) | NEW | Logged |
+| P103 | 2025 | Byiringiro, Chaanaoui, Hammouti | 3 Fin Configs + Liquid Sodium/Hybrid Nanofluid Comparison | NEW | Logged |
+| P104 | 2025 | Khan, Samad, Alamry, Anwar, Norouzi, Mujlid, Ghoushchi | Twisted Triangular Blades Turbulator (near-wall, economic/environmental analysis) | NEW | Logged |
+| P105 | 2025 | Samad, Saeidlou, Khan, Alamry, Al-Harbi, Sharifpur, Ghoushchi | Semi-Corrugated Tube + Shell Form Cone Turbulator + CuO Nanofluid | NEW | Logged |
+| P106 | 2025 | Gholinia, Ghobadi, Shahcheraghi, Armin | Anchor-Shaped Turbulators + Eco-Friendly GAGNPs/H2O Nanofluid | NEW | Logged |
+
 **Not processed**: `b3a937f8-two_twisted_is_similar_to_previous_paper.pdf` is the identical paper already logged as Entry 69 (Alnaqi, Alsarraf, Al-Rashed 2021, SETA 47:101331, two twisted tape inserts) - confirmed via title/author/journal match, not re-logged (user's own filename flagged this).
 
 **Not processed**: `d57b9900-Experimental_not_PTC_should_be_deleted.pdf` was excluded from this batch per its own filename flag (not a PTC paper, marked for deletion) - not read or logged.
