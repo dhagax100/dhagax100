@@ -138,6 +138,12 @@ checked first to confirm it is not a review/survey.
 | P095 | 2025 | Kotak, Chotai, Motwani | Cut-Tube Absorber (material-removal strategy, non-evacuated) | NEW | Logged |
 | P096 | 2025 | Limboonruang, Oyinola, Harmanto, Phunapai | External Fins (annulus-side, not internal) | NEW | Logged |
 
+| P097 | 2025 | Panja, Das, Mahesh | Inclined Porous Blocks + Nanofluids (companion to Entry 87, same authors) | NEW | Logged |
+| P098 | 2025 | Lei, Mohtaram, Li, Su | Dimpled Receivers, Nine-Receiver System-Level Array | NEW | Logged |
+| P099 | 2025 | Benabderrahmane, Hussein, Laouedj, Maatki, Kriaa, Alshammari, Kolsi, Abdulameer | Elliptical Absorber Tubes (6 aspect ratios, no nanofluid) | NEW | Logged |
+| P100 | 2025 | Sefiani, Bouzit, Elmeriah, Bouddou, Salau, alouache, Berrahi, Feraoun, Benaziza | Elliptical Absorber (2:1) + Al2O3 Nanofluid | NEW | Logged |
+| P101 | 2025 | Oumachtaq, Halimi, Ouhadou, El Hassouani, Hajjaj, Messaoudi | U/UU/Helical Internal Tube Exchangers (unconventional receiver architecture) | NEW | Logged |
+
 **Not processed**: `b3a937f8-two_twisted_is_similar_to_previous_paper.pdf` is the identical paper already logged as Entry 69 (Alnaqi, Alsarraf, Al-Rashed 2021, SETA 47:101331, two twisted tape inserts) - confirmed via title/author/journal match, not re-logged (user's own filename flagged this).
 
 **Not processed**: `d57b9900-Experimental_not_PTC_should_be_deleted.pdf` was excluded from this batch per its own filename flag (not a PTC paper, marked for deletion) - not read or logged.
