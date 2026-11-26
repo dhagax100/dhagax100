@@ -132,6 +132,12 @@ checked first to confirm it is not a review/survey.
 
 | P091 | 2025 | Miansari, Akbari, Moghadasi | Star-Shaped (Cross) Tape Insert + CuO-MgO/Al2O3-MWCNT Hybrid Nanofluids | NEW | Logged |
 
+| P092 | 2025 | Shahdad, Moghimi, Navidbakhsh | Gradient Porous Ring + MWCNT-Al2O3 Hybrid Nanofluid (with exergoeconomic analysis) | NEW | Logged |
+| P093 | 2025 | Chakraborty, Das, Algarni, Alqahtani, Irshad | Rotating Tube + Porous Fins + Al2O3-CuO Hybrid Nanofluid | NEW | Logged |
+| P094 | 2025 | Kumar, Rajesh Kanna, Ramamurthy, Balasubramanian, Kale, Kilikevicius | Polygonal Rough Surfaces + Hybrid Nanofluids (NOT PTSC, generic duct) | NEW | Logged |
+| P095 | 2025 | Kotak, Chotai, Motwani | Cut-Tube Absorber (material-removal strategy, non-evacuated) | NEW | Logged |
+| P096 | 2025 | Limboonruang, Oyinola, Harmanto, Phunapai | External Fins (annulus-side, not internal) | NEW | Logged |
+
 **Not processed**: `b3a937f8-two_twisted_is_similar_to_previous_paper.pdf` is the identical paper already logged as Entry 69 (Alnaqi, Alsarraf, Al-Rashed 2021, SETA 47:101331, two twisted tape inserts) - confirmed via title/author/journal match, not re-logged (user's own filename flagged this).
 
 **Not processed**: `d57b9900-Experimental_not_PTC_should_be_deleted.pdf` was excluded from this batch per its own filename flag (not a PTC paper, marked for deletion) - not read or logged.
