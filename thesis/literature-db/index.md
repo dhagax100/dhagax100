@@ -84,6 +84,12 @@ checked first to confirm it is not a review/survey.
 | P052 | 2020 | Arunachala | Twisted Tape Insert (Experimental + Analytical) | NEW | Logged |
 | P053 | 2020 | Benabderrahmane, Benazza, Hussein | Central Corrugated Insert (Molten Salt HTF) | NEW | Logged |
 
+| P054 | 2025 | Mousavi Ajarostaghi, Shirzad, Rashidi, Li | Center-Cleared Twisted-Tape + Corrugations + Nanofluid (NOT PTSC) | NEW | Logged |
+| P055 | 2021 | Hashemi Karouei, Mousavi Ajarostaghi | Curved Conical Turbulator in Helical Double-Pipe HX (NOT PTSC) | NEW | Logged |
+| P056 | 2020 | Noorbakhsh, Zaboli, Mousavi Ajarostaghi | Dual-Side Twisted Tapes in Double-Pipe HX (NOT PTSC) | NEW | Logged |
+| P057 | 2020 | Outokesh, Mousavi Ajarostaghi, Bozorgzadeh, Sedighi | Curved-Profile Twisted Tape in Pipe (NOT PTSC) | NEW | Logged |
+| P058 | 2020 | Ahmed, Natarajan | Toroidal Rings with Gaseous HTFs (companion to Entry 44) | NEW | Logged |
+
 **Not processed**: `c5ef5f0a-Cu_Fe3O4_Al2O3_TiO2.pdf` in this batch is a duplicate re-upload of the same paper already logged as Entry 35 (Hatami, Geng, Jing 2018) - not re-logged.
 
 **Not processed**: `1afdc7c8-A_Novel_Solution_Methodology...pdf` failed to read (corrupted/not a valid PDF file) - flagged to user, needs re-upload. `d454e451-Heat_transfer_enhancement...longitudinal_fins_and_nanofluids.pdf` in this batch is the same paper as Entry 18 (Benabderrahmane et al. 2016, JTS) - not re-logged. `5e61ec71-A_Novel_Solution_Methodology...pdf` (a second re-upload attempt of the same corrupted file) ALSO failed to read - still needs a working re-upload.
