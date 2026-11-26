@@ -62,5 +62,10 @@ checked first to confirm it is not a review/survey.
 | P032 | 2014 | Rajendran, Ganapathy Sundaram, Jawahar, Pachaiyappan, Naveenraj | SiC Porous Discs (line) + Ag Nanofluid (point focus) | NEW | Logged |
 | P033 | 2017 | Xu, Wang, Liu, Zhang, Hassan, Lu | Four-Head Ribbed Tube (NOT PTSC) | NEW | Logged |
 | P034 | 2017 | Zhu, Zhu, Zhao | Wavy-Tape Insert | DUPLICATE of [37] | Logged |
+| P035 | 2018 | Hatami, Geng, Jing | Porous CPSC Absorber + Cu/Fe3O4/Al2O3/TiO2 Nanofluid | NEW | Logged |
+| P036 | 2018 | Bellos, Daniil, Tzivanidis | Multiple Cylindrical Inserts (15 configs) | NEW | Logged |
+| P037 | 2018 | Chang, Sciacovelli, Wu, Li, Li, Zhao, Deng, Wang | Rod Inserts + Molten Salt | DUPLICATE of [49] | Logged |
+| P038 | 2018 | Bellos, Tzivanidis | Twisted Tape vs Perforated Plate vs Finned (unified comparison) | NEW | Logged |
+| P039 | 2018 | Bilal, Arunachala, Sandeep | Fe3O4/Water + Twisted Tape (experimental validation) | NEW | Logged |
 
 **Not processed**: `1afdc7c8-A_Novel_Solution_Methodology...pdf` failed to read (corrupted/not a valid PDF file) - flagged to user, needs re-upload. `d454e451-Heat_transfer_enhancement...longitudinal_fins_and_nanofluids.pdf` in this batch is the same paper as Entry 18 (Benabderrahmane et al. 2016, JTS) - not re-logged. `5e61ec71-A_Novel_Solution_Methodology...pdf` (a second re-upload attempt of the same corrupted file) ALSO failed to read - still needs a working re-upload.
