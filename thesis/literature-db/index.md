@@ -96,6 +96,22 @@ checked first to confirm it is not a review/survey.
 | P062 | 2020 | Amani, Ebrahimpour, Akbarzadeh, Valipour | Conical Strip Inserts (related to existing ref [50]) | NEW | Logged |
 | P063 | 2020 | Peng, Li, Liang | Gradient Metal Foam (GMF), Dual-Layer Pore Density/Porosity | NEW | Logged |
 
+| P064 | 2020 | Mahmoudi, Fazli, Morad, Gholamalizadeh | Forward Perforated Ring Steps, Nanofluid (LFC/linear, not core PTSC) | NEW | Logged |
+| P065 | 2021 | Siavashi, Vahabzadeh Bozorg, Hesam Toosi | Nanofluid + Porous Media (Laminar, Buoyancy-Driven) | NEW | Logged |
+| P066 | 2021 | Chakraborty, Roy, Das, Gupta | Helical Absorber Tube (whole-tube geometry replacement) | NEW | Logged |
+| P067 | 2021 | Mohammed, Vuthaluru, Liu | Conical Turbulators + Hybrid Nanofluids (same group as advisor-baseline ref [40]) | NEW | Logged |
+| P068 | 2021 | Saedodin, Zaboli, Mousavi Ajarostaghi | Helical Turbulence-Inducing Elements (simplified constant-flux BC) | NEW | Logged |
+| P069 | 2021 | Alnaqi, Alsarraf, Al-Rashed | Two Twisted Tapes, Rotation Direction, Two-Phase Hybrid Nanofluid | NEW | Logged |
+| P070 | 2021 | Alqarni, Mahmoud, Algehyne, El-Refaey, El-Shorbagy, Ibrahim | Turbulator with Holes and Ribs, Two-Phase Hybrid Nanofluid | NEW | Logged |
+| P071 | 2021 | Afsharpanah, Zabihi Sheshpoli, Pakzad, Mousavi Ajarostaghi | Dual Modified Twisted-Tape Inserts (6-way comparison) | NEW | Logged |
+| P072 | 2021 | Pandey, Padhi, Mishra | Arc-Plug Insertion (triangular fin, semi-arc base) | NEW | Logged |
+| P073 | 2021 | Fattahi | Twisted Ribs + Wall Rotation + Hybrid Nanofluid (NOT PTSC) | NEW | Logged |
+| P074 | 2021 | El-Bakry, Kassem, Hassan | Internal Radiation Heat Shields (optical, not flow promoter) | NEW | Logged |
+| P075 | 2021 | Xiao, Liu, Liu, Liu | Inclined Curved-Twisted Baffles (wall-temp-uniformity focus) | NEW | Logged |
+| P076 | 2021 | Peng, Li, Hu, Feng | Semi-Annular + Fin Metal Foam Hybrid (SAFM, companion to Entry 63) | NEW | Logged |
+
+**Not processed**: `d57b9900-Experimental_not_PTC_should_be_deleted.pdf` was excluded from this batch per its own filename flag (not a PTC paper, marked for deletion) - not read or logged.
+
 **Not processed**: `c5ef5f0a-Cu_Fe3O4_Al2O3_TiO2.pdf` in this batch is a duplicate re-upload of the same paper already logged as Entry 35 (Hatami, Geng, Jing 2018) - not re-logged.
 
 **Not processed**: `1afdc7c8-A_Novel_Solution_Methodology...pdf` failed to read (corrupted/not a valid PDF file) - flagged to user, needs re-upload. `d454e451-Heat_transfer_enhancement...longitudinal_fins_and_nanofluids.pdf` in this batch is the same paper as Entry 18 (Benabderrahmane et al. 2016, JTS) - not re-logged. `5e61ec71-A_Novel_Solution_Methodology...pdf` (a second re-upload attempt of the same corrupted file) ALSO failed to read - still needs a working re-upload.
