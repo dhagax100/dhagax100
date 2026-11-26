@@ -115,6 +115,9 @@ checked first to confirm it is not a review/survey.
 | P079 | 2022 | Samiezadeh, Khodaverdian, Doranehgard, Chehrmonavari, Xiong | Porous + Finned Receiver + Cu-Al2O3 Hybrid Nanofluid | DUPLICATE of [63] | Logged |
 | P080 | 2022 | Aryan, Jannat Alipour, Siavashi, Norouzi | Rotating Absorber + Nanofluid + Porous Lines | NEW | Logged |
 
+| P081 | 2022 | Sheikholeslami, Said, Jafaryar | Wavy Absorber Pipe + CuO Nanofluid (two-phase model) | DUPLICATE of [74] | Logged |
+| P082 | 2023 | Vahidinia, Khorasanizadeh, Aghaei | Finned Absorber + Hybrid/Mono Nanofluids (4-way energy/exergy/economic/environmental) | NEW | Logged |
+
 **Not processed**: `b3a937f8-two_twisted_is_similar_to_previous_paper.pdf` is the identical paper already logged as Entry 69 (Alnaqi, Alsarraf, Al-Rashed 2021, SETA 47:101331, two twisted tape inserts) - confirmed via title/author/journal match, not re-logged (user's own filename flagged this).
 
 **Not processed**: `d57b9900-Experimental_not_PTC_should_be_deleted.pdf` was excluded from this batch per its own filename flag (not a PTC paper, marked for deletion) - not read or logged.
