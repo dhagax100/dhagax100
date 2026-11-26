@@ -126,6 +126,10 @@ checked first to confirm it is not a review/survey.
 
 | P087 | 2024 | Panja, Das, Mahesh | Star-Shaped Porous Obstacle + CuO/Al2O3 Nanofluids (laminar, COMSOL) | NEW | Logged |
 
+| P088 | 2024 | Arun, Barik, Ahmad, Alraddadi, Shenashen, Khan | Dimpled Multi-Tube Riser Array + TiO2 Nanofluid (NOT standard single-tube PTSC) | NEW | Logged |
+| P089 | 2024 | Saini, Dhar, Powar | Uniform Helical Wire Coil Insert | NEW | Logged |
+| P090 | 2024 | Mehta, Subhedar, Panchal, Said, Sharma, Siddiqui, Natrayan, Rosen | Single/Dual Twisted Tape (experimental, energy/exergy/environmental) | NEW | Logged |
+
 **Not processed**: `b3a937f8-two_twisted_is_similar_to_previous_paper.pdf` is the identical paper already logged as Entry 69 (Alnaqi, Alsarraf, Al-Rashed 2021, SETA 47:101331, two twisted tape inserts) - confirmed via title/author/journal match, not re-logged (user's own filename flagged this).
 
 **Not processed**: `d57b9900-Experimental_not_PTC_should_be_deleted.pdf` was excluded from this batch per its own filename flag (not a PTC paper, marked for deletion) - not read or logged.
