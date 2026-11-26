@@ -67,5 +67,11 @@ checked first to confirm it is not a review/survey.
 | P037 | 2018 | Chang, Sciacovelli, Wu, Li, Li, Zhao, Deng, Wang | Rod Inserts + Molten Salt | DUPLICATE of [49] | Logged |
 | P038 | 2018 | Bellos, Tzivanidis | Twisted Tape vs Perforated Plate vs Finned (unified comparison) | NEW | Logged |
 | P039 | 2018 | Bilal, Arunachala, Sandeep | Fe3O4/Water + Twisted Tape (experimental validation) | NEW | Logged |
+| P040 | 2018 | Bellos, Tzivanidis, Tsimpoukis | CuO Nanofluid + Internal Fins (hybrid review/original) | DUPLICATE of [57] | Logged |
+| P041 | 2019 | Bellos, Daniil, Tzivanidis | Single Cylindrical Insert (diameter + position) | NEW | Logged |
+| P042 | 2020 | Kazemi Moghadam, Mousavi Ajarostaghi, Poncet | Corrugated Tube + Coiled Wire (NOT PTSC) | NEW | Logged |
+| P043 | 2020 | Akbarzadeh Hamedani, Mousavi Ajarostaghi, Hosseini | Convergent-Divergent Tube + Al2O3/CuO (NOT PTSC) | NEW | Logged |
+
+**Not processed**: `c5ef5f0a-Cu_Fe3O4_Al2O3_TiO2.pdf` in this batch is a duplicate re-upload of the same paper already logged as Entry 35 (Hatami, Geng, Jing 2018) - not re-logged.
 
 **Not processed**: `1afdc7c8-A_Novel_Solution_Methodology...pdf` failed to read (corrupted/not a valid PDF file) - flagged to user, needs re-upload. `d454e451-Heat_transfer_enhancement...longitudinal_fins_and_nanofluids.pdf` in this batch is the same paper as Entry 18 (Benabderrahmane et al. 2016, JTS) - not re-logged. `5e61ec71-A_Novel_Solution_Methodology...pdf` (a second re-upload attempt of the same corrupted file) ALSO failed to read - still needs a working re-upload.
