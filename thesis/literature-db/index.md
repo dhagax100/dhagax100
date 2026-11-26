@@ -78,6 +78,12 @@ checked first to confirm it is not a review/survey.
 | P047 | 2020 | Khan, Yan, Ali, Amber, Bashir, Akbar, Javed | Comparative Absorber Geometries (Smooth/Fins/Twisted Tape) + Al2O3 Nanofluid | DUPLICATE of [61] | Logged |
 | P048 | 2020 | Rostami, Shahsavar, Kefayati, Shahsavar Goldanlou | Corrugated Turbulator + Cu/SBA-15 Hybrid Nanofluid | NEW | Logged |
 
+| P049 | 2020 | Yilmaz, Mwesigye, Goksu | Wire Coil Inserts (Triangle Cross-Section) | NEW | Logged |
+| P050 | 2020 | Bellos, Tzivanidis | Internal Fins + Reflecting Shield (Combined Thermal+Optical) | NEW | Logged |
+| P051 | 2020 | Laaraba, Mebarki | Longitudinal Fins in Down Half of Receiver Tube | NEW | Logged |
+| P052 | 2020 | Arunachala | Twisted Tape Insert (Experimental + Analytical) | NEW | Logged |
+| P053 | 2020 | Benabderrahmane, Benazza, Hussein | Central Corrugated Insert (Molten Salt HTF) | NEW | Logged |
+
 **Not processed**: `c5ef5f0a-Cu_Fe3O4_Al2O3_TiO2.pdf` in this batch is a duplicate re-upload of the same paper already logged as Entry 35 (Hatami, Geng, Jing 2018) - not re-logged.
 
 **Not processed**: `1afdc7c8-A_Novel_Solution_Methodology...pdf` failed to read (corrupted/not a valid PDF file) - flagged to user, needs re-upload. `d454e451-Heat_transfer_enhancement...longitudinal_fins_and_nanofluids.pdf` in this batch is the same paper as Entry 18 (Benabderrahmane et al. 2016, JTS) - not re-logged. `5e61ec71-A_Novel_Solution_Methodology...pdf` (a second re-upload attempt of the same corrupted file) ALSO failed to read - still needs a working re-upload.
