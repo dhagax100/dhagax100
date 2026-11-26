@@ -34,3 +34,7 @@ checked first to confirm it is not a review/survey.
 | P006 | 2012 | Cheng, He, Cui | Unilateral Longitudinal Vortex Generators | DUPLICATE of [46] | Logged |
 | P007 | 2013 | Wang, Liu, Xu | Metal Foams in DSG Receiver Tube | NEW | Logged |
 | P008 | 2013 | Ghasemi, Ranjbar, Ramiar | Porous Three Segmental Rings | NEW | Logged |
+| P009 | 2014 | Ghadirijafarbeigloo, Zamzamian, Yaghoubi | Louvered Twisted-Tape Receiver Insert | DUPLICATE of [33] | Logged |
+| P010 | 2014 | Mwesigye, Bello-Ochende, Meyer | Centrally Placed Perforated Plate Inserts | DUPLICATE of [34] | Logged |
+| P011 | 2014 | Song, Dong, Gao, Diao, Zheng, Zhou | Nonuniform Heat Flux + Helical Screw-Tape | DUPLICATE of [36] | Logged |
+| P012 | 2014 | Xiao, Zhang, Shao, Li | V-Cavity Absorber with Rectangular Fins | NEW | Logged |
