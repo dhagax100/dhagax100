@@ -150,6 +150,36 @@ checked first to confirm it is not a review/survey.
 | P105 | 2025 | Samad, Saeidlou, Khan, Alamry, Al-Harbi, Sharifpur, Ghoushchi | Semi-Corrugated Tube + Shell Form Cone Turbulator + CuO Nanofluid | NEW | Logged |
 | P106 | 2025 | Gholinia, Ghobadi, Shahcheraghi, Armin | Anchor-Shaped Turbulators + Eco-Friendly GAGNPs/H2O Nanofluid | NEW | Logged |
 
+**Backfill batch (web-sourced via Claude in Chrome, 2026-11-27)** — full extractions for existing thesis references not previously backed by an uploaded PDF. All are DUPLICATE of their bracketed existing-reference number (not new additions to the thesis reference list):
+
+| P107 | 2018 | Rehan et al. | Low-CR PTSC + Nanofluids, Winter Conditions (experimental) | DUPLICATE of [17] | Logged |
+| P108 | 2021 | Nazir et al. | Turbulator Review + Novel Model (hybrid, numerical section only) | DUPLICATE of [18] | Logged |
+| P109 | 2018 | Ray et al. | Selective Coating, Vacuum, Semitransparent Glass Cover Effects | DUPLICATE of [20] | Logged |
+| P110 | 2017 | Bellos, Tzivanidis, Antonopoulos | Working Fluid Investigation (EES, system-level) | DUPLICATE of [22] | Logged |
+| P111 | 2004 | Kearney et al. | Molten Salt HTF Engineering Aspects | DUPLICATE of [23] | Logged |
+| P112 | 2016 | Bellos, Tzivanidis, Antonopoulos, Daniil | Gas Working Fluids, Energetic/Exergetic Analysis | DUPLICATE of [24] | Logged |
+| P113 | 2019 | Biencinto et al. | Large-Aperture PTC + sCO2 Working Fluid | DUPLICATE of [25] | Logged |
+| P114 | 2014 | Sokhansefat, Kasaeian, Kowsary | Al2O3/Synthetic Oil Nanofluid | DUPLICATE of [27] | Logged |
+| P115 | 2015 | Mwesigye, Huan, Meyer | Thermodynamic Optimisation, Synthetic Oil-Al2O3 Nanofluid | DUPLICATE of [28] | Logged |
+| P116 | 2018 | Allouhi et al. | Energy/Exergy Analyses, Medium/High Temp Nanofluids | DUPLICATE of [29] | Logged |
+| P117 | 2018 | Bellos, Tzivanidis | Mono and Hybrid Nanofluids Thermal Analysis | DUPLICATE of [30] | Logged |
+| P118 | 2018 | Minea, El-Maghlany | Hybrid Nanofluids, Numerical Comparison | DUPLICATE of [31] | Logged |
+| P119 | 2019 | Liu, Lv, Shan, Liu, Liu | Rib Arrangements, Ribbed Absorber Tube | DUPLICATE of [38] | Logged |
+| P120 | 2022 | Mohammed, Vuthaluru, Liu | Wavy Promoters + Hybrid Nanofluids (THESIS ADVISOR-BASELINE PAPER) | DUPLICATE of [40] | Logged |
+| P121 | 2013 | Khanna, Kedare, Singh | Analytical Circumferential/Axial Flux Distribution (bent absorber) | DUPLICATE of [41] | Logged |
+| P122 | 2016 | Mwesigye, Huan, Meyer | High-CR PTSC + Cu-Therminol VP-1 Nanofluid, Entropy Generation | DUPLICATE of [42] | Logged |
+| P123 | 2013 | Too, Benito | Air Tubular Absorbers (NOT PTSC - cavity receiver) | DUPLICATE of [47] | Logged |
+| P124 | 2019 | Liu, Zheng, Liu, Liu | Conical Strip Inserts, Entropy Generation | DUPLICATE of [50] | Logged |
+| P125 | 2016 | Nayak, Sharma, Sinha, Kumar, Kumar | Thermal Analysis Optimization (previously corrupted-PDF upload, sourced via web) | DUPLICATE of [54] | Logged |
+| P126 | 2016 | Ferraro, Settino, Cucumo, Kaliakatsos | Nanofluids vs Conventional Working Fluids Comparison | DUPLICATE of [55] | Logged |
+| P127 | 2017 | Khakrah, Shamloo, Hannani | Nanofluid Efficiency, Comprehensive Numerical Study | DUPLICATE of [56] | Logged |
+| P128 | 2020 | Biswakarma, Roy, Das, Debnath | Internally Helically V-Grooved Absorber + Nanofluid | DUPLICATE of [62] | Logged |
+| P129 | 2022 | Shaker, Gholinia, Pourfallah, Ganji | Flange-Shaped Turbulator + Al2O3-Syltherm Nanofluid | DUPLICATE of [64] | Logged |
+| P130 | 2023 | Ghanbari, Marzban, Yousefzadeh | Combined Turbulator + Two-Phase Magnetic Hybrid Nanofluid | DUPLICATE of [65] | Logged |
+| P131 | 2010 | Dreyer et al. | Heat Loss Measurements on Receivers (experimental, SolarPACES) | DUPLICATE of [72] | Logged |
+| P132 | 2013 | Mwesigye, Bello-Ochende, Meyer | Entropy Generation at Different Concentration Ratios | DUPLICATE of [73] | Logged |
+| P133 | 2019 | Li, Xu, Ma, Song, Xu | Steam Generation System, Dynamic Simulation (plant-level) | DUPLICATE of [14] | Logged |
+
 **Not processed**: `b3a937f8-two_twisted_is_similar_to_previous_paper.pdf` is the identical paper already logged as Entry 69 (Alnaqi, Alsarraf, Al-Rashed 2021, SETA 47:101331, two twisted tape inserts) - confirmed via title/author/journal match, not re-logged (user's own filename flagged this).
 
 **Not processed**: `d57b9900-Experimental_not_PTC_should_be_deleted.pdf` was excluded from this batch per its own filename flag (not a PTC paper, marked for deletion) - not read or logged.
