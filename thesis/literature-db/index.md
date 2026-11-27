@@ -41,11 +41,9 @@ checked first to confirm it is not a review/survey.
 | P013 | 2015 | Diwan, Soni | Wire-Coil Inserts | DUPLICATE of [51] | Logged |
 | P014 | 2015 | Nayak, Sinha, Kumar, Kumar | Nanofluid + Nail Twisted Tape (STPTCS) | NEW | Logged |
 | P015 | 2016 | Bellos, Tzivanidis, Antonopoulos, Gkinis | Nanofluid + Converging-Diverging Tube | DUPLICATE of [58] | Logged |
-| P016 | 2015 | Rios-Iribe et al. | Non-Newtonian Fluid + Twisted Tape (NOT PTSC) | NEW | Logged |
 | P017 | 2015 | Huang, Yu, Li, Tao | Dimples vs Protrusions vs Helical Fins | DUPLICATE of [48] | Logged |
 | P018 | 2016 | Benabderrahmane, Aminallah, Laouedj, Benazza, Solano | Longitudinal Fins + Al2O3/Cu/SiC/C Nanofluids | DUPLICATE of [59] | Logged |
 | P019 | 2016 | Benabderrahmane, Benazza, Aminallah, Laouedj | Baffles + Fullerene/CNT Nanofluid | NEW | Logged |
-| P020 | 2017 | Nanan, Thianpong, Pimsarn, Chuwattanakul, Eiamsa-ard | Twisted Cross-Baffle Turbulators (NOT PTSC) | NEW | Logged |
 | P021 | 2016 | Jaramillo, Borunda, Velazquez-Lucho, Robles | Low-Enthalpy PTC + Twisted Tape | DUPLICATE of [39] | Logged |
 | P022 | 2016 | Mwesigye, Bello-Ochende, Meyer | Wall-Detached Twisted Tape Inserts | DUPLICATE of [35] | Logged |
 | P023 | 2016 | Menbari, Alemrajabi, Rezaei | CuO/Water Direct Absorption PTC (DAPTC) | NEW | Logged |
@@ -60,7 +58,6 @@ checked first to confirm it is not a review/survey.
 
 | P031 | 2017 | Ghasemi, Ranjbar | Complete Porous Rings | NEW | Logged |
 | P032 | 2014 | Rajendran, Ganapathy Sundaram, Jawahar, Pachaiyappan, Naveenraj | SiC Porous Discs (line) + Ag Nanofluid (point focus) | NEW | Logged |
-| P033 | 2017 | Xu, Wang, Liu, Zhang, Hassan, Lu | Four-Head Ribbed Tube (NOT PTSC) | NEW | Logged |
 | P034 | 2017 | Zhu, Zhu, Zhao | Wavy-Tape Insert | DUPLICATE of [37] | Logged |
 | P035 | 2018 | Hatami, Geng, Jing | Porous CPSC Absorber + Cu/Fe3O4/Al2O3/TiO2 Nanofluid | NEW | Logged |
 | P036 | 2018 | Bellos, Daniil, Tzivanidis | Multiple Cylindrical Inserts (15 configs) | NEW | Logged |
@@ -69,8 +66,6 @@ checked first to confirm it is not a review/survey.
 | P039 | 2018 | Bilal, Arunachala, Sandeep | Fe3O4/Water + Twisted Tape (experimental validation) | NEW | Logged |
 | P040 | 2018 | Bellos, Tzivanidis, Tsimpoukis | CuO Nanofluid + Internal Fins (hybrid review/original) | DUPLICATE of [57] | Logged |
 | P041 | 2019 | Bellos, Daniil, Tzivanidis | Single Cylindrical Insert (diameter + position) | NEW | Logged |
-| P042 | 2020 | Kazemi Moghadam, Mousavi Ajarostaghi, Poncet | Corrugated Tube + Coiled Wire (NOT PTSC) | NEW | Logged |
-| P043 | 2020 | Akbarzadeh Hamedani, Mousavi Ajarostaghi, Hosseini | Convergent-Divergent Tube + Al2O3/CuO (NOT PTSC) | NEW | Logged |
 
 | P044 | 2019 | Ahmed, Natarajan | Internal Toroidal Rings in PTSC Receiver | NEW | Logged |
 | P045 | 2020 | Korres, Tzivanidis | Bifacial Cavity PTC (small-sized, NOT conventional PTSC) | NEW | Logged |
@@ -84,10 +79,6 @@ checked first to confirm it is not a review/survey.
 | P052 | 2020 | Arunachala | Twisted Tape Insert (Experimental + Analytical) | NEW | Logged |
 | P053 | 2020 | Benabderrahmane, Benazza, Hussein | Central Corrugated Insert (Molten Salt HTF) | NEW | Logged |
 
-| P054 | 2025 | Mousavi Ajarostaghi, Shirzad, Rashidi, Li | Center-Cleared Twisted-Tape + Corrugations + Nanofluid (NOT PTSC) | NEW | Logged |
-| P055 | 2021 | Hashemi Karouei, Mousavi Ajarostaghi | Curved Conical Turbulator in Helical Double-Pipe HX (NOT PTSC) | NEW | Logged |
-| P056 | 2020 | Noorbakhsh, Zaboli, Mousavi Ajarostaghi | Dual-Side Twisted Tapes in Double-Pipe HX (NOT PTSC) | NEW | Logged |
-| P057 | 2020 | Outokesh, Mousavi Ajarostaghi, Bozorgzadeh, Sedighi | Curved-Profile Twisted Tape in Pipe (NOT PTSC) | NEW | Logged |
 | P058 | 2020 | Ahmed, Natarajan | Toroidal Rings with Gaseous HTFs (companion to Entry 44) | NEW | Logged |
 
 | P059 | 2020 | Kumar, Reddy | Metal Foam Inserts, Lower-Half, DSG Absorber | NEW | Logged |
@@ -105,7 +96,6 @@ checked first to confirm it is not a review/survey.
 | P070 | 2021 | Alqarni, Mahmoud, Algehyne, El-Refaey, El-Shorbagy, Ibrahim | Turbulator with Holes and Ribs, Two-Phase Hybrid Nanofluid | NEW | Logged |
 | P071 | 2021 | Afsharpanah, Zabihi Sheshpoli, Pakzad, Mousavi Ajarostaghi | Dual Modified Twisted-Tape Inserts (6-way comparison) | NEW | Logged |
 | P072 | 2021 | Pandey, Padhi, Mishra | Arc-Plug Insertion (triangular fin, semi-arc base) | NEW | Logged |
-| P073 | 2021 | Fattahi | Twisted Ribs + Wall Rotation + Hybrid Nanofluid (NOT PTSC) | NEW | Logged |
 | P074 | 2021 | El-Bakry, Kassem, Hassan | Internal Radiation Heat Shields (optical, not flow promoter) | NEW | Logged |
 | P075 | 2021 | Xiao, Liu, Liu, Liu | Inclined Curved-Twisted Baffles (wall-temp-uniformity focus) | NEW | Logged |
 | P076 | 2021 | Peng, Li, Hu, Feng | Semi-Annular + Fin Metal Foam Hybrid (SAFM, companion to Entry 63) | NEW | Logged |
@@ -134,7 +124,6 @@ checked first to confirm it is not a review/survey.
 
 | P092 | 2025 | Shahdad, Moghimi, Navidbakhsh | Gradient Porous Ring + MWCNT-Al2O3 Hybrid Nanofluid (with exergoeconomic analysis) | NEW | Logged |
 | P093 | 2025 | Chakraborty, Das, Algarni, Alqahtani, Irshad | Rotating Tube + Porous Fins + Al2O3-CuO Hybrid Nanofluid | NEW | Logged |
-| P094 | 2025 | Kumar, Rajesh Kanna, Ramamurthy, Balasubramanian, Kale, Kilikevicius | Polygonal Rough Surfaces + Hybrid Nanofluids (NOT PTSC, generic duct) | NEW | Logged |
 | P095 | 2025 | Kotak, Chotai, Motwani | Cut-Tube Absorber (material-removal strategy, non-evacuated) | NEW | Logged |
 | P096 | 2025 | Limboonruang, Oyinola, Harmanto, Phunapai | External Fins (annulus-side, not internal) | NEW | Logged |
 
@@ -168,7 +157,6 @@ checked first to confirm it is not a review/survey.
 | P120 | 2022 | Mohammed, Vuthaluru, Liu | Wavy Promoters + Hybrid Nanofluids (THESIS ADVISOR-BASELINE PAPER) | DUPLICATE of [40] | Logged |
 | P121 | 2013 | Khanna, Kedare, Singh | Analytical Circumferential/Axial Flux Distribution (bent absorber) | DUPLICATE of [41] | Logged |
 | P122 | 2016 | Mwesigye, Huan, Meyer | High-CR PTSC + Cu-Therminol VP-1 Nanofluid, Entropy Generation | DUPLICATE of [42] | Logged |
-| P123 | 2013 | Too, Benito | Air Tubular Absorbers (NOT PTSC - cavity receiver) | DUPLICATE of [47] | Logged |
 | P124 | 2019 | Liu, Zheng, Liu, Liu | Conical Strip Inserts, Entropy Generation | DUPLICATE of [50] | Logged |
 | P125 | 2016 | Nayak, Sharma, Sinha, Kumar, Kumar | Thermal Analysis Optimization (previously corrupted-PDF upload, sourced via web) | DUPLICATE of [54] | Logged |
 | P126 | 2016 | Ferraro, Settino, Cucumo, Kaliakatsos | Nanofluids vs Conventional Working Fluids Comparison | DUPLICATE of [55] | Logged |
@@ -187,3 +175,22 @@ checked first to confirm it is not a review/survey.
 **Not processed**: `c5ef5f0a-Cu_Fe3O4_Al2O3_TiO2.pdf` in this batch is a duplicate re-upload of the same paper already logged as Entry 35 (Hatami, Geng, Jing 2018) - not re-logged.
 
 **Not processed**: `1afdc7c8-A_Novel_Solution_Methodology...pdf` failed to read (corrupted/not a valid PDF file) - flagged to user, needs re-upload. `d454e451-Heat_transfer_enhancement...longitudinal_fins_and_nanofluids.pdf` in this batch is the same paper as Entry 18 (Benabderrahmane et al. 2016, JTS) - not re-logged. `5e61ec71-A_Novel_Solution_Methodology...pdf` (a second re-upload attempt of the same corrupted file) ALSO failed to read - still needs a working re-upload.
+
+## Non-PTSC Entries (kept for reference only, 2026-11-27)
+
+The entries below do not describe Parabolic Trough Solar Collector technology at all (generic heat exchangers, double-pipe HX, rotary collectors, or unrelated geometries). Moved out of the main log per explicit instruction so they no longer count toward PTSC literature coverage, but kept in full (narrative + spreadsheet row, now in the `Non-PTSC` sheet of `Literature_Database.xlsx` and the corresponding section at the end of `Grand_Literature_Review.docx`) in case they are needed later for methodology cross-reference.
+
+| # | Year | Authors (short) | Title (short) | Duplicate check | Status |
+|---|------|------------------|----------------|------------------|--------|
+| P016 | 2015 | Rios-Iribe et al. | Non-Newtonian Fluid + Twisted Tape (NOT PTSC) | NEW | Logged |
+| P020 | 2017 | Nanan, Thianpong, Pimsarn, Chuwattanakul, Eiamsa-ard | Twisted Cross-Baffle Turbulators (NOT PTSC) | NEW | Logged |
+| P033 | 2017 | Xu, Wang, Liu, Zhang, Hassan, Lu | Four-Head Ribbed Tube (NOT PTSC) | NEW | Logged |
+| P042 | 2020 | Kazemi Moghadam, Mousavi Ajarostaghi, Poncet | Corrugated Tube + Coiled Wire (NOT PTSC) | NEW | Logged |
+| P043 | 2020 | Akbarzadeh Hamedani, Mousavi Ajarostaghi, Hosseini | Convergent-Divergent Tube + Al2O3/CuO (NOT PTSC) | NEW | Logged |
+| P054 | 2025 | Mousavi Ajarostaghi, Shirzad, Rashidi, Li | Center-Cleared Twisted-Tape + Corrugations + Nanofluid (NOT PTSC) | NEW | Logged |
+| P055 | 2021 | Hashemi Karouei, Mousavi Ajarostaghi | Curved Conical Turbulator in Helical Double-Pipe HX (NOT PTSC) | NEW | Logged |
+| P056 | 2020 | Noorbakhsh, Zaboli, Mousavi Ajarostaghi | Dual-Side Twisted Tapes in Double-Pipe HX (NOT PTSC) | NEW | Logged |
+| P057 | 2020 | Outokesh, Mousavi Ajarostaghi, Bozorgzadeh, Sedighi | Curved-Profile Twisted Tape in Pipe (NOT PTSC) | NEW | Logged |
+| P073 | 2021 | Fattahi | Twisted Ribs + Wall Rotation + Hybrid Nanofluid (NOT PTSC) | NEW | Logged |
+| P094 | 2025 | Kumar, Rajesh Kanna, Ramamurthy, Balasubramanian, Kale, Kilikevicius | Polygonal Rough Surfaces + Hybrid Nanofluids (NOT PTSC, generic duct) | NEW | Logged |
+| P123 | 2013 | Too, Benito | Air Tubular Absorbers (NOT PTSC - cavity receiver) | DUPLICATE of [47] | Logged |
